@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --page-w: 1920px;
+}
+
+/*
+ * Figma fonts: "DG Agnadeen" (display) and "Lama Sans" (body).
+ * These are licensed fonts, not on Google Fonts. Drop the .woff2 files into
+ * /public/fonts and these @font-face rules pick them up; otherwise the app
+ * falls back to Cairo automatically.
+ */
+@font-face {
+  font-family: "DG Agnadeen";
+  src: url("/fonts/DGAgnadeen-Heavy.woff2") format("woff2");
+  font-weight: 700 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "DG Agnadeen";
+  src: url("/fonts/DGAgnadeen-Regular.woff2") format("woff2");
+  font-weight: 400 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Lama Sans";
+  src: url("/fonts/LamaSans-Light.woff2") format("woff2");
+  font-weight: 300 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Lama Sans";
+  src: url("/fonts/LamaSans-Medium.woff2") format("woff2");
+  font-weight: 500 700;
+  font-display: swap;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: #fffaf0;
+  color: #2a1a18;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Continuous marquee used in the "RED OR NUDE" strips */
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  animation: marquee 22s linear infinite;
+}
