@@ -5,14 +5,14 @@ import { useEffect, useState } from "react";
 // Figma "Loader" — عروض carousel. Each exported slide already contains its own
 // heading and dot state, so we simply crossfade between them.
 const slides = [
-  "/eid-offers.png",
-  "/Property1Variant2.svg",
-  "/Property1Variant3.svg",
-  "/Property1Variant4.png",
+  "/eid-offers.webp",
+  "/Property1Variant2.webp",
+  "/Property1Variant3.webp",
+  "/Property1Variant4.webp",
 ];
 
 // Portrait versions used on mobile (Figma 430×700).
-const mobileSlides = ["/1.svg", "/2.svg", "/3.svg", "/4.svg"];
+const mobileSlides = ["/1.webp", "/2.webp", "/3.webp", "/4.webp"];
 
 export default function Offers() {
   const [active, setActive] = useState(0);

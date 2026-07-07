@@ -5,10 +5,10 @@ import { useEffect, useState } from "react";
 // Figma "الخدمات" (instance 180:261). Cards expand one at a time — automatically
 // cycling, and following the mouse on hover. RTL row order: right → left.
 const services = [
-  { name: "تـوث جيمـز", img: "/service-1.png" },
-  { name: "المســـاج", img: "/service-2.png" },
-  { name: "الأظافـــر", img: "/service-3.png" },
-  { name: "الرمـــوش", img: "/service-4.png" },
+  { name: "تـوث جيمـز", img: "/service-1.webp" },
+  { name: "المســـاج", img: "/service-2.webp" },
+  { name: "الأظافـــر", img: "/service-3.webp" },
+  { name: "الرمـــوش", img: "/service-4.webp" },
 ];
 
 // The RON mark over each card. Mirrored to match the design; its colour eases

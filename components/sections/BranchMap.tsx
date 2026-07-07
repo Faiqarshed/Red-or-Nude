@@ -21,7 +21,7 @@ export default function BranchMap() {
           the heading stays readable. */}
       <div
         className="relative h-[70vh] min-h-[540px] w-full overflow-hidden bg-[#f3eee6] bg-no-repeat [background-position:64%_center] [background-size:auto_105%] lg:h-screen lg:min-h-[680px] lg:[background-position:center_40%] lg:[background-size:150%_auto]"
-        style={{ backgroundImage: "url(/map-riyadh.png)" }}
+        style={{ backgroundImage: "url(/map-riyadh.webp)" }}
       >
         {/* Right-side cream fade behind the heading — reaches well past centre
             so the bright patch sits further left */}

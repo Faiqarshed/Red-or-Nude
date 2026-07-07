@@ -14,7 +14,7 @@ export default function HomePage() {
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 z-0 bg-[length:100%_auto] bg-top bg-repeat-y opacity-60 mix-blend-luminosity"
-        style={{ backgroundImage: "url(/bg-texture.png)" }}
+        style={{ backgroundImage: "url(/bg-texture.webp)" }}
       />
       <div className="relative z-10">
         <SiteHeader />

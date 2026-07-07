@@ -41,7 +41,7 @@ export default function Hero() {
         >
           <div className="h-full w-full" style={{ transform: "rotate(-2deg)" }}>
             <img
-              src="/hero-hands.png"
+              src="/hero-hands.webp"
               alt=""
               className="absolute right-0 top-0 h-full max-w-none select-none"
             />
@@ -70,7 +70,7 @@ export default function Hero() {
         >
           <div className="h-full w-full" style={{ transform: "rotate(-1.6deg)" }}>
             <img
-              src="/hero-hands.png"
+              src="/hero-hands.webp"
               alt=""
               className="absolute right-0 top-0 h-full max-w-none select-none"
             />
