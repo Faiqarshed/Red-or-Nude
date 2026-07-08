@@ -9,7 +9,7 @@ const config: Config = {
     extend: {
       colors: {
         // Design tokens read from the Figma file (Red Or Nude)
-        cream: "#FFFAF0", // page background
+        cream: "#F1ECE3", // soft warm paper page background (matches bg-texture)
         red: {
           DEFAULT: "#B80007", // brand red (gradient start)
           dark: "#520003", // brand red (gradient end)
@@ -21,9 +21,9 @@ const config: Config = {
         "red-grad": "linear-gradient(180deg, #B80007 0%, #520003 100%)",
       },
       fontFamily: {
-        // DG Agnadeen (display) + Lama Sans (body) are the Figma fonts; Almarai /
-        // Tajawal are close free fallbacks until the licensed files are added to /public/fonts.
-        ar: ["'Lama Sans'", "var(--font-tajawal)", "sans-serif"],
+        // DG Agnadeen is the Figma font, used site-wide (body + display). It is
+        // self-hosted (see globals.css @font-face); Almarai is the load/fallback face.
+        ar: ["'DG Agnadeen'", "var(--font-almarai)", "sans-serif"],
         display: ["'DG Agnadeen'", "var(--font-almarai)", "sans-serif"],
         latin: ["var(--font-poppins)", "sans-serif"],
       },

@@ -56,6 +56,11 @@ export default function SiteFooter() {
           <div className="order-3 text-right lg:order-2">
             <h4 className="mb-6 font-display text-base font-bold text-red">من نحن</h4>
             <ul className="space-y-3 font-display text-[15px] text-red/50">
+              <li>
+                <a href="/gift-card" className="whitespace-nowrap transition-colors hover:text-red">
+                  بطاقة هدية
+                </a>
+              </li>
               {aboutLinks.map((l) => (
                 <li key={l}>
                   <a href="#" className="whitespace-nowrap transition-colors hover:text-red">

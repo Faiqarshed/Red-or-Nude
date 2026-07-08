@@ -29,12 +29,12 @@ export default function BranchMap() {
 
         {/* Heading + booking button — vertically centred on the right */}
         <div className="absolute inset-y-0 right-0 flex flex-col justify-center gap-5 px-6 text-right md:px-16 lg:gap-8 lg:px-24">
-          <h2 className="font-display text-[clamp(38px,10vw,88px)] font-extrabold leading-[1.05] text-ink">
-            اختـــاري
-            <br />
-            الفـــرع
+          <h2 className="font-display text-[clamp(34px,5.3vw,66px)] font-thin leading-[1.5] text-ink">
+            {/* top line sits slightly left of the bottom line (Figma) */}
+            <span className="block pr-[0.6em]">اختـــاري</span>
+            <span className="block">الفـــرع</span>
           </h2>
-          <button className="w-fit self-end rounded-[100px] border-4 border-sky bg-white/40 px-8 py-3 font-display text-[clamp(24px,6vw,56px)] font-bold text-ink backdrop-blur-sm transition-colors hover:bg-sky/20 lg:border-[6px] lg:px-16 lg:py-5">
+          <button className="w-fit self-end rounded-[100px] border-4 border-sky bg-white/40 px-8 py-3 font-display text-[clamp(26px,4.3vw,56px)] font-bold text-ink backdrop-blur-sm transition-colors hover:bg-sky/20 lg:border-[6px] lg:px-16 lg:py-5">
             للحجــز
           </button>
         </div>
@@ -52,7 +52,7 @@ export default function BranchMap() {
               <h3 className="mb-6 font-display text-[clamp(24px,2.4vw,32px)] font-extrabold text-ink">
                 {b.name}
               </h3>
-              <ul className="mb-8 space-y-3 font-display text-[clamp(15px,1.4vw,20px)] font-light text-ink">
+              <ul className="mb-8 space-y-3 font-display text-[clamp(15px,1.4vw,20px)] font-thin text-ink">
                 <li className="flex items-center justify-center gap-2">
                   <span>{b.address}</span>
                   <PinIcon className="shrink-0 text-red" />

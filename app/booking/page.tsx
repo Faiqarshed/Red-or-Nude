@@ -11,18 +11,18 @@ import { Riyal } from "@/components/icons";
 const serviceDesc = "SHAPING | BUFFING | CUTICLE CARE | SMOOTH GEL POLISH FINISH";
 
 const services = [
-  { name: "Acrylic", price: 280, img: "/nail-1.png" },
-  { name: "Classic Manicure", price: 90, img: "/nail-2.png" },
-  { name: "BIAB", price: 220, img: "/nail-3.png" },
-  { name: "Gel Polish", price: 150, img: "/nail-4.png" },
+  { name: "Acrylic", price: 280, img: "/service-nails.webp" },
+  { name: "Classic Manicure", price: 90, img: "/service-nails.webp" },
+  { name: "BIAB", price: 220, img: "/service-nails.webp" },
+  { name: "Gel Polish", price: 150, img: "/service-nails.webp" },
 ];
 
 const addons = [
-  { name: "Seasonal Catalogue", price: 50, img: "/addon-1.png" },
-  { name: "Chrome", price: 50, img: "/addon-2.png" },
-  { name: "Cat eye", price: 50, img: "/addon-3.png" },
-  { name: "French Tip", price: 50, img: "/addon-4.png" },
-  { name: "Nail Art", price: 50, img: "/addon-5.png" },
+  { name: "Seasonal Catalogue", price: 50, img: "/addon-catalogue.webp" },
+  { name: "Chrome", price: 50, img: "/addon-chrome.webp" },
+  { name: "Cat eye", price: 50, img: "/addon-art.webp" },
+  { name: "French Tip", price: 50, img: "/addon-art.webp" },
+  { name: "Nail Art", price: 50, img: "/addon-catalogue.webp" },
 ];
 
 function Card({
@@ -33,6 +33,7 @@ function Card({
   onClick,
   minutes = true,
   plus = false,
+  contain = false,
 }: {
   name: string;
   price: number;
@@ -41,6 +42,7 @@ function Card({
   onClick: () => void;
   minutes?: boolean;
   plus?: boolean;
+  contain?: boolean;
 }) {
   return (
     <button
@@ -52,7 +54,9 @@ function Card({
       }`}
     >
       <div
-        className="mb-3 h-[120px] w-full rounded-[14px] bg-[#e7d9c9] bg-cover bg-center"
+        className={`mb-3 h-[120px] w-full rounded-[14px] bg-[#e7d9c9] bg-center bg-no-repeat ${
+          contain ? "bg-contain" : "bg-cover"
+        }`}
         style={{ backgroundImage: `url(${img})` }}
       />
       <span
@@ -168,7 +172,7 @@ export default function BookingPage() {
           </label>
 
           <Link
-            href={ready ? "/booking/schedule" : "#"}
+            href={ready ? "/booking/payment" : "#"}
             aria-disabled={!ready}
             className={`mt-4 block w-full rounded-[12px] py-3 text-center text-sm font-bold transition-colors ${
               ready

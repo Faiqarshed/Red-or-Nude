@@ -7,33 +7,49 @@
 }
 
 /*
- * Figma fonts: "DG Agnadeen" (display) and "Lama Sans" (body).
- * These are licensed fonts, not on Google Fonts. Drop the .woff2 files into
- * /public/fonts and these @font-face rules pick them up; otherwise the app
- * falls back to Cairo automatically.
+ * Figma font: "DG Agnadeen" — used site-wide (display + body). Self-hosted from
+ * /public/fonts (OFL licensed, see DGAgnadeen-OFL.txt). All 7 shipped weights.
  */
 @font-face {
   font-family: "DG Agnadeen";
-  src: url("/fonts/DGAgnadeen-Heavy.woff2") format("woff2");
-  font-weight: 700 900;
+  src: url("/fonts/DGAgnadeen-Thin.ttf") format("truetype");
+  font-weight: 100;
   font-display: swap;
 }
 @font-face {
   font-family: "DG Agnadeen";
-  src: url("/fonts/DGAgnadeen-Regular.woff2") format("woff2");
+  src: url("/fonts/DGAgnadeen-Ultralight.ttf") format("truetype");
+  font-weight: 200;
+  font-display: swap;
+}
+@font-face {
+  font-family: "DG Agnadeen";
+  src: url("/fonts/DGAgnadeen-Light.ttf") format("truetype");
+  font-weight: 300;
+  font-display: swap;
+}
+@font-face {
+  font-family: "DG Agnadeen";
+  src: url("/fonts/DGAgnadeen-Regular.ttf") format("truetype");
   font-weight: 400 600;
   font-display: swap;
 }
 @font-face {
-  font-family: "Lama Sans";
-  src: url("/fonts/LamaSans-Light.woff2") format("woff2");
-  font-weight: 300 400;
+  font-family: "DG Agnadeen";
+  src: url("/fonts/DGAgnadeen-Bold.ttf") format("truetype");
+  font-weight: 700;
   font-display: swap;
 }
 @font-face {
-  font-family: "Lama Sans";
-  src: url("/fonts/LamaSans-Medium.woff2") format("woff2");
-  font-weight: 500 700;
+  font-family: "DG Agnadeen";
+  src: url("/fonts/DGAgnadeen-Extrabold.ttf") format("truetype");
+  font-weight: 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "DG Agnadeen";
+  src: url("/fonts/DGAgnadeen-Heavy.ttf") format("truetype");
+  font-weight: 900;
   font-display: swap;
 }
 
@@ -42,7 +58,7 @@ html {
 }
 
 body {
-  background: #fffaf0;
+  background: #f1ece3;
   color: #2a1a18;
   -webkit-font-smoothing: antialiased;
 }

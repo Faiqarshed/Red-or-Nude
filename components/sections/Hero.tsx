@@ -20,7 +20,7 @@ export default function Hero() {
       {/* ── Mobile hero: big centred wordmark (z-10) with the zoomed manicure
            photo overlapping it from the right (z-20) ── */}
       <section
-        className="relative w-full overflow-hidden pt-16 md:hidden"
+        className="relative w-full overflow-x-clip pt-16 md:hidden"
         style={{ height: "max(430px, 90vw)" }}
       >
         {/* RED OR NUDE wordmark — big, centred */}
@@ -50,7 +50,7 @@ export default function Hero() {
       </section>
 
       {/* ── Desktop hero splash: wordmark (z-10) behind the photo (z-20) ── */}
-      <section className="relative hidden h-screen min-h-[680px] w-full overflow-hidden md:block">
+      <section className="relative hidden h-screen min-h-[680px] w-full overflow-x-clip md:block">
         {/* RED OR NUDE outlined wordmark (Figma vector 108:4087) */}
         <img
           src="/wordmark.svg"
@@ -66,7 +66,7 @@ export default function Hero() {
         <div
           aria-hidden
           className="pointer-events-none absolute z-20 aspect-[1381/993]"
-          style={{ left: "calc(280px + 19.5vw)", top: "-20px", width: "1180px" }}
+          style={{ left: "calc(390px + 19.5vw)", top: "-20px", width: "1060px" }}
         >
           <div className="h-full w-full" style={{ transform: "rotate(-1.6deg)" }}>
             <img
@@ -87,13 +87,13 @@ export default function Hero() {
               href={c.href}
               className="relative block rounded-card bg-white px-[8.7%] py-[9%] text-right shadow-[0_20px_50px_rgba(184,0,7,0.06)] transition-shadow hover:shadow-[0_24px_60px_rgba(184,0,7,0.12)] md:aspect-[530/320]"
             >
-              <p className="font-display text-[clamp(18px,1.35vw,26px)] font-light text-ink">
+              <p className="font-display text-[clamp(14px,1.0vw,19px)] font-light text-ink/70">
                 {c.kicker}
               </p>
-              <h3 className="mt-[5%] font-display text-[clamp(26px,2.1vw,40px)] font-extrabold text-red">
+              <h3 className="mt-[5%] font-display text-[clamp(24px,1.85vw,35px)] font-bold text-red">
                 {c.title}
               </h3>
-              <p className="mt-[6%] font-display text-[clamp(16px,1.35vw,26px)] font-light leading-relaxed text-ink">
+              <p className="mt-[6%] font-display text-[clamp(14px,1.0vw,19px)] font-light leading-relaxed text-ink/70">
                 {c.desc}
               </p>
               <div className="mt-6 md:absolute md:bottom-[12%] md:left-[8.7%] md:mt-0">
