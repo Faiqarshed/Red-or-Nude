@@ -1,0 +1,363 @@
+// All user-facing copy for both languages. `content[lang]` is consumed via the
+// `useI18n()` hook (see lib/i18n.tsx). The Arabic object defines the shape; the
+// English object is type-checked against it so nothing can drift out of sync.
+
+const ar = {
+  nav: [
+    { label: "من نحن", href: "/about" },
+    { label: "خدماتنا", href: "/booking" },
+    { label: "اختاري الفرع", href: "/#branches" },
+    { label: "تسوقي", href: "/shop" },
+  ],
+  header: { otherLang: "English", search: "بحث", wishlist: "المفضلة", cart: "السلة", menu: "القائمة" },
+
+  hero: {
+    cards: [
+      { kicker: "الحجــز", title: "احجــزي موعــدًا", desc: "حدّد الخدمات لنفسك", href: "/booking" },
+      { kicker: "الحجــز", title: "موعــد جماعـــي", desc: "لـنـفـسـك وللآخـريــن", href: "/booking" },
+      { kicker: "اشتــر", title: "بطاقــة هديــة", desc: "دلّلي نفسك أو صديقتك بزيارات مستقبلية", href: "/gift-card" },
+    ],
+  },
+
+  branch: {
+    // Arabic: two thin heading lines + a big bordered CTA pill below.
+    line1: "اختـــاري",
+    line2: "الفـــرع",
+    cta: "للحجــز",
+    bookNow: "احجزي الان",
+    details: "التفاصيل",
+    list: [
+      {
+        name: "فــرع العروبـــة",
+        address: "شــارع صــلاح الديــن الايوبــي ، مبنــى الثلاثــون",
+        hours: "مواعيــد العمــل: 9 صباحــاً الــى 11 مســاءً",
+      },
+      {
+        name: "فــرع الملقــا",
+        address: "شــارع صــلاح الديــن الايوبــي ، مبنــى الثلاثــون",
+        hours: "مواعيــد العمــل: 9 صباحــاً الــى 11 مســاءً",
+      },
+    ],
+  },
+
+  services: {
+    title: "الخدمـــات",
+    kicker: "خدمـــات",
+    items: ["تـوث جيمـز", "المســـاج", "الأظافـــر", "الرمـــوش"],
+  },
+
+  footer: {
+    subscribeTitle: "ابقَي على تواصل",
+    firstName: "الاسم الأول",
+    lastName: "اسم العائلة",
+    email: "البريد الإلكتروني",
+    subscribe: "اشترك",
+    aboutTitle: "من نحن",
+    giftCard: "بطاقة هدية",
+    aboutLinks: ["مواقعنا", "وظائف"],
+    answerTitle: "ابحث عن إجابة",
+    answerLinks: ["الأسئلة الشائعة", "تواصلي معنا", "الشروط والأحكام", "سياسة الخصوصية"],
+    copyright: "© 2026 REDorNUDE. جميع الحقوق محفوظة.",
+    privacy: "سياسة الخصوصية",
+    cookies: "إعدادات ملفات الارتباط",
+  },
+
+  booking: {
+    selectService: "اختيار الخدمة",
+    addonsTitle: "الإضافات",
+    summaryTitle: "ملخص الحجز",
+    service: "الخدمة",
+    addons: "الإضافات",
+    removal: "الإزالة",
+    appointment: "الموعد",
+    notSelected: "لم يتم الاختيار",
+    none: "لا يوجد",
+    total: "المبلغ الإجمالي",
+    agree: "أوافق على الشريعة والأحكام",
+    complete: "إتمام الحجز",
+    minutes: "15 MIN",
+    chosenDesign: "التصميم المختار:",
+  },
+
+  payment: {
+    title: "اختر طريقة الدفع",
+    summaryTitle: "ملخص الحجز",
+    total: "المبلغ الاجمالي",
+    confirmPay: "تأكيد الدفع",
+    secure: "دفع آمن ومشفر",
+    cardTitle: "بطاقة ائتمانية / خصم",
+    cardSub: "Visa, Mastercard",
+    madaTitle: "مدى",
+    madaSub: "بطاقة مدى السعودية",
+    stcTitle: "STC Pay",
+    stcSub: "الدفع عبر تطبيق STC Pay",
+    appleTitle: "Apple Pay",
+    appleSub: "الدفع السريع والآمن",
+    cardNumber: "رقم البطاقة",
+    cardName: "اسم حامل البطاقة",
+    cardNamePlaceholder: "الاسم كما هو مكتوب على البطاقة",
+    expiry: "تاريخ الانتهاء",
+    cvv: "CVV",
+    confirm: "تأكيد",
+    successTitle: "تم الحجز بنجاح!",
+    successSub: "سيتم إرسال تفاصيل الموعد إلى رقم هاتفك",
+    detailsTitle: "تفاصيل الموعد",
+    rowService: "الخدمة",
+    rowAddons: "الأضافات",
+    rowRemoval: "ازالة",
+    rowDate: "التاريخ",
+    rowTime: "الوقت",
+    rowMethod: "طريقة الدفع",
+    rowTotal: "المبلغ الإجمالي",
+    newBooking: "حجز جديد",
+    close: "إغلاق",
+  },
+
+  modals: {
+    close: "إغلاق",
+    scheduleTitle: "اختيار الموعد",
+    chooseTime: "اختيار الوقت",
+    pickDayFirst: "اختاري يوماً أولاً",
+    confirmSchedule: "تأكيد الموعد",
+    removalTitle: "هل تحتاجين إزالة؟",
+    yes: "نعم",
+    no: "لا",
+    chooseRemoval: "اختيار نوع الإزالة",
+    confirm: "تأكيد",
+    designsTitle: "التصاميم الموسمية",
+    choose: "اختر",
+  },
+
+  // Removal options — stored by id; name/price come from here.
+  removals: [
+    { id: "gel", name: "إزالة جل (Gel)", price: 20 },
+    { id: "biab", name: "إزالة بياب (BIAB)", price: 20 },
+    { id: "builder", name: "إزالة بلدر جل (Builder Gel)", price: 20 },
+  ],
+
+  gift: {
+    valueTitle: "اختيار قيمة الهدية",
+    customHint: "أو أدخلي مبلغاً مخصصاً (الحد الأدنى 50 - الحد الأعلى 2,000 )",
+    customPlaceholder: "مثلاً 450",
+    designTitle: "تصميم البطاقة",
+    detailsTitle: "التفاصيل",
+    recipientEmail: "بريد المستلمة الإلكتروني *",
+    recipientName: "اسم المستلمة *",
+    senderName: "اسمك (المرسل)",
+    sendDate: "تاريخ الإرسال",
+    message: "رسالة قصيرة",
+    messagePlaceholder: "تستاهلين الدلع",
+    namePlaceholder: "سارة",
+    senderPlaceholder: "خالد",
+    summaryTitle: "ملخص بطاقة الهدية",
+    agree: "أوافق على الشروط والأحكام",
+    continue: "المتابعة للدفع",
+  },
+
+  giftPay: {
+    summaryTitle: "ملخص بطاقة الهدية",
+    recipient: "المستلمة",
+    recipientEmail: "بريد المستلمة الإلكتروني",
+    sendIn: "إرسال في",
+    grandTotal: "المجموع الكلي",
+    successTitle: "تم إرسال بطاقة الهدية!",
+    successSubPrefix: "تم إرسال بطاقة الهدية إلى",
+    detailsTitle: "تفاصيل الطلب",
+    to: "الى",
+    from: "من",
+    sentIn: "ارسال في",
+    method: "طريقة الدفع",
+    newCard: "بطاقة جديدة",
+  },
+
+  // Date/time formatting (fixed June 2026 picker).
+  date: {
+    month: "يونيو",
+    monthLabel: "يونيو 2026",
+    weekdaysShort: ["سبت", "أحد", "اثنين", "ثلاثاء", "أربعاء", "خميس", "جمعة"],
+    weekdaysFull: ["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"],
+    am: "صباحاً",
+    pm: "مساءً",
+  },
+};
+
+export type Content = typeof ar;
+
+const en: Content = {
+  // Reversed vs. Arabic so that under LTR it reads Shop → About Us left-to-right.
+  nav: [
+    { label: "Shop", href: "/shop" },
+    { label: "Choose the Branch", href: "/#branches" },
+    { label: "Our Services", href: "/booking" },
+    { label: "About Us", href: "/about" },
+  ],
+  header: { otherLang: "عربي", search: "Search", wishlist: "Wishlist", cart: "Cart", menu: "Menu" },
+
+  hero: {
+    cards: [
+      { kicker: "BOOKING", title: "Book an Appointment", desc: "Choose your services and build your own experience", href: "/booking" },
+      { kicker: "BOOKING", title: "Group Booking", desc: "Book for yourself and others", href: "/booking" },
+      { kicker: "PURCHASE", title: "Gift Card", desc: "Treat yourself or surprise someone special with future visits", href: "/gift-card" },
+    ],
+  },
+
+  branch: {
+    line1: "CHOOSE",
+    line2: "BRANCH",
+    cta: "YOUR",
+    bookNow: "Book Now",
+    details: "Details",
+    list: [
+      {
+        name: "Al Urubah Branch",
+        address: "King Abdul Aziz Road, Al Yasmin District, near Nukhbat Al Oud",
+        hours: "Working Hours: 9 AM – 11 PM",
+      },
+      {
+        name: "Al Malqa Branch",
+        address: "King Abdul Aziz Road, Al Yasmin District, near Nukhbat Al Oud",
+        hours: "Working Hours: 9 AM – 11 PM",
+      },
+    ],
+  },
+
+  services: {
+    title: "SERVICES",
+    kicker: "Services",
+    items: ["Tooth Gems", "Massage", "Nails", "Eyelash"],
+  },
+
+  footer: {
+    subscribeTitle: "STAY IN TOUCH",
+    firstName: "First Name",
+    lastName: "Last Name",
+    email: "E-mail",
+    subscribe: "SUBSCRIBE",
+    aboutTitle: "ABOUT US",
+    giftCard: "Gift Card",
+    aboutLinks: ["Locations", "Careers"],
+    answerTitle: "FIND AN ANSWER",
+    answerLinks: ["FAQ", "Contact", "Terms & Conditions", "Privacy Policy"],
+    copyright: "© 2026 REDorNUDE. All rights reserved.",
+    privacy: "Privacy Policy",
+    cookies: "Cookie Settings",
+  },
+
+  booking: {
+    selectService: "Select a Service",
+    addonsTitle: "Add-ons",
+    summaryTitle: "Booking Summary",
+    service: "Service",
+    addons: "Add-ons",
+    removal: "Removal",
+    appointment: "Appointment",
+    notSelected: "Not selected",
+    none: "None",
+    total: "Total Amount",
+    agree: "I agree to the Terms & Conditions",
+    complete: "Continue to Payment",
+    minutes: "15 MIN",
+    chosenDesign: "Selected design:",
+  },
+
+  payment: {
+    title: "Select Payment Method",
+    summaryTitle: "Booking Summary",
+    total: "Total Amount",
+    confirmPay: "Confirm Payment",
+    secure: "Secure encrypted payment",
+    cardTitle: "Credit / Debit Card",
+    cardSub: "Visa, Mastercard",
+    madaTitle: "Mada",
+    madaSub: "Saudi Mada Card",
+    stcTitle: "STC Pay",
+    stcSub: "Pay via STC Pay app",
+    appleTitle: "Apple Pay",
+    appleSub: "Fast & secure payment",
+    cardNumber: "Card Number",
+    cardName: "Cardholder Name",
+    cardNamePlaceholder: "Name as it appears on card",
+    expiry: "Expiry Date",
+    cvv: "CVV",
+    confirm: "Confirm",
+    successTitle: "Booking Confirmed!",
+    successSub: "Appointment details will be sent to your phone number",
+    detailsTitle: "Appointment Details",
+    rowService: "Service",
+    rowAddons: "Add-ons",
+    rowRemoval: "Removal",
+    rowDate: "Date",
+    rowTime: "Time",
+    rowMethod: "Payment Method",
+    rowTotal: "Total Amount",
+    newBooking: "New Booking",
+    close: "Close",
+  },
+
+  modals: {
+    close: "Close",
+    scheduleTitle: "Choose Appointment",
+    chooseTime: "Choose Time",
+    pickDayFirst: "Pick a day first",
+    confirmSchedule: "Confirm Appointment",
+    removalTitle: "Do you need removal?",
+    yes: "Yes",
+    no: "No",
+    chooseRemoval: "Choose removal type",
+    confirm: "Confirm",
+    designsTitle: "Seasonal Designs",
+    choose: "Choose",
+  },
+
+  removals: [
+    { id: "gel", name: "Gel Removal", price: 20 },
+    { id: "biab", name: "BIAB Removal", price: 20 },
+    { id: "builder", name: "Builder Gel Removal", price: 20 },
+  ],
+
+  gift: {
+    valueTitle: "Choose Gift Value",
+    customHint: "Or enter a custom amount (min 50 – max 2,000)",
+    customPlaceholder: "e.g. 450",
+    designTitle: "Card Design",
+    detailsTitle: "Details",
+    recipientEmail: "Recipient Email *",
+    recipientName: "Recipient Name *",
+    senderName: "Your Name (Sender)",
+    sendDate: "Send Date",
+    message: "Short Message",
+    messagePlaceholder: "You deserve to be pampered",
+    namePlaceholder: "Sarah",
+    senderPlaceholder: "Khaled",
+    summaryTitle: "Gift Card Summary",
+    agree: "I agree to the Terms & Conditions",
+    continue: "Continue to Payment",
+  },
+
+  giftPay: {
+    summaryTitle: "Gift Card Summary",
+    recipient: "Recipient",
+    recipientEmail: "Recipient Email",
+    sendIn: "Send On",
+    grandTotal: "Grand Total",
+    successTitle: "Gift Card Sent!",
+    successSubPrefix: "Gift card sent to",
+    detailsTitle: "Order Details",
+    to: "To",
+    from: "From",
+    sentIn: "Sent On",
+    method: "Payment Method",
+    newCard: "New Card",
+  },
+
+  date: {
+    month: "June",
+    monthLabel: "June 2026",
+    weekdaysShort: ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"],
+    weekdaysFull: ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+    am: "AM",
+    pm: "PM",
+  },
+};
+
+export const content = { ar, en };

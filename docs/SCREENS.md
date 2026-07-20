@@ -5,11 +5,32 @@ Node id → route → status. Desktop-2 = 1920×1080 app screens; Desktop = long
 ## Progress
 - ✅ `/` landing (108:4082)
 - ✅ `/booking` — **interactive**; reproduces the many booking-state frames
-  (439:10744, 209:278, 269:1734, …) via live selection + total.
+  (439:10744, 209:278, 269:1734, …) via live selection + total. Summary cells
+  open pop-ups for removal (264:302) and schedule/date-time (235:758); the
+  Seasonal Catalogue add-on opens the التصاميم الموسمية pop-up (439:11053).
+  The real selection is persisted (sessionStorage) and carried to payment.
+- ✅ `/booking/payment` — payment method + card form (276:1902 / 276:6624) and
+  success confirmation modal (276:6765); both render the real booking selection.
 - ✅ `/gift-card` (317:7234) — interactive value/design/details.
-- ▶ Next distinct screens to build: schedule/date picker, checkout/payment,
-  confirmation, home variants (75:12219, 180:287, 180:525, 276:6950),
-  mobile landing (147:4276), tablet "Simplify Booking Page" set, POP UP (439:11053).
+- ✅ Booking pop-ups: schedule/date picker, removal, seasonal designs.
+- ▶ Next distinct screens to build: home variants (75:12219, 180:287, 180:525,
+  276:6950), mobile landing (147:4276), tablet "Simplify Booking Page" set.
+
+Booking-flow components live in `components/booking/` (Modal, ScheduleModal,
+RemovalModal, DesignsModal); shared data + state in `lib/booking.ts`.
+
+## Internationalization (Arabic ⇄ English)
+The whole site is bilingual with an in-place toggle (English / عربي button in the
+header). Implementation:
+- `lib/i18n.tsx` — `LanguageProvider` (localStorage-persisted, sets `<html dir>`)
+  + `useI18n()` hook exposing `{ lang, dir, c, setLang, toggle }`.
+- `lib/dictionary.ts` — all copy for both languages (`content.ar` / `content.en`;
+  `en` is type-checked against the `ar` shape). English mirrors LTR.
+- Components use logical Tailwind utilities (`text-start`, `ps/pe`, `start-0`) so
+  layout follows `dir`. Header/footer/BranchMap have small per-lang tweaks where
+  the design isn't a pure mirror (logo stays left; branch heading differs).
+- Known gap: the Offers carousel (`Offers.tsx`) is baked images with Arabic text
+  ("عروض عيد الأضحى"); an English offers image set would be needed for full parity.
 
 ## Long desktop pages (1920 wide)
 | Node | Size | Route | Status |

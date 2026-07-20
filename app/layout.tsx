@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Almarai, Tajawal, Poppins } from "next/font/google";
 import "./globals.css";
+import { LanguageProvider } from "@/lib/i18n";
 
 // Closest free fallbacks for the licensed Figma fonts:
 // Almarai ≈ DG Agnadeen (geometric display), Tajawal ≈ Lama Sans (body).
@@ -41,7 +42,9 @@ export default function RootLayout({
       dir="rtl"
       className={`${almarai.variable} ${tajawal.variable} ${poppins.variable}`}
     >
-      <body className="font-ar bg-cream text-ink">{children}</body>
+      <body className="font-ar bg-cream text-ink">
+        <LanguageProvider>{children}</LanguageProvider>
+      </body>
     </html>
   );
 }

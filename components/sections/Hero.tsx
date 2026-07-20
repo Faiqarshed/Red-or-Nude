@@ -1,11 +1,7 @@
-import Link from "next/link";
+"use client";
 
-// Booking cards — exact copy from Figma (108:4116). RTL order: right → left.
-const serviceCards = [
-  { kicker: "الحجــز", title: "احجــزي موعــدًا", desc: "حدّد الخدمات لنفسك", href: "/booking" },
-  { kicker: "الحجــز", title: "موعــد جماعـــي", desc: "لـنـفـسـك وللآخـريــن", href: "/booking" },
-  { kicker: "اشتــر", title: "بطاقــة هديــة", desc: "دلّلي نفسك أو صديقتك بزيارات مستقبلية", href: "/gift-card" },
-];
+import Link from "next/link";
+import { useI18n } from "@/lib/i18n";
 
 function CardArrow() {
   // Red capsule outline (Figma 108:4121) — narrower on mobile.
@@ -15,6 +11,7 @@ function CardArrow() {
 }
 
 export default function Hero() {
+  const { c } = useI18n();
   return (
     <>
       {/* ── Mobile hero: big centred wordmark (z-10) with the zoomed manicure
@@ -81,20 +78,20 @@ export default function Hero() {
       {/* Three booking cards (Figma: 530×320, radius 36, gap 30) — below the fold */}
       <section className="mx-auto w-full max-w-page px-6 pb-16 pt-12 md:px-12 lg:px-16">
         <div className="grid grid-cols-1 gap-[30px] md:grid-cols-3">
-          {serviceCards.map((c) => (
+          {c.hero.cards.map((card) => (
             <Link
-              key={c.title}
-              href={c.href}
-              className="relative block rounded-card bg-white px-[8.7%] py-[9%] text-right shadow-[0_20px_50px_rgba(184,0,7,0.06)] transition-shadow hover:shadow-[0_24px_60px_rgba(184,0,7,0.12)] md:aspect-[530/320]"
+              key={card.title}
+              href={card.href}
+              className="relative block rounded-card bg-white px-[8.7%] py-[9%] text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] transition-shadow hover:shadow-[0_24px_60px_rgba(184,0,7,0.12)] md:aspect-[530/320]"
             >
               <p className="font-display text-[clamp(14px,1.0vw,19px)] font-light text-ink/70">
-                {c.kicker}
+                {card.kicker}
               </p>
               <h3 className="mt-[5%] font-display text-[clamp(24px,1.85vw,35px)] font-bold text-red">
-                {c.title}
+                {card.title}
               </h3>
               <p className="mt-[6%] font-display text-[clamp(14px,1.0vw,19px)] font-light leading-relaxed text-ink/70">
-                {c.desc}
+                {card.desc}
               </p>
               <div className="mt-6 md:absolute md:bottom-[12%] md:left-[8.7%] md:mt-0">
                 <CardArrow />

@@ -1,14 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useI18n } from "@/lib/i18n";
 
-// Shared "اختر طريقة الدفع" panel (card form + mada / STC Pay / Apple Pay).
+// Shared "Select Payment Method" panel (card form + mada / STC Pay / Apple Pay).
 // Used by the booking and gift-card payment steps.
-const otherMethods = [
-  { id: "mada", title: "مدى", sub: "بطاقة مدى السعودية" },
-  { id: "stc", title: "STC Pay", sub: "الدفع عبر تطبيق STC Pay" },
-  { id: "apple", title: "Apple Pay", sub: "" },
-] as const;
+type MethodId = "card" | "mada" | "stc" | "apple";
 
 function Radio({ active }: { active: boolean }) {
   return (
@@ -23,10 +20,8 @@ function Radio({ active }: { active: boolean }) {
 }
 
 function MethodLogo({ id }: { id: string }) {
-  if (id === "stc")
-    return <img src="/pay/stcpay.webp" alt="STC Pay" className="h-6 w-auto" />;
-  if (id === "apple")
-    return <img src="/pay/apple.webp" alt="Apple Pay" className="h-6 w-auto" />;
+  if (id === "stc") return <img src="/pay/stcpay.webp" alt="STC Pay" className="h-6 w-auto" />;
+  if (id === "apple") return <img src="/pay/apple.webp" alt="Apple Pay" className="h-6 w-auto" />;
   return (
     <span className="rounded-md bg-[#eef3f7] px-2 py-1 text-left leading-none">
       <span className="block text-[10px] font-bold text-[#1a3668]">مدى</span>
@@ -42,33 +37,59 @@ function Field({
   label,
   placeholder,
   ltr = false,
+  dir,
 }: {
   label: string;
   placeholder: string;
   ltr?: boolean;
+  dir: "rtl" | "ltr";
 }) {
   return (
     <label className="block">
       <span className="mb-2 block text-[13px] text-ink/55">{label}</span>
       <input
-        dir={ltr ? "ltr" : "rtl"}
+        dir={ltr ? "ltr" : dir}
         placeholder={placeholder}
         className={`w-full rounded-[12px] border border-black/[0.06] bg-white px-4 py-3.5 text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40 ${
-          ltr ? "text-left" : "text-right"
+          ltr ? "text-left" : "text-start"
         }`}
       />
     </label>
   );
 }
 
-export default function PaymentMethods({ onConfirm }: { onConfirm: () => void }) {
-  const [method, setMethod] = useState<"card" | "mada" | "stc" | "apple">("card");
+export default function PaymentMethods({
+  onConfirm,
+  onMethodChange,
+}: {
+  onConfirm: () => void;
+  onMethodChange?: (label: string) => void;
+}) {
+  const { c, dir } = useI18n();
+  const p = c.payment;
+  const [method, setMethod] = useState<MethodId>("card");
+
+  const labels: Record<MethodId, string> = {
+    card: p.cardTitle,
+    mada: p.madaTitle,
+    stc: p.stcTitle,
+    apple: p.appleTitle,
+  };
+
+  useEffect(() => {
+    onMethodChange?.(labels[method]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [method, onMethodChange, labels[method]]);
+
+  const otherMethods = [
+    { id: "mada" as const, title: p.madaTitle, sub: p.madaSub },
+    { id: "stc" as const, title: p.stcTitle, sub: p.stcSub },
+    { id: "apple" as const, title: p.appleTitle, sub: p.appleSub },
+  ];
 
   return (
     <section>
-      <h2 className="mb-6 text-right font-display text-2xl font-extrabold text-ink">
-        اختر طريقة الدفع
-      </h2>
+      <h2 className="mb-6 text-start font-display text-2xl font-extrabold text-ink">{p.title}</h2>
 
       {/* Credit / debit card */}
       <div
@@ -83,11 +104,9 @@ export default function PaymentMethods({ onConfirm }: { onConfirm: () => void })
         >
           <div className="flex items-center gap-3">
             <img src="/pay/mastercard.webp" alt="Mastercard" className="h-7 w-auto" />
-            <div className="text-right">
-              <p className="font-display text-base font-bold text-ink">
-                بطاقة ائتمانية / خصم
-              </p>
-              <p className="text-[12px] text-ink/50">Visa, Mastercard</p>
+            <div className="text-start">
+              <p className="font-display text-base font-bold text-ink">{p.cardTitle}</p>
+              <p className="text-[12px] text-ink/50">{p.cardSub}</p>
             </div>
           </div>
           <Radio active={method === "card"} />
@@ -95,18 +114,18 @@ export default function PaymentMethods({ onConfirm }: { onConfirm: () => void })
 
         {method === "card" && (
           <div className="mt-6 space-y-5">
-            <Field label="رقم البطاقة" placeholder="1234 5678 9012 3456" ltr />
-            <Field label="اسم حامل البطاقة" placeholder="الاسم كما هو مكتوب على البطاقة" />
+            <Field label={p.cardNumber} placeholder="1234 5678 9012 3456" ltr dir={dir} />
+            <Field label={p.cardName} placeholder={p.cardNamePlaceholder} dir={dir} />
             <div className="grid grid-cols-2 gap-4">
-              <Field label="CVV" placeholder="123" ltr />
-              <Field label="تاريخ الانتهاء" placeholder="MM/YY" ltr />
+              <Field label={p.cvv} placeholder="123" ltr dir={dir} />
+              <Field label={p.expiry} placeholder="MM/YY" ltr dir={dir} />
             </div>
             <button
               type="button"
               onClick={onConfirm}
               className="w-full rounded-[12px] bg-red-grad py-4 text-center text-sm font-bold text-white transition-opacity hover:opacity-90"
             >
-              تأكيد
+              {p.confirm}
             </button>
           </div>
         )}
@@ -125,7 +144,7 @@ export default function PaymentMethods({ onConfirm }: { onConfirm: () => void })
           >
             <div className="flex items-center gap-3">
               <MethodLogo id={m.id} />
-              <div className="text-right">
+              <div className="text-start">
                 <p className="font-display text-base font-bold text-ink">{m.title}</p>
                 {m.sub && <p className="text-[12px] text-ink/50">{m.sub}</p>}
               </div>
