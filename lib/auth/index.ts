@@ -24,11 +24,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!parsed.success) return null;
         const { email, password } = parsed.data;
 
-        const [member] = await db
-          .select()
-          .from(staff)
-          .where(eq(staff.email, email.toLowerCase().trim()))
-          .limit(1);
+        // A throw here surfaces as a generic "could not sign in" with no clue
+        // why, so name the failure explicitly in the log. This is the single
+        // most likely thing to break on a fresh deploy: DATABASE_URL missing,
+        // or pointing at the IPv6-only direct host instead of the pooler.
+        let member;
+        try {
+          [member] = await db
+            .select()
+            .from(staff)
+            .where(eq(staff.email, email.toLowerCase().trim()))
+            .limit(1);
+        } catch (err) {
+          console.error("[auth] database unreachable during sign-in:", err);
+          throw err;
+        }
 
         // Compare even when the account is missing or has no password, so a
         // wrong email and a wrong password take the same time to fail.

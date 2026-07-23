@@ -21,25 +21,45 @@ const globalForDb = globalThis as unknown as {
 function getDb(): Db {
   if (globalForDb.__ronDb) return globalForDb.__ronDb;
 
-  const url = process.env.DATABASE_URL;
+  // POSTGRES_URL is what the Vercel↔Supabase integration injects; accept it so a
+  // deployment that relies on the integration doesn't fail with an empty
+  // DATABASE_URL. Explicit DATABASE_URL always wins.
+  const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
   if (!url) {
     throw new Error(
-      "DATABASE_URL is not set. Copy .env.example to .env.local and point it at your Postgres instance.",
+      "No database URL. Set DATABASE_URL to the Supabase transaction pooler " +
+        "(port 6543). Locally: copy .env.example to .env.local. On Vercel: " +
+        "Settings → Environment Variables, then redeploy — env changes only " +
+        "apply to new deployments.",
     );
   }
 
   // Supabase's transaction pooler (port 6543 / pgbouncer) can't use prepared
   // statements.
+  const pooled = url.includes("pgbouncer") || url.includes(":6543");
+
   const client =
     globalForDb.__ronSql ??
-    postgres(url, { max: 10, prepare: !url.includes("pgbouncer") && !url.includes(":6543") });
+    postgres(url, {
+      // One connection per serverless instance. The pooler is already doing the
+      // pooling; opening ten sockets per lambda just races other instances to
+      // Supabase's client limit. A long-lived server can afford more.
+      max: pooled ? 1 : 10,
+      prepare: !pooled,
+      idle_timeout: 20,
+      connect_timeout: 10,
+    });
 
   const instance = drizzle(client, { schema });
 
-  if (process.env.NODE_ENV !== "production") {
-    globalForDb.__ronSql = client;
-    globalForDb.__ronDb = instance;
-  }
+  // Cache in every environment, production included. This used to be gated on
+  // NODE_ENV !== "production", which meant the `db` Proxy below built a brand
+  // new pool on every property access in production — two per sign-in, never
+  // reused, never closed, until Supabase refused further connections. It
+  // survived local testing because the failure only appears under sustained
+  // traffic, not a handful of requests.
+  globalForDb.__ronSql = client;
+  globalForDb.__ronDb = instance;
 
   return instance;
 }

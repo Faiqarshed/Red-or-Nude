@@ -6,7 +6,11 @@
 import { getPublicBranches, getPublicCatalog } from "@/lib/catalog";
 import BookingView from "./BookingView";
 
-export const dynamic = "force-dynamic";
+// Cached, not force-dynamic: the catalogue changes only when staff edit it,
+// and the catalog/availability admin actions already call revalidatePath("/booking").
+// Bookable times are fetched client-side from /api/availability, so caching the
+// shell never serves a stale slot.
+export const revalidate = 3600;
 
 export default async function BookingPage() {
   // Branch names are needed in both languages because the client can toggle
