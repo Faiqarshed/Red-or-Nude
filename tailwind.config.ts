@@ -26,6 +26,9 @@ const config: Config = {
         ar: ["'DG Agnadeen'", "var(--font-almarai)", "sans-serif"],
         display: ["'DG Agnadeen'", "var(--font-almarai)", "sans-serif"],
         latin: ["var(--font-poppins)", "sans-serif"],
+        // Admin UI face. Bilingual coverage plus real tabular numerals, so
+        // prices and times align down a column in dense tables.
+        ui: ["var(--font-plex-ar)", "system-ui", "sans-serif"],
       },
       borderRadius: {
         card: "36px",

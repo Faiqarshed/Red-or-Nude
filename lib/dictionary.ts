@@ -111,6 +111,13 @@ const ar = {
     rowTotal: "المبلغ الإجمالي",
     newBooking: "حجز جديد",
     close: "إغلاق",
+    customerName: "الاسم",
+    customerPhone: "رقم الجوال",
+    confirming: "جارٍ تأكيد الحجز…",
+    slotTaken: "تم حجز هذا الموعد للتو. اختاري وقتاً آخر من صفحة الحجز.",
+    invalidPhone: "رقم الجوال غير صحيح (مثال: 0512345678)",
+    bookingFailed: "تعذر إتمام الحجز، حاولي مرة أخرى",
+    noSelection: "لم يتم اختيار أي خدمة بعد",
   },
 
   modals: {
@@ -126,6 +133,8 @@ const ar = {
     confirm: "تأكيد",
     designsTitle: "التصاميم الموسمية",
     choose: "اختر",
+    noSlots: "لا توجد مواعيد متاحة في هذا اليوم",
+    branchTitle: "اختيار الفرع",
   },
 
   // Removal options — stored by id; name/price come from here.
@@ -292,6 +301,13 @@ const en: Content = {
     rowTotal: "Total Amount",
     newBooking: "New Booking",
     close: "Close",
+    customerName: "Name",
+    customerPhone: "Mobile number",
+    confirming: "Confirming…",
+    slotTaken: "That time was just booked. Please pick another slot.",
+    invalidPhone: "Invalid mobile number (e.g. 0512345678)",
+    bookingFailed: "Couldn't complete the booking, please try again",
+    noSelection: "No service selected yet",
   },
 
   modals: {
@@ -307,6 +323,8 @@ const en: Content = {
     confirm: "Confirm",
     designsTitle: "Seasonal Designs",
     choose: "Choose",
+    noSlots: "No times available on this day",
+    branchTitle: "Choose branch",
   },
 
   removals: [

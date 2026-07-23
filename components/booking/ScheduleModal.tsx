@@ -1,67 +1,160 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import Modal from "./Modal";
 import { useI18n } from "@/lib/i18n";
-import {
-  CAL_LEAD_BLANKS,
-  CAL_DAYS_IN_MONTH,
-  CAL_FIRST_BOOKABLE,
-  TIME_SLOTS,
-  formatDateFull,
-} from "@/lib/booking";
+import { formatDateLabel, monthLabel } from "@/lib/booking";
 
-// Date + time picker (Figma 235:758): June 2026 calendar (Saturday-first) over
-// a grid of 30-min time slots.
+// Date + time picker (Figma 235:758), now backed by the availability engine
+// instead of a hardcoded June-2026 grid: days with no free chair are disabled,
+// and the time grid comes from /api/availability for the chosen day and the
+// duration of what's actually being booked.
+
+type Slot = { time: string; startsAt: string; available: boolean };
+
+function pad(n: number) {
+  return String(n).padStart(2, "0");
+}
+
 export default function ScheduleModal({
-  initialDay,
+  branchId,
+  durationMin,
+  initialDate,
   initialTime,
   onConfirm,
   onClose,
 }: {
-  initialDay: number | null;
+  branchId: string;
+  durationMin: number;
+  initialDate: string | null;
   initialTime: string | null;
-  onConfirm: (day: number, time: string) => void;
+  /** Returns the local date, the wall-clock time, and the exact UTC instant. */
+  onConfirm: (date: string, time: string, startsAt: string) => void;
   onClose: () => void;
 }) {
-  const { c } = useI18n();
-  const [day, setDay] = useState<number | null>(initialDay);
-  const [time, setTime] = useState<string | null>(initialTime);
+  const { c, lang } = useI18n();
 
-  const days = [
-    ...Array.from({ length: CAL_LEAD_BLANKS }, () => null),
-    ...Array.from({ length: CAL_DAYS_IN_MONTH }, (_, i) => i + 1),
-  ];
+  const today = useMemo(() => new Date(), []);
+  const [cursor, setCursor] = useState(() => {
+    const base = initialDate ? new Date(`${initialDate}T12:00:00Z`) : today;
+    return { year: base.getUTCFullYear(), month0: base.getUTCMonth() };
+  });
+
+  const [date, setDate] = useState<string | null>(initialDate);
+  const [time, setTime] = useState<string | null>(initialTime);
+  const [days, setDays] = useState<Record<string, boolean> | null>(null);
+  const [slots, setSlots] = useState<Slot[] | null>(null);
+
+  const monthKey = `${cursor.year}-${pad(cursor.month0 + 1)}`;
+
+  // Which days in the visible month have any free slot.
+  useEffect(() => {
+    let cancelled = false;
+    setDays(null);
+    fetch(`/api/availability?branchId=${branchId}&month=${monthKey}&duration=${durationMin}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setDays(d.days ?? {});
+      })
+      .catch(() => {
+        if (!cancelled) setDays({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [branchId, monthKey, durationMin]);
+
+  // Slots for the selected day.
+  useEffect(() => {
+    if (!date) return setSlots(null);
+    let cancelled = false;
+    setSlots(null);
+    fetch(`/api/availability?branchId=${branchId}&date=${date}&duration=${durationMin}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setSlots(d.slots ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setSlots([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [branchId, date, durationMin]);
+
+  const daysInMonth = new Date(Date.UTC(cursor.year, cursor.month0 + 1, 0)).getUTCDate();
+  // Saturday-first, matching the dictionary's weekday arrays.
+  const leadBlanks = (new Date(Date.UTC(cursor.year, cursor.month0, 1)).getUTCDay() + 1) % 7;
+
+  const step = (delta: number) =>
+    setCursor(({ year, month0 }) => {
+      const next = month0 + delta;
+      return { year: year + Math.floor(next / 12), month0: ((next % 12) + 12) % 12 };
+    });
+
+  const selectedSlot = slots?.find((s) => s.time === time) ?? null;
 
   return (
     <Modal title={c.modals.scheduleTitle} onClose={onClose} className="max-w-[720px]">
-      {/* Calendar */}
-      <p className="mb-4 font-display text-lg font-extrabold text-ink">{c.date.monthLabel}</p>
+      <div className="mb-4 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => step(-1)}
+          className="grid h-9 w-9 place-items-center rounded-full text-ink/50 transition-colors hover:bg-black/[0.05] hover:text-ink"
+          aria-label="previous month"
+        >
+          <ChevronLeft className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
+        </button>
+        <p className="font-display text-lg font-extrabold text-ink">
+          {monthLabel(cursor.year, cursor.month0, lang)}
+        </p>
+        <button
+          type="button"
+          onClick={() => step(1)}
+          className="grid h-9 w-9 place-items-center rounded-full text-ink/50 transition-colors hover:bg-black/[0.05] hover:text-ink"
+          aria-label="next month"
+        >
+          <ChevronRight className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
+        </button>
+      </div>
+
       <div className="grid grid-cols-7 gap-y-2 text-center">
         {c.date.weekdaysShort.map((w) => (
           <span key={w} className="pb-2 text-[13px] text-ink/40">
             {w}
           </span>
         ))}
-        {days.map((d, i) => {
-          if (d === null) return <span key={`b${i}`} />;
-          const disabled = d < CAL_FIRST_BOOKABLE;
-          const selected = d === day;
+        {Array.from({ length: leadBlanks }, (_, i) => <span key={`b${i}`} />)}
+        {Array.from({ length: daysInMonth }, (_, i) => {
+          const dayNum = i + 1;
+          const key = `${monthKey}-${pad(dayNum)}`;
+          // Until the month loads, days render enabled-but-quiet rather than
+          // flashing every date to disabled and back.
+          const loading = days === null;
+          const disabled = !loading && !days[key];
+          const selected = key === date;
+
           return (
-            <div key={d} className="grid place-items-center py-0.5">
+            <div key={key} className="grid place-items-center py-0.5">
               <button
                 type="button"
-                disabled={disabled}
-                onClick={() => setDay(d)}
+                disabled={disabled || loading}
+                onClick={() => {
+                  setDate(key);
+                  setTime(null);
+                }}
                 className={`grid h-10 w-10 place-items-center rounded-full text-[15px] transition-colors ${
                   selected
                     ? "bg-red font-bold text-white shadow-[0_6px_16px_rgba(184,0,7,0.35)]"
                     : disabled
-                      ? "cursor-not-allowed text-ink/25"
-                      : "text-ink hover:bg-red/10"
+                      ? "cursor-not-allowed text-ink/20"
+                      : loading
+                        ? "text-ink/30"
+                        : "text-ink hover:bg-red/10"
                 }`}
               >
-                {d}
+                {dayNum}
               </button>
             </div>
           );
@@ -70,40 +163,49 @@ export default function ScheduleModal({
 
       <hr className="my-6 border-black/[0.07]" />
 
-      {/* Time */}
       <div className="mb-4 flex items-center justify-between">
         <span className="text-[13px] text-ink/45">
-          {day !== null ? formatDateFull(day, c.date) : c.modals.pickDayFirst}
+          {date ? formatDateLabel(date, lang) : c.modals.pickDayFirst}
         </span>
         <h4 className="font-display text-lg font-extrabold text-ink">{c.modals.chooseTime}</h4>
       </div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {TIME_SLOTS.map((t) => {
-          const selected = t === time;
-          return (
-            <button
-              key={t}
-              type="button"
-              dir="ltr"
-              onClick={() => setTime(t)}
-              className={`rounded-[14px] py-3.5 text-center text-sm transition-colors ${
-                selected
-                  ? "bg-red font-bold text-white shadow-[0_6px_16px_rgba(184,0,7,0.25)]"
-                  : "bg-[#f7f7f7] text-ink hover:bg-red/10"
-              }`}
-            >
-              {t}
-            </button>
-          );
-        })}
-      </div>
+
+      {!date ? null : slots === null ? (
+        <p className="py-6 text-center text-sm text-ink/40">…</p>
+      ) : slots.length === 0 ? (
+        <p className="py-6 text-center text-sm text-ink/45">{c.modals.noSlots}</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {slots.map((s) => {
+            const selected = s.time === time;
+            return (
+              <button
+                key={s.time}
+                type="button"
+                dir="ltr"
+                disabled={!s.available}
+                onClick={() => setTime(s.time)}
+                className={`rounded-[14px] py-3.5 text-center text-sm transition-colors ${
+                  selected
+                    ? "bg-red font-bold text-white shadow-[0_6px_16px_rgba(184,0,7,0.25)]"
+                    : s.available
+                      ? "bg-[#f7f7f7] text-ink hover:bg-red/10"
+                      : "cursor-not-allowed bg-[#f7f7f7] text-ink/25 line-through"
+                }`}
+              >
+                {s.time}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <button
         type="button"
-        disabled={day === null || time === null}
-        onClick={() => day !== null && time !== null && onConfirm(day, time)}
+        disabled={!date || !selectedSlot}
+        onClick={() => date && selectedSlot && onConfirm(date, selectedSlot.time, selectedSlot.startsAt)}
         className={`mt-8 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-colors ${
-          day !== null && time !== null
+          date && selectedSlot
             ? "bg-red-grad text-white hover:opacity-90"
             : "cursor-not-allowed bg-black/[0.06] text-ink/40"
         }`}

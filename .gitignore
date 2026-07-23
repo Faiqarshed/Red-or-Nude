@@ -1,8 +1,10 @@
 /node_modules
 /.next
+/public/uploads
 /out
 /build
 next-env.d.ts
+tsconfig.tsbuildinfo
 .DS_Store
 *.pem
 npm-debug.log*
