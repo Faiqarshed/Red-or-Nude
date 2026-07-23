@@ -4,8 +4,8 @@
 import { getPublicGiftOptions } from "@/lib/catalog";
 import GiftCardView from "./GiftCardView";
 
-// Cached; the gift-card admin actions call revalidatePath("/gift-card").
-export const revalidate = 3600;
+// Dynamic for the same reason as /booking; the queries behind it are cached.
+export const dynamic = "force-dynamic";
 
 export default async function GiftCardPage() {
   const options = await getPublicGiftOptions();

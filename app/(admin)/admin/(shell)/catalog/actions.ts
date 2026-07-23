@@ -7,13 +7,14 @@
 // The revalidate calls include the public routes, because these rows are what
 // the customer-facing booking page now reads.
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { addons, removalTypes, services } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { diffOf, recordAudit } from "@/lib/audit";
+import { CATALOG_TAG } from "@/lib/catalog";
 import { sarToHalalas } from "@/lib/money";
 
 export type CatalogKind = "service" | "addon" | "removal";
@@ -58,6 +59,9 @@ function revalidateAll() {
   revalidatePath("/admin/catalog");
   revalidatePath("/booking");
   revalidatePath("/");
+  // The public pages read through unstable_cache; without this the site keeps
+  // serving the old price for up to an hour.
+  revalidateTag(CATALOG_TAG);
 }
 
 export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult> {
