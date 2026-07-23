@@ -4,19 +4,23 @@ import { useState } from "react";
 import Modal from "./Modal";
 import { useI18n } from "@/lib/i18n";
 import { Riyal } from "@/components/icons";
+import { pick } from "@/lib/localized";
+import type { PublicCatalog } from "@/lib/catalog";
 
 // "هل تحتاجين إزالة؟" (Figma 264:302): Yes/No, then choose a removal type.
 // The selection is returned/stored as the removal id.
 export default function RemovalModal({
+  removals,
   initialRemoval,
   onConfirm,
   onClose,
 }: {
+  removals: PublicCatalog["removals"];
   initialRemoval: string | null;
   onConfirm: (removal: string | null) => void;
   onClose: () => void;
 }) {
-  const { c } = useI18n();
+  const { c, lang } = useI18n();
   const [needs, setNeeds] = useState<boolean>(initialRemoval !== null);
   const [choice, setChoice] = useState<string | null>(initialRemoval);
 
@@ -52,7 +56,7 @@ export default function RemovalModal({
         <>
           <p className="mb-3 mt-6 text-start text-[13px] text-ink/55">{c.modals.chooseRemoval}</p>
           <div className="space-y-3">
-            {c.removals.map((r) => {
+            {removals.map((r) => {
               const selected = r.id === choice;
               return (
                 <button
@@ -67,7 +71,7 @@ export default function RemovalModal({
                     <Riyal className="h-3 w-3 text-red" />
                     {r.price}
                   </span>
-                  <span className="text-sm font-semibold text-ink">{r.name}</span>
+                  <span className="text-sm font-semibold text-ink">{pick(r.name, lang)}</span>
                 </button>
               );
             })}
