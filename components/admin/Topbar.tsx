@@ -28,7 +28,7 @@ export default function Topbar({
   const ownBranch = branches.find((b) => b.id === user.branchId);
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-black/[0.06] bg-cream/90 px-5 backdrop-blur">
+    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-black/[0.06] bg-white/90 px-5 backdrop-blur">
       {/* ⌘K palette lands with Bookings in P1, when there's something to search. */}
       <div className="relative hidden max-w-xs flex-1 md:block">
         <Search

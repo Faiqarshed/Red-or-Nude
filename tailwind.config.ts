@@ -9,7 +9,7 @@ const config: Config = {
     extend: {
       colors: {
         // Design tokens read from the Figma file (Red Or Nude)
-        cream: "#F1ECE3", // soft warm paper page background (matches bg-texture)
+        cream: "#FFFAF0", // soft warm paper page background (matches bg-texture)
         red: {
           DEFAULT: "#B80007", // brand red (gradient start)
           dark: "#520003", // brand red (gradient end)

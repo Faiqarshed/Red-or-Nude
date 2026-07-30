@@ -47,7 +47,7 @@ export default function Hero() {
       </section>
 
       {/* ── Desktop hero splash: wordmark (z-10) behind the photo (z-20) ── */}
-      <section className="relative hidden h-screen min-h-[680px] w-full overflow-x-clip md:block">
+      <section className="relative hidden h-[calc(100vh-180px)] min-h-[680px] w-full overflow-x-clip md:block">
         {/* RED OR NUDE outlined wordmark (Figma vector 108:4087) */}
         <img
           src="/wordmark.svg"
