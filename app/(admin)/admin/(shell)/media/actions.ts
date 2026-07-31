@@ -10,6 +10,7 @@ import { requireCan } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
 import { getStorage, mediaKey, mediaUrl } from "@/lib/storage";
 import { ALLOWED_TYPES, MAX_UPLOAD_BYTES, type MediaItem } from "@/lib/media";
+import { sanitizeSvg } from "@/lib/media-sanitize";
 
 export async function listMedia(): Promise<MediaItem[]> {
   await requireCan("media.manage");
@@ -43,7 +44,10 @@ export async function uploadMedia(formData: FormData): Promise<UploadResponse> {
     .safeParse({ width: formData.get("width"), height: formData.get("height") });
 
   const key = mediaKey(file.name, randomUUID().slice(0, 8));
-  const buffer = Buffer.from(await file.arrayBuffer());
+  let buffer = Buffer.from(await file.arrayBuffer());
+  if (file.type === "image/svg+xml") {
+    buffer = Buffer.from(sanitizeSvg(buffer.toString("utf-8")), "utf-8");
+  }
 
   let stored;
   try {

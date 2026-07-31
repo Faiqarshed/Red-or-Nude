@@ -7,9 +7,17 @@
 
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 
-// SVG is deliberately excluded: it can carry script, and uploads are served from
-// the same origin as the admin.
-export const ALLOWED_TYPES = ["image/webp", "image/png", "image/jpeg", "image/avif"];
+// SVG is allowed for crisp vector exports (e.g. straight from Figma) but is
+// sanitized server-side before storage — see lib/media-sanitize.ts — since it
+// can otherwise carry script and uploads are served from the same origin as
+// the admin.
+export const ALLOWED_TYPES = [
+  "image/webp",
+  "image/png",
+  "image/jpeg",
+  "image/avif",
+  "image/svg+xml",
+];
 
 export type MediaItem = {
   id: string;
