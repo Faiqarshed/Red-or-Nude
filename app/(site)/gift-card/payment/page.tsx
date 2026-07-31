@@ -85,6 +85,7 @@ export default function GiftCardPaymentPage() {
 
           <GiftCardArt
             name={selection?.designName}
+            img={selection?.designImg}
             amountSar={total}
             recipientName={selection?.recipientName}
             senderName={selection?.senderName}
@@ -190,6 +191,7 @@ function SuccessModal({
 
         <GiftCardArt
           name={selection?.designName}
+          img={selection?.designImg}
           amountSar={selection?.amountSar ?? 0}
           recipientName={selection?.recipientName}
           senderName={selection?.senderName}

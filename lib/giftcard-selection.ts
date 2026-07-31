@@ -8,6 +8,7 @@ export type GiftSelection = {
   amountSar: number;
   designId: string | null;
   designName: Localized | null;
+  designImg: string | null;
   recipientName: string;
   recipientEmail: string;
   senderName: string;

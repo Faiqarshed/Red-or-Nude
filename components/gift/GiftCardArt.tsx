@@ -4,37 +4,20 @@ import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import type { Localized } from "@/lib/localized";
 
-// Figma: gift card artwork (Frame 139/183/153/184) — the four SVGs are
-// background art (card shape, logo, "بطاقة هدية" badge, occasion icon). The
-// occasion title ("Congratulations" etc.) is baked into that art too since
-// it's fixed per design; only price and recipient name change per order, so
-// only those are rendered as real text on top here.
+// Background art (card shape, logo, "بطاقة هدية" badge, occasion icon) is
+// admin-managed media (see /admin/gift-cards), not a bundled asset — `img`
+// below is whatever's uploaded there. The occasion title ("Congratulations"
+// etc.) is baked into that art too since it's fixed per design; only price
+// and recipient name change per order, so only those are rendered as real
+// text on top here.
 
 type Kind = "red" | "congrats" | "birthday" | "anniversary";
 
-const BACKGROUNDS: Record<
-  Kind,
-  { src: string; ratio: number; textColor: string; subColor: string }
-> = {
-  red: { src: "/gift/backgrounds/red.svg", ratio: 485 / 260, textColor: "#ffffff", subColor: "#ffffff" },
-  congrats: {
-    src: "/gift/backgrounds/congrats.svg",
-    ratio: 214 / 121,
-    textColor: "#3d3d3d",
-    subColor: "#767676",
-  },
-  birthday: {
-    src: "/gift/backgrounds/birthday.svg",
-    ratio: 210 / 117,
-    textColor: "#4f6b78",
-    subColor: "#82a0ac",
-  },
-  anniversary: {
-    src: "/gift/backgrounds/anniversary.svg",
-    ratio: 210 / 117,
-    textColor: "#8a7050",
-    subColor: "#ab9678",
-  },
+const THEME: Record<Kind, { textColor: string; subColor: string }> = {
+  red: { textColor: "#ffffff", subColor: "#ffffff" },
+  congrats: { textColor: "#3d3d3d", subColor: "#767676" },
+  birthday: { textColor: "#4f6b78", subColor: "#82a0ac" },
+  anniversary: { textColor: "#8a7050", subColor: "#ab9678" },
 };
 
 function kindOf(name: Localized | null | undefined): Kind {
@@ -47,6 +30,7 @@ function kindOf(name: Localized | null | undefined): Kind {
 
 export function GiftCardArt({
   name,
+  img,
   amountSar,
   recipientName,
   senderName,
@@ -54,6 +38,7 @@ export function GiftCardArt({
   className,
 }: {
   name?: Localized | null;
+  img?: string | null;
   amountSar: number;
   recipientName?: string;
   senderName?: string;
@@ -62,15 +47,17 @@ export function GiftCardArt({
 }) {
   const { c } = useI18n();
   const kind = kindOf(name);
-  const cfg = BACKGROUNDS[kind];
+  const cfg = THEME[kind];
 
   return (
     <div
-      className={`relative w-full overflow-hidden rounded-[18px] [container-type:inline-size] ${className ?? ""}`}
-      style={{ aspectRatio: cfg.ratio }}
+      className={`relative w-full overflow-hidden rounded-[18px] bg-black/[0.04] [container-type:inline-size] ${className ?? ""}`}
+      style={!img ? { aspectRatio: 210 / 117 } : undefined}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={cfg.src} alt="" className="absolute inset-0 h-full w-full" />
+      {img ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={img} alt="" className="block w-full h-auto" />
+      ) : null}
 
       {kind === "red" ? (
         <div dir="rtl" className="absolute inset-0" style={{ color: cfg.textColor }}>

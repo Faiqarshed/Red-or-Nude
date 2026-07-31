@@ -173,6 +173,7 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
 
           <GiftCardArt
             name={designs[design]?.name}
+            img={designs[design]?.img}
             amountSar={value}
             recipientName={recipientName}
             senderName={senderName}
@@ -192,6 +193,7 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                 amountSar: value,
                 designId: designs[design]?.id ?? null,
                 designName: designs[design]?.name ?? null,
+                designImg: designs[design]?.img ?? null,
                 recipientName,
                 recipientEmail,
                 senderName,
