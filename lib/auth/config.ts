@@ -64,6 +64,10 @@ export const authConfig = {
       const { pathname } = request.nextUrl;
       if (!pathname.startsWith("/admin")) return true;
       if (pathname === "/admin/login") return true;
+      // Local dev only (`next dev`; never true for `next start`/deployed builds):
+      // skip the sign-in gate. lib/auth/guard.ts fills in a real staff session
+      // server-side so capability checks still behave normally.
+      if (process.env.NODE_ENV !== "production") return true;
       return !!auth?.user;
     },
   },

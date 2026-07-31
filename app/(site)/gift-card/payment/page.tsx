@@ -5,6 +5,7 @@ import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import PaymentMethods from "@/components/PaymentMethods";
+import { GiftCardArt } from "@/components/gift/GiftCardArt";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { clearGiftSelection, loadGiftSelection, type GiftSelection } from "@/lib/giftcard-selection";
@@ -82,10 +83,13 @@ export default function GiftCardPaymentPage() {
             {gp.summaryTitle}
           </h2>
 
-          <img
-            src="/gift/card-red.webp"
-            alt="Gift card"
-            className="w-full rounded-[18px] shadow-[0_18px_40px_rgba(184,0,7,0.18)]"
+          <GiftCardArt
+            name={selection?.designName}
+            amountSar={total}
+            recipientName={selection?.recipientName}
+            senderName={selection?.senderName}
+            message={selection?.message}
+            className="shadow-[0_18px_40px_rgba(184,0,7,0.18)]"
           />
 
           <div className="mt-5 grid grid-cols-2 gap-3">
@@ -184,10 +188,13 @@ function SuccessModal({
           {code}
         </p>
 
-        <img
-          src="/gift/card-red.webp"
-          alt="Gift card"
-          className="mt-6 w-full rounded-[18px] shadow-[0_18px_40px_rgba(184,0,7,0.18)]"
+        <GiftCardArt
+          name={selection?.designName}
+          amountSar={selection?.amountSar ?? 0}
+          recipientName={selection?.recipientName}
+          senderName={selection?.senderName}
+          message={selection?.message}
+          className="mt-6 shadow-[0_18px_40px_rgba(184,0,7,0.18)]"
         />
 
         <div className="mt-5 rounded-[16px] bg-[#f6f6f6] p-5 text-start">

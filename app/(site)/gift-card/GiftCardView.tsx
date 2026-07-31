@@ -5,6 +5,7 @@ import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import { Riyal } from "@/components/icons";
+import { GiftCardArt } from "@/components/gift/GiftCardArt";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
 import { saveGiftSelection } from "@/lib/giftcard-selection";
@@ -170,11 +171,13 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
             {g.summaryTitle}
           </h2>
 
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={designs[design]?.img ?? "/gift/card-red.webp"}
-            alt="Gift card"
-            className="w-full rounded-[18px] shadow-[0_18px_40px_rgba(184,0,7,0.18)]"
+          <GiftCardArt
+            name={designs[design]?.name}
+            amountSar={value}
+            recipientName={recipientName}
+            senderName={senderName}
+            message={message}
+            className="shadow-[0_18px_40px_rgba(184,0,7,0.18)]"
           />
 
           <label className="mt-5 flex items-center justify-end gap-2 text-[13px] text-ink/70">
@@ -188,6 +191,7 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
               saveGiftSelection({
                 amountSar: value,
                 designId: designs[design]?.id ?? null,
+                designName: designs[design]?.name ?? null,
                 recipientName,
                 recipientEmail,
                 senderName,

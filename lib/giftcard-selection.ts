@@ -2,9 +2,12 @@
 // Same pattern as the booking selection: sessionStorage holds it only until the
 // purchase is confirmed, at which point the card itself becomes the record.
 
+import type { Localized } from "@/lib/localized";
+
 export type GiftSelection = {
   amountSar: number;
   designId: string | null;
+  designName: Localized | null;
   recipientName: string;
   recipientEmail: string;
   senderName: string;

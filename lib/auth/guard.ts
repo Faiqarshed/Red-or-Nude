@@ -2,9 +2,11 @@
 // these — middleware only proves *someone* is signed in, not that they may act.
 
 import { redirect } from "next/navigation";
+import { eq } from "drizzle-orm";
 import { auth } from "./index";
 import { can, type Capability } from "./rbac";
-import type { StaffRole } from "@/lib/db/schema";
+import { db } from "@/lib/db";
+import { staff, type StaffRole } from "@/lib/db/schema";
 
 export type SessionStaff = {
   id: string;
@@ -14,9 +16,28 @@ export type SessionStaff = {
   branchId: string | null;
 };
 
+/**
+ * Local dev only (`next dev`; never true for `next start`/deployed builds):
+ * stand in for a real session so the login screen isn't required. Picks the
+ * seeded owner account (falling back to any active staff row) so capability
+ * checks still exercise real RBAC instead of an all-access shortcut.
+ */
+async function devFallbackStaff(): Promise<SessionStaff | null> {
+  if (process.env.NODE_ENV === "production") return null;
+
+  const [owner] = await db.select().from(staff).where(eq(staff.role, "owner")).limit(1);
+  const [row] = owner
+    ? [owner]
+    : await db.select().from(staff).where(eq(staff.active, true)).limit(1);
+  if (!row) return null;
+
+  return { id: row.id, name: row.name, email: row.email, role: row.role, branchId: row.branchId };
+}
+
 export async function currentStaff(): Promise<SessionStaff | null> {
   const session = await auth();
-  return (session?.user as SessionStaff | undefined) ?? null;
+  const user = (session?.user as SessionStaff | undefined) ?? null;
+  return user ?? devFallbackStaff();
 }
 
 /** For pages: bounce to login when signed out. */
