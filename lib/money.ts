@@ -33,3 +33,39 @@ export function vatOn(subtotalHalalas: number, percent = DEFAULT_VAT_PERCENT): n
 export function vatIncludedIn(totalHalalas: number, percent = DEFAULT_VAT_PERCENT): number {
   return totalHalalas - Math.round((totalHalalas * 100) / (100 + percent));
 }
+
+export type PriceSplit = { discountHalalas: number; totalHalalas: number };
+
+/**
+ * Share a group discount across the guests on one bill.
+ *
+ * The discount is rounded exactly once, off the combined total, and then handed
+ * out by largest remainder. That is what guarantees the guests' totals add back
+ * up to the bill to the halala — discounting each guest separately and rounding
+ * twice does not.
+ *
+ * A single guest, or a percent of 0, returns the gross amounts untouched, so the
+ * ordinary one-person booking runs through the same code with no change in what
+ * it charges.
+ */
+export function splitGroupPrice(grosses: number[], percent: number): PriceSplit[] {
+  const grossTotal = grosses.reduce((sum, g) => sum + g, 0);
+  const discountTotal = grossTotal > 0 ? Math.round((grossTotal * percent) / 100) : 0;
+
+  if (discountTotal <= 0) {
+    return grosses.map((g) => ({ discountHalalas: 0, totalHalalas: g }));
+  }
+
+  const exact = grosses.map((g) => (discountTotal * g) / grossTotal);
+  const discounts = exact.map((e) => Math.floor(e));
+
+  // 0..n-1 halalas are left over after flooring; give them to the guests whose
+  // fractional part was largest, ties broken by position so it's deterministic.
+  const leftover = discountTotal - discounts.reduce((sum, d) => sum + d, 0);
+  const byRemainder = exact
+    .map((e, i) => ({ i, frac: e - Math.floor(e) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i);
+  for (let k = 0; k < leftover; k++) discounts[byRemainder[k].i] += 1;
+
+  return grosses.map((g, i) => ({ discountHalalas: discounts[i], totalHalalas: g - discounts[i] }));
+}

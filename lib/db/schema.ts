@@ -286,6 +286,17 @@ export const bookings = pgTable(
     status: bookingStatus("status").notNull().default("pending"),
     source: bookingSource("source").notNull().default("web"),
 
+    // Airline-style queue number ("K45") the salon calls out. Distinct from
+    // `code`: that one is a permanent unique reference, this one restarts every
+    // day per branch and is only meaningful on the day of the appointment.
+    // Null until the booking is actually confirmed — an unpaid hold gets no number.
+    ticketNo: text("ticket_no"),
+
+    // Two guests booked together share one uuid. No booking_groups table: a group
+    // holds no fact its members don't already carry, and the only query anyone
+    // runs is "the other rows with this id".
+    groupId: uuid("group_id"),
+
     // Snapshotted at booking time. Never joined live off the catalog — raising a
     // price must not rewrite last month's revenue.
     serviceName: localized("service_name"),
@@ -308,7 +319,33 @@ export const bookings = pgTable(
     slotUnique: unique("bookings_station_slot_unique").on(t.stationId, t.startsAt),
     byBranchTime: index("bookings_branch_time_idx").on(t.branchId, t.startsAt),
     byStatus: index("bookings_status_idx").on(t.status),
+    byGroup: index("bookings_group_idx").on(t.groupId),
   }),
+);
+
+/**
+ * Hands out the daily ticket numbers. One row per branch per service day; `next`
+ * is the number the following booking will get.
+ *
+ * A counter table rather than `select max(ticket_no) + 1`, which is wrong under
+ * READ COMMITTED — two concurrent transactions both read 44 and both become K44.
+ * Incrementing this row takes a row lock, which serialises allocation, and asking
+ * for N at once gives a group its consecutive pair in a single statement.
+ *
+ * The day is the day of the *appointment*, not of payment: someone booking three
+ * weeks ahead must draw from that day's queue, or the salon's roll call is a
+ * mixture of numbers issued on four different dates.
+ */
+export const ticketCounters = pgTable(
+  "ticket_counters",
+  {
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    day: date("day").notNull(),
+    next: integer("next").notNull().default(1),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.branchId, t.day] }) }),
 );
 
 export const bookingAddons = pgTable(
