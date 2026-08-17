@@ -1,12 +1,13 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { giftCardDesigns, giftCardValues, giftCards } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
+import { GIFT_OPTIONS_TAG } from "@/lib/catalog";
 import { sarToHalalas } from "@/lib/money";
 import { adjustGiftCardBalance, issueGiftCard } from "@/lib/giftcards";
 
@@ -15,6 +16,7 @@ export type Result = { ok: true; code?: string } | { ok: false; error: string };
 function revalidate() {
   revalidatePath("/admin/gift-cards");
   revalidatePath("/gift-card");
+  revalidateTag(GIFT_OPTIONS_TAG);
 }
 
 const issueSchema = z.object({

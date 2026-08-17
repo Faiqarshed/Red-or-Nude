@@ -6,6 +6,10 @@
 import { getPublicBranches, getPublicCatalog } from "@/lib/catalog";
 import BookingView from "./BookingView";
 
+// Dynamic so `next build` never touches the database — prerendering these made
+// the build fail whenever the DB was unreachable from the build machine. The
+// speed comes from caching the queries themselves (see lib/catalog.ts), not from
+// prerendering the page.
 export const dynamic = "force-dynamic";
 
 export default async function BookingPage() {

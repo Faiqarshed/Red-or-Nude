@@ -4,6 +4,7 @@
 import { getPublicGiftOptions } from "@/lib/catalog";
 import GiftCardView from "./GiftCardView";
 
+// Dynamic for the same reason as /booking; the queries behind it are cached.
 export const dynamic = "force-dynamic";
 
 export default async function GiftCardPage() {

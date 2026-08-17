@@ -1,12 +1,13 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { branchHours, closures, stations } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
+import { BRANCHES_TAG } from "@/lib/catalog";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
@@ -14,6 +15,7 @@ function revalidate() {
   revalidatePath("/admin/availability");
   revalidatePath("/admin/bookings");
   revalidatePath("/booking");
+  revalidateTag(BRANCHES_TAG);
 }
 
 const time = z.string().regex(/^\d{2}:\d{2}$/);

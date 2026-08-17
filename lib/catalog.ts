@@ -8,6 +8,7 @@
 // hands plain objects to its client view.
 
 import "server-only";
+import { unstable_cache } from "next/cache";
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
@@ -41,10 +42,23 @@ export type PublicCatalog = {
 
 export type PublicBranch = { id: string; name: string; address: string };
 
+/**
+ * Cache tags. These reads run on every public page render, and the data behind
+ * them changes only when staff edit it — so they are cached at the query level
+ * and purged by tag from the admin actions.
+ *
+ * Deliberately NOT done by prerendering the pages: that made `next build`
+ * require a reachable database, and a build that can fail on a network blip is
+ * worse than a slightly slower first request.
+ */
+export const CATALOG_TAG = "catalog";
+export const BRANCHES_TAG = "branches";
+export const GIFT_OPTIONS_TAG = "gift-options";
+
 export { pick } from "@/lib/localized";
 
 /** Active branches, already resolved to the requested language. */
-export async function getPublicBranches(lang: "ar" | "en"): Promise<PublicBranch[]> {
+async function loadPublicBranches(lang: "ar" | "en"): Promise<PublicBranch[]> {
   const rows = await db
     .select()
     .from(branches)
@@ -58,7 +72,7 @@ export async function getPublicBranches(lang: "ar" | "en"): Promise<PublicBranch
   }));
 }
 
-export async function getPublicCatalog(): Promise<PublicCatalog> {
+async function loadPublicCatalog(): Promise<PublicCatalog> {
   const [serviceRows, addonRows, removalRows, designRows] = await Promise.all([
     db.select().from(services).where(eq(services.active, true)).orderBy(asc(services.sort)),
     db.select().from(addons).where(eq(addons.active, true)).orderBy(asc(addons.sort)),
@@ -106,7 +120,7 @@ export type PublicGiftOptions = {
 };
 
 /** Denominations and card artwork offered on /gift-card, managed in the admin. */
-export async function getPublicGiftOptions(): Promise<PublicGiftOptions> {
+async function loadPublicGiftOptions(): Promise<PublicGiftOptions> {
   const [valueRows, designRows] = await Promise.all([
     db
       .select()
@@ -125,3 +139,20 @@ export async function getPublicGiftOptions(): Promise<PublicGiftOptions> {
     designs: designRows.map((d) => ({ id: d.id, name: d.name, img: mediaUrl(d.image) })),
   };
 }
+
+// ---- cached entry points ----------------------------------------------------
+
+export const getPublicCatalog = unstable_cache(loadPublicCatalog, ["public-catalog"], {
+  tags: [CATALOG_TAG],
+  revalidate: 3600,
+});
+
+export const getPublicBranches = unstable_cache(loadPublicBranches, ["public-branches"], {
+  tags: [BRANCHES_TAG],
+  revalidate: 3600,
+});
+
+export const getPublicGiftOptions = unstable_cache(loadPublicGiftOptions, ["public-gift-options"], {
+  tags: [GIFT_OPTIONS_TAG],
+  revalidate: 3600,
+});
