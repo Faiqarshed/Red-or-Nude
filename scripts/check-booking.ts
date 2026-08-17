@@ -133,6 +133,24 @@ async function main() {
   console.log(`  booking at exactly +${dur} min → ${adjacent.ok ? "seated ✓" : adjacent.error}`);
   assert.ok(adjacent.ok, "a booking starting exactly when another ends must be allowed");
 
+  // -- A cancelled booking frees its chair for the same time ----------------
+  // The availability engine has always ignored cancelled bookings, but the
+  // uniqueness rule on (station_id, starts_at) did not, so re-booking a slot
+  // someone had cancelled failed outright. The index is partial now.
+  await cleanup(branch.id);
+  const first = await Promise.all(Array.from({ length: n }, () => book(0)));
+  assert.equal(first.filter((r) => r.ok).length, n, "setup: every chair should fill");
+  assert.ok(!(await book(0)).ok, "setup: a full slot must refuse the next one");
+
+  await db
+    .update(bookings)
+    .set({ status: "cancelled" })
+    .where(eq(bookings.branchId, branch.id));
+
+  const rebooked = await book(0);
+  console.log(`  re-booking a cancelled slot → ${rebooked.ok ? "seated ✓" : rebooked.error}`);
+  assert.ok(rebooked.ok, "a cancelled booking must give its chair back");
+
   checkPricing();
 
   // -- A group of two -------------------------------------------------------

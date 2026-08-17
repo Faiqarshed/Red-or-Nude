@@ -1,0 +1,2 @@
+ALTER TABLE "bookings" DROP CONSTRAINT "bookings_station_slot_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "bookings_station_slot_unique" ON "bookings" USING btree ("station_id","starts_at") WHERE "bookings"."status" not in ('cancelled', 'no_show');

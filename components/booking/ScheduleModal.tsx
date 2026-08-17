@@ -20,6 +20,7 @@ function pad(n: number) {
 export default function ScheduleModal({
   branchId,
   durationMin,
+  guests = 1,
   initialDate,
   initialTime,
   onConfirm,
@@ -27,6 +28,8 @@ export default function ScheduleModal({
 }: {
   branchId: string;
   durationMin: number;
+  /** How many chairs must be free at once — 2 when booking for a pair. */
+  guests?: number;
   initialDate: string | null;
   initialTime: string | null;
   /** Returns the local date, the wall-clock time, and the exact UTC instant. */
@@ -52,7 +55,9 @@ export default function ScheduleModal({
   useEffect(() => {
     let cancelled = false;
     setDays(null);
-    fetch(`/api/availability?branchId=${branchId}&month=${monthKey}&duration=${durationMin}`)
+    fetch(
+      `/api/availability?branchId=${branchId}&month=${monthKey}&duration=${durationMin}&guests=${guests}`,
+    )
       .then((r) => r.json())
       .then((d) => {
         if (!cancelled) setDays(d.days ?? {});
@@ -63,14 +68,16 @@ export default function ScheduleModal({
     return () => {
       cancelled = true;
     };
-  }, [branchId, monthKey, durationMin]);
+  }, [branchId, monthKey, durationMin, guests]);
 
   // Slots for the selected day.
   useEffect(() => {
     if (!date) return setSlots(null);
     let cancelled = false;
     setSlots(null);
-    fetch(`/api/availability?branchId=${branchId}&date=${date}&duration=${durationMin}`)
+    fetch(
+      `/api/availability?branchId=${branchId}&date=${date}&duration=${durationMin}&guests=${guests}`,
+    )
       .then((r) => r.json())
       .then((d) => {
         if (!cancelled) setSlots(d.slots ?? []);
@@ -81,7 +88,7 @@ export default function ScheduleModal({
     return () => {
       cancelled = true;
     };
-  }, [branchId, date, durationMin]);
+  }, [branchId, date, durationMin, guests]);
 
   const daysInMonth = new Date(Date.UTC(cursor.year, cursor.month0 + 1, 0)).getUTCDate();
   // Saturday-first, matching the dictionary's weekday arrays.

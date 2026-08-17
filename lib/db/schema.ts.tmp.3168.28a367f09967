@@ -316,13 +316,13 @@ export const bookings = pgTable(
   (t) => ({
     codeUnique: unique("bookings_code_unique").on(t.code),
     // Backstop against double-booking a chair. The real guarantee is the row lock
-    // in reserveStations (lib/availability.ts); this catches anything that ever
-    // bypasses it.
+    // in reserveStations, which also catches overlaps at *different* start times
+    // that this can't see.
     //
-    // Partial, because a cancelled or no-show booking frees its chair — the
-    // availability engine has always treated it that way, and a plain unique
-    // constraint did not, so cancelling a booking permanently burned that
-    // chair-and-time for everyone else.
+    // Partial on purpose: a cancelled or no-show booking frees its chair, and both
+    // the availability engine and reserveStations already treat it that way. Without
+    // the WHERE, the dead row would keep its slot forever and rebooking a cancelled
+    // appointment onto the same chair would be rejected.
     slotUnique: uniqueIndex("bookings_station_slot_unique")
       .on(t.stationId, t.startsAt)
       .where(sql`${t.status} not in ('cancelled', 'no_show')`),

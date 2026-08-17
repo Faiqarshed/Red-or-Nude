@@ -14,7 +14,7 @@ const ar = {
   hero: {
     cards: [
       { kicker: "الحجــز", title: "احجــزي موعــدًا", desc: "حدّد الخدمات لنفسك", href: "/booking" },
-      { kicker: "الحجــز", title: "موعــد جماعـــي", desc: "لـنـفـسـك وللآخـريــن", href: "/booking" },
+      { kicker: "الحجــز", title: "موعــد جماعـــي", desc: "لـنـفـسـك وللآخـريــن", href: "/booking/group" },
       { kicker: "اشتــر", title: "بطاقــة هديــة", desc: "دلّلي نفسك أو صديقتك بزيارات مستقبلية", href: "/gift-card" },
     ],
   },
@@ -77,6 +77,15 @@ const ar = {
     complete: "إتمام الحجز",
     minutes: "15 MIN",
     chosenDesign: "التصميم المختار:",
+    bookForTwo: "احجزي لشخصين ووفري ١٠٪",
+    bookForOne: "حجز لشخص واحد",
+    guest1: "الضيفة الأولى",
+    guest2: "الضيفة الثانية",
+    groupTitle: "حجز لشخصين",
+    groupSub: "كل ضيفة تختار خدماتها، والموعد واحد للاثنتين",
+    subtotal: "المجموع قبل الخصم",
+    groupDiscount: "خصم الحجز الثنائي ١٠٪",
+    sameSlotNote: "الموعد مشترك بين الضيفتين — نفس اليوم ونفس الوقت.",
   },
 
   payment: {
@@ -118,6 +127,14 @@ const ar = {
     invalidPhone: "رقم الجوال غير صحيح (مثال: 0512345678)",
     bookingFailed: "تعذر إتمام الحجز، حاولي مرة أخرى",
     noSelection: "لم يتم اختيار أي خدمة بعد",
+    ticketLabel: "رقم التذكرة",
+    stationLabel: "رقم الكرسي",
+    reference: "الرقم المرجعي",
+    declined: "لم تتم عملية الدفع. تأكدي من بيانات البطاقة وحاولي مرة أخرى — موعدك محجوز لك مؤقتاً.",
+    expired: "انتهت مهلة الحجز المؤقت. اختاري الموعد مرة أخرى من صفحة الحجز.",
+    payFirstNote: "لا يتم تأكيد الحجز إلا بعد إتمام الدفع.",
+    subtotal: "المجموع قبل الخصم",
+    groupDiscount: "خصم الحجز الثنائي ١٠٪",
   },
 
   modals: {
@@ -205,7 +222,7 @@ const en: Content = {
   hero: {
     cards: [
       { kicker: "BOOKING", title: "Book an Appointment", desc: "Choose your services and build your own experience", href: "/booking" },
-      { kicker: "BOOKING", title: "Group Booking", desc: "Book for yourself and others", href: "/booking" },
+      { kicker: "BOOKING", title: "Group Booking", desc: "Book for yourself and others", href: "/booking/group" },
       { kicker: "PURCHASE", title: "Gift Card", desc: "Treat yourself or surprise someone special with future visits", href: "/gift-card" },
     ],
   },
@@ -267,6 +284,15 @@ const en: Content = {
     complete: "Continue to Payment",
     minutes: "15 MIN",
     chosenDesign: "Selected design:",
+    bookForTwo: "Book for two and save 10%",
+    bookForOne: "Book for one",
+    guest1: "Guest 1",
+    guest2: "Guest 2",
+    groupTitle: "Book for Two",
+    groupSub: "Each guest picks her own services — one shared appointment time",
+    subtotal: "Subtotal",
+    groupDiscount: "Group discount 10%",
+    sameSlotNote: "Both guests share one appointment — same day, same time.",
   },
 
   payment: {
@@ -308,6 +334,14 @@ const en: Content = {
     invalidPhone: "Invalid mobile number (e.g. 0512345678)",
     bookingFailed: "Couldn't complete the booking, please try again",
     noSelection: "No service selected yet",
+    ticketLabel: "Ticket",
+    stationLabel: "Station",
+    reference: "Reference",
+    declined: "Payment didn't go through. Check your card details and try again — your slot is still held.",
+    expired: "Your held slot has expired. Please pick a time again from the booking page.",
+    payFirstNote: "Your booking is confirmed only once payment completes.",
+    subtotal: "Subtotal",
+    groupDiscount: "Group discount 10%",
   },
 
   modals: {

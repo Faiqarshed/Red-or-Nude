@@ -96,6 +96,20 @@ class BookingAbort extends Error {
   }
 }
 
+/**
+ * Did this blow up on the chair-uniqueness index?
+ *
+ * Walks the cause chain: Drizzle wraps the driver's error in a DrizzleQueryError
+ * whose own message is only the failed SQL, so checking `err.message` alone
+ * silently misses it and a lost race gets reported as a server fault.
+ */
+export function isSlotConflict(err: unknown): boolean {
+  for (let e = err; e instanceof Error; e = e.cause) {
+    if (e.message.includes("bookings_station_slot_unique")) return true;
+  }
+  return false;
+}
+
 // No I/O/0/1 — these codes get read aloud over the phone.
 const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
@@ -357,10 +371,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     if (err instanceof BookingAbort) return { ok: false, error: err.reason };
     // Kept as a cheap backstop even though reserveStations now locks: a bug that
     // bypasses the lock should still fail loudly rather than double-book a chair.
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.includes("bookings_station_slot_unique")) {
-      return { ok: false, error: "slot-taken" };
-    }
+    if (isSlotConflict(err)) return { ok: false, error: "slot-taken" };
     console.error("[bookings] create failed", err);
     return { ok: false, error: "failed" };
   }

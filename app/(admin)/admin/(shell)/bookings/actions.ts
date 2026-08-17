@@ -7,7 +7,7 @@ import { db } from "@/lib/db";
 import { bookings } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
-import { createBooking } from "@/lib/bookings";
+import { createBooking, isSlotConflict } from "@/lib/bookings";
 import { reserveStations } from "@/lib/availability";
 
 export type Result = { ok: true } | { ok: false; error: string };
@@ -97,8 +97,7 @@ export async function rescheduleBooking(input: {
 
     if (!moved) return { ok: false, error: "slot-taken" };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.includes("bookings_station_slot_unique")) return { ok: false, error: "slot-taken" };
+    if (isSlotConflict(err)) return { ok: false, error: "slot-taken" };
     console.error("[bookings] reschedule failed", err);
     return { ok: false, error: "failed" };
   }

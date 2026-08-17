@@ -3,50 +3,73 @@
 // The catalogue and calendar that used to live here as literals are gone: the
 // catalogue comes from the database via lib/catalog.ts, and bookable times come
 // from the availability engine (lib/availability.ts) rather than a fixed
-// June-2026 grid. What remains is the selection carried between /booking and
-// /booking/payment, which now holds real row ids so the payment step can create
-// an actual booking.
+// June-2026 grid. What remains is the selection carried between the booking page
+// and /booking/payment.
+//
+// It holds a `members` array rather than one flat service, so booking for one
+// guest and booking for two are the same shape — the payment page renders
+// however many it finds and posts them all to one API.
 
 import type { Content } from "./dictionary";
 
 type DateStrings = Content["date"];
 
-export type BookingSelection = {
+/** One guest's choices. A solo booking is simply a members array of length 1. */
+export type MemberSelection = {
   // Ids — what the API needs.
-  branchId: string | null;
   serviceId: string | null;
   addonIds: string[];
   removalTypeId: string | null;
   designId: string | null;
-  startsAt: string | null; // ISO UTC
 
-  // Display labels — what the summary and success screens show, captured in the
-  // language the customer booked in.
+  // Display labels, captured in the language the customer booked in.
   service: string | null;
   addons: string[];
   removal: string | null;
   design: string | null;
+
+  /** SAR, before any group discount — shown as this guest's own line. */
+  price: number;
+};
+
+export type BookingSelection = {
+  branchId: string | null;
+  startsAt: string | null; // ISO UTC — shared by every member
+  members: MemberSelection[];
+
   branch: string | null;
   dateLabel: string | null;
   timeLabel: string | null;
 
+  /** SAR before the group discount. */
+  grossTotal: number;
+  /**
+   * SAR actually charged. Display only — the server recomputes every price from
+   * the catalogue and never trusts this.
+   */
   total: number;
 };
 
-export const emptySelection: BookingSelection = {
-  branchId: null,
+export const emptyMember: MemberSelection = {
   serviceId: null,
   addonIds: [],
   removalTypeId: null,
   designId: null,
-  startsAt: null,
   service: null,
   addons: [],
   removal: null,
   design: null,
+  price: 0,
+};
+
+export const emptySelection: BookingSelection = {
+  branchId: null,
+  startsAt: null,
+  members: [],
   branch: null,
   dateLabel: null,
   timeLabel: null,
+  grossTotal: 0,
   total: 0,
 };
 
@@ -61,7 +84,11 @@ export function loadBooking(): BookingSelection | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = sessionStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as BookingSelection) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as BookingSelection;
+    // A selection saved by an older build has no members array; treat it as
+    // nothing selected rather than crashing the payment page.
+    return Array.isArray(parsed?.members) ? parsed : null;
   } catch {
     return null;
   }
