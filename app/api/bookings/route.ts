@@ -1,19 +1,31 @@
-// Public booking creation. This is what replaces sessionStorage as the place a
-// customer's appointment actually lives.
+// Public booking creation — the hold, not the sale.
+//
+// This reserves the chair(s) and writes the rows as `pending`. Nothing is
+// confirmed and no ticket number exists until POST /api/payments/confirm
+// succeeds. An abandoned hold is swept back out automatically.
+//
+// The body is members-shaped so one guest and two go through the same route:
+// a group is simply two members with one start time.
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { createBooking } from "@/lib/bookings";
+import { createBookings } from "@/lib/bookings";
 
 export const dynamic = "force-dynamic";
 
-const body = z.object({
-  branchId: z.string().uuid(),
+const member = z.object({
   serviceId: z.string().uuid(),
   addonIds: z.array(z.string().uuid()).max(20).default([]),
   removalTypeId: z.string().uuid().nullable().optional(),
   designId: z.string().uuid().nullable().optional(),
+});
+
+const body = z.object({
+  branchId: z.string().uuid(),
+  // Every guest on one bill starts at the same moment — that is what makes it a
+  // group booking rather than two bookings that happen to be on one card.
   startsAt: z.string().datetime(),
+  members: z.array(member).min(1).max(2),
   customer: z.object({
     name: z.string().trim().max(120).optional(),
     // Saudi mobile numbers, with or without country code.
@@ -40,7 +52,13 @@ export async function POST(request: Request) {
     );
   }
 
-  const result = await createBooking({ ...parsed.data, source: "web" });
+  const result = await createBookings({
+    ...parsed.data,
+    source: "web",
+    // The whole point: a web booking holds the chair but is not a booking until
+    // it has been paid for.
+    status: "pending",
+  });
 
   if (!result.ok) {
     // 409 for a lost race: the UI should refresh the slots and let the customer
@@ -50,7 +68,11 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json(
-    { id: result.id, code: result.code, totalHalalas: result.totalHalalas },
+    {
+      groupId: result.groupId,
+      totalHalalas: result.totalHalalas,
+      bookings: result.bookings.map((b) => ({ id: b.id, code: b.code })),
+    },
     { status: 201 },
   );
 }

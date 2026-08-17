@@ -119,6 +119,7 @@ function computeDay(
   dateStr: string,
   durationMin: number,
   now: Date,
+  minStations = 1,
 ): Slot[] {
   const weekday = riyadhWeekday(localToUtc(dateStr, "12:00"));
   const hours = ctx.hours.get(weekday);
@@ -155,7 +156,7 @@ function computeDay(
     slots.push({
       time: utcToLocalTime(startsAt),
       startsAt: startsAt.toISOString(),
-      available: freeStationIds.length > 0 && startsAt >= earliest,
+      available: freeStationIds.length >= minStations && startsAt >= earliest,
       freeStationIds,
     });
   }
@@ -163,17 +164,31 @@ function computeDay(
   return slots;
 }
 
-/** Bookable slots for one day. */
+/**
+ * Bookable slots for one day.
+ *
+ * `guests` is how many chairs must be free at once — 2 for a group booking, so a
+ * slot with only one chair left is correctly shown as unavailable.
+ *
+ * When two guests have different durations, ask for the longer one: the booking
+ * then claims a strict subset of what was checked, so a slot shown as free can
+ * never fail on confirm.
+ *
+ * ponytail: slightly conservative — it hides an end-of-day slot where one chair
+ * is free long enough and another only briefly. The exact answer means computing
+ * free sets per duration; add it if the salon reports losing bookings.
+ */
 export async function getDayAvailability(
   branchId: string,
   dateStr: string,
   durationMin: number,
   now: Date = new Date(),
+  guests = 1,
 ): Promise<Slot[]> {
   const from = localToUtc(dateStr, "00:00");
   const to = new Date(from.getTime() + DAY_MS);
   const ctx = await loadContext(branchId, from, to);
-  return computeDay(ctx, dateStr, durationMin, now);
+  return computeDay(ctx, dateStr, durationMin, now, guests);
 }
 
 /**
@@ -186,6 +201,7 @@ export async function getMonthAvailability(
   month: number, // 1-12
   durationMin: number,
   now: Date = new Date(),
+  guests = 1,
 ): Promise<Record<string, boolean>> {
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -197,7 +213,7 @@ export async function getMonthAvailability(
   const out: Record<string, boolean> = {};
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${year}-${pad(month)}-${pad(day)}`;
-    out[dateStr] = computeDay(ctx, dateStr, durationMin, now).some((s) => s.available);
+    out[dateStr] = computeDay(ctx, dateStr, durationMin, now, guests).some((s) => s.available);
   }
   return out;
 }

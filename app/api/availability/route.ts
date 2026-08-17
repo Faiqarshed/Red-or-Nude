@@ -14,6 +14,8 @@ const query = z.object({
   duration: z.coerce.number().int().min(5).max(600).default(60),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  // How many chairs must be free at once — 2 when booking for a pair.
+  guests: z.coerce.number().int().min(1).max(2).default(1),
 });
 
 export async function GET(request: Request) {
@@ -22,11 +24,11 @@ export async function GET(request: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid-query" }, { status: 400 });
   }
-  const { branchId, duration, date, month } = parsed.data;
+  const { branchId, duration, date, month, guests } = parsed.data;
 
   try {
     if (date) {
-      const slots = await getDayAvailability(branchId, date, duration);
+      const slots = await getDayAvailability(branchId, date, duration, new Date(), guests);
       // freeStationIds is internal scheduling detail — the browser doesn't need
       // to know which chair it would get.
       return NextResponse.json({
@@ -36,7 +38,9 @@ export async function GET(request: Request) {
 
     if (month) {
       const [year, m] = month.split("-").map(Number);
-      return NextResponse.json({ days: await getMonthAvailability(branchId, year, m, duration) });
+      return NextResponse.json({
+        days: await getMonthAvailability(branchId, year, m, duration, new Date(), guests),
+      });
     }
 
     return NextResponse.json({ error: "date-or-month-required" }, { status: 400 });
