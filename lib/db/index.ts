@@ -28,11 +28,14 @@ function getDb(): Db {
     );
   }
 
-  // Supabase's transaction pooler (port 6543 / pgbouncer) can't use prepared
-  // statements.
+  // Transaction poolers hand a different backend to each statement, so named
+  // prepared statements can't be relied on. Each provider advertises itself
+  // differently: Supabase by port 6543, Neon by a `-pooler` hostname.
+  const pooled =
+    url.includes("pgbouncer") || url.includes(":6543") || url.includes("-pooler.");
+
   const client =
-    globalForDb.__ronSql ??
-    postgres(url, { max: 10, prepare: !url.includes("pgbouncer") && !url.includes(":6543") });
+    globalForDb.__ronSql ?? postgres(url, { max: 10, prepare: !pooled });
 
   const instance = drizzle(client, { schema });
 
