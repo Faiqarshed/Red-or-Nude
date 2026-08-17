@@ -211,6 +211,43 @@ async function main() {
   }
   console.log("  group: subtotal + VAT == total on both rows ✓");
 
+  // -- Walk-ins are not payment-gated, and share the web ticket queue -------
+  // The admin form calls createBooking(), the compatibility wrapper. A walk-in
+  // customer is standing at the desk, so they are seated immediately and take
+  // the next number from the same per-branch, per-day queue as web bookings —
+  // the salon calls out one continuous sequence.
+  await cleanup(branch.id);
+  const web = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: TEST_PHONE },
+    source: "web",
+    status: "confirmed",
+    members: [{ serviceId: svcA.id, addonIds: [] }],
+  });
+  assert.ok(web.ok);
+
+  const walkIn = await createBooking({
+    branchId: branch.id,
+    serviceId: svcA.id,
+    addonIds: [],
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: "0500000002" },
+    source: "walk_in",
+  });
+  assert.ok(walkIn.ok, `walk-in failed: ${walkIn.ok ? "" : walkIn.error}`);
+  assert.ok(walkIn.ticketNo, "a walk-in is seated now and must get a ticket immediately");
+
+  const [webRow] = await db.select().from(bookings).where(eq(bookings.id, web.bookings[0].id));
+  const [walkRow] = await db.select().from(bookings).where(eq(bookings.id, walkIn.id));
+  assert.equal(walkRow.status, "confirmed", "a walk-in is confirmed on the spot");
+  assert.equal(
+    Number(walkIn.ticketNo.slice(1)) - Number(webRow.ticketNo!.slice(1)),
+    1,
+    `walk-in must take the next number after the web booking, got ${webRow.ticketNo} then ${walkIn.ticketNo}`,
+  );
+  console.log(`  walk-in: ${webRow.ticketNo} (web) then ${walkIn.ticketNo} (desk), one queue ✓`);
+
   // -- An unpaid hold gets no ticket ---------------------------------------
   await cleanup(branch.id);
   const held = await createBookings({
