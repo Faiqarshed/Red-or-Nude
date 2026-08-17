@@ -50,18 +50,6 @@ export type BookingSelection = {
   total: number;
 };
 
-export const emptyMember: MemberSelection = {
-  serviceId: null,
-  addonIds: [],
-  removalTypeId: null,
-  designId: null,
-  service: null,
-  addons: [],
-  removal: null,
-  design: null,
-  price: 0,
-};
-
 export const emptySelection: BookingSelection = {
   branchId: null,
   startsAt: null,

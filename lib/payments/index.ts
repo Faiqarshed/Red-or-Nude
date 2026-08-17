@@ -32,10 +32,7 @@ export type PaymentDriver = {
   charge(input: ChargeInput): Promise<ChargeResult>;
 };
 
+/** Branch on `process.env.PAYMENT_DRIVER` here once there is a second driver. */
 export function getDriver(): PaymentDriver {
-  switch (process.env.PAYMENT_DRIVER) {
-    // case "moyasar": return moyasarDriver;
-    default:
-      return fakeDriver;
-  }
+  return fakeDriver;
 }

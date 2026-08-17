@@ -174,7 +174,8 @@ Moyasar vs Tap is still undecided. When it's picked:
      },
    };
    ```
-2. Add one line to `getDriver()` in `lib/payments/index.ts`.
+2. Branch on `process.env.PAYMENT_DRIVER` in `getDriver()`
+   (`lib/payments/index.ts`) — it returns `fakeDriver` unconditionally today.
 3. Set `PAYMENT_DRIVER=moyasar` in the environment.
 
 Nothing else changes. The `payments` rows, the pending/confirmed state machine,
