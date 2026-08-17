@@ -15,7 +15,7 @@ import {
   services,
   type Localized,
 } from "@/lib/db/schema";
-import { findFreeStation } from "@/lib/availability";
+import { reserveStations } from "@/lib/availability";
 import { getSettings } from "@/lib/settings";
 import { vatIncludedIn } from "@/lib/money";
 
@@ -35,6 +35,17 @@ export type CreateBookingInput = {
 export type CreateBookingResult =
   | { ok: true; id: string; code: string; totalHalalas: number }
   | { ok: false; error: "invalid-service" | "slot-taken" | "blocked" | "failed" };
+
+/**
+ * Rolls the transaction back and surfaces a business reason rather than a crash.
+ * Everything a booking needs to check now lives inside one transaction, so the
+ * only way out of a bad state is to throw.
+ */
+class BookingAbort extends Error {
+  constructor(readonly reason: "slot-taken" | "blocked") {
+    super(reason);
+  }
+}
 
 // No I/O/0/1 — these codes get read aloud over the phone.
 const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -92,29 +103,31 @@ export async function createBooking(input: CreateBookingInput): Promise<CreateBo
   if (!phone) return { ok: false, error: "failed" };
 
   try {
-    // Check the chair before touching the customer table: a failed attempt
-    // shouldn't leave a phantom customer behind for someone who never booked.
-    const stationId = await findFreeStation(input.branchId, startsAt, endsAt);
-    if (!stationId) return { ok: false, error: "slot-taken" };
-
-    const [customer] = await db
-      .insert(customers)
-      .values({
-        phone,
-        name: input.customer.name?.trim() || null,
-        email: input.customer.email?.trim() || null,
-        lang: input.customer.lang ?? "ar",
-      })
-      .onConflictDoUpdate({
-        target: customers.phone,
-        // Don't blank an existing name with an empty one from a rushed form.
-        set: { name: input.customer.name?.trim() || undefined, updatedAt: new Date() },
-      })
-      .returning();
-
-    if (customer.blocked) return { ok: false, error: "blocked" };
-
+    // Chair claim, customer upsert and booking insert are one transaction. The
+    // claim holds a row lock on the branch's chairs until commit, so no one else
+    // can take the same chair in between — see reserveStations.
     const result = await db.transaction(async (tx) => {
+      const [stationId] = (await reserveStations(tx, input.branchId, startsAt, endsAt, 1)) ?? [];
+      if (!stationId) throw new BookingAbort("slot-taken");
+
+      const [customer] = await tx
+        .insert(customers)
+        .values({
+          phone,
+          name: input.customer.name?.trim() || null,
+          email: input.customer.email?.trim() || null,
+          lang: input.customer.lang ?? "ar",
+        })
+        .onConflictDoUpdate({
+          target: customers.phone,
+          // Don't blank an existing name with an empty one from a rushed form.
+          set: { name: input.customer.name?.trim() || undefined, updatedAt: new Date() },
+        })
+        .returning();
+
+      // Rolls back the upsert too, so a blocked caller leaves nothing behind.
+      if (customer.blocked) throw new BookingAbort("blocked");
+
       const [row] = await tx
         .insert(bookings)
         .values({
@@ -156,8 +169,9 @@ export async function createBooking(input: CreateBookingInput): Promise<CreateBo
 
     return { ok: true, id: result.id, code: result.code, totalHalalas: total };
   } catch (err) {
-    // The unique index on (station_id, starts_at) is the last line of defence
-    // when two customers confirm in the same second — findFreeStation can race.
+    if (err instanceof BookingAbort) return { ok: false, error: err.reason };
+    // Kept as a cheap backstop even though reserveStations now locks: a bug that
+    // bypasses the lock should still fail loudly rather than double-book a chair.
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes("bookings_station_slot_unique")) {
       return { ok: false, error: "slot-taken" };

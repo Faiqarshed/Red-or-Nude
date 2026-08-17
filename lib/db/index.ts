@@ -51,4 +51,7 @@ export const db = new Proxy({} as Db, {
   },
 });
 
+/** The handle passed to `db.transaction(async (tx) => …)`. */
+export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
 export { schema };
