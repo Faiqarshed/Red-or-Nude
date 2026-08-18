@@ -106,13 +106,15 @@ for (const lang of ["ar", "en"] as const) {
 
 console.log("\nAll assertions passed.");
 
-// --send actually posts one to Resend, through the same sendMail() the payment
-// path uses — so a green result here means the real thing works, not a mock.
+// --send actually posts one through the same sendMail() the payment path uses,
+// whichever transport is configured — so a green result means the real thing
+// works, not a mock.
 // Wrapped in a function because tsx transforms this to CJS, which has no
 // top-level await.
 async function send(to: string) {
   // Imported lazily so the render path above stays runnable with no key set.
-  const { sendMail } = await import("@/lib/email/resend");
+  const { sendMail, activeTransport } = await import("@/lib/email");
+  console.log(`\nsending via: ${activeTransport()}`);
   const { subject, html, text } = renderInvoiceEmail(sample("en"));
 
   const result = await sendMail({ to, subject, html, text, tags: ["booking-invoice-test"] });
@@ -120,7 +122,7 @@ async function send(to: string) {
     console.error(`\nNot sent (${result.reason}): ${result.detail ?? ""}`);
     process.exit(1);
   }
-  console.log(`\nSent to ${to} — Resend id ${result.id}`);
+  console.log(`Sent to ${to} — id ${result.id}`);
 }
 
 const sendIndex = process.argv.indexOf("--send");

@@ -1,7 +1,7 @@
 # Invoice email
 
-Every paid web booking emails the customer a simplified tax invoice. Sent through
-Resend, rendered server-side, in the customer's own language.
+Every paid web booking emails the customer a simplified tax invoice. Sent over
+SMTP, rendered server-side, in the customer's own language.
 
 This closes the "email/SMS" gap that `docs/BOOKING-V2.md` §1 listed as out of
 scope — for invoices only. SMS and gift-card receipts are still not built.
@@ -21,7 +21,7 @@ confirmBookingPayment()                     lib/payments/confirm.ts
 sendBookingInvoice(bookingIds)              lib/invoice/send.ts
      ├─ buildBookingInvoice()               lib/invoice/data.ts
      ├─ renderInvoiceEmail()                lib/invoice/template.ts
-     └─ sendMail()                          lib/email/resend.ts
+     └─ sendMail()                          lib/email/ → smtp.ts
      ▼
 response returned to the browser
 ```
@@ -116,35 +116,76 @@ green result means the real transport works rather than a mock.
 
 ## 6. Configuration
 
+One transport: SMTP, in `lib/email/smtp.ts`, behind `lib/email/index.ts`.
+Everything that sends mail imports `sendMail` from the index, so adding or
+swapping a provider stays a one-file change.
+
 ```
-RESEND_API_KEY=        # resend.com/api-keys
-MAIL_FROM_EMAIL=       # must be on a domain verified at resend.com/domains
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587          # 465 = implicit TLS, 587 = STARTTLS
+SMTP_USER=
+SMTP_PASSWORD=
+MAIL_FROM_EMAIL=
 MAIL_FROM_NAME=
 MAIL_REPLY_TO=         # optional; omit and replies go nowhere
+SITE_URL=              # absolute base for the gift card image
 ```
 
-With no key set, invoices are **skipped with a warning** rather than failing the
+With SMTP unset, mail is **skipped with a warning** rather than failing the
 payment — local development and CI need no credentials.
+
+Gmail needs an **App Password** (Google Account → Security → 2-Step Verification
+→ App passwords); a normal account password is refused. On a Google Workspace
+account an admin can disable app passwords entirely, in which case that page
+reports "the setting you are looking for is not available for your account" and
+the fix is a different mailbox or a relay like Brevo, Mailjet or SMTP2GO — all of
+which are the same four values.
+
+Two properties of Gmail as a relay, worth knowing before it reaches customers:
+
+- **It rewrites `From` to the authenticated mailbox.** Invoices arrive from that
+  Gmail address, not the brand, whatever `MAIL_FROM_EMAIL` says (it must be that
+  address or a verified alias, or the send is refused).
+- **~500 recipients a day.**
+
+`nodemailer` opens TCP sockets, so this is **Node runtime only** — a route that
+sends mail must never declare `runtime = "edge"`. `/api/gift-card-image` is edge
+and correctly imports nothing from `lib/email`. Some serverless hosts also
+restrict outbound SMTP ports; if sending times out in production but works
+locally, that is the cause.
+
+### Checking the transport
+
+```
+npm run check:mail                        # connect, STARTTLS, authenticate
+npm run check:mail -- --send you@you.com  # also send a plain test message
+```
+
+Without `--send` nothing is delivered — it hangs up after authenticating, which
+turns a wrong password or a blocked port into an answer in two seconds rather
+than a failed invoice found after a customer was charged.
+
+### Before this works for real customers
 
 Before this works for real customers:
 
-1. Verify the sending domain at resend.com/domains and publish the DNS records it
-   gives you, or every send comes back `403 / rejected`.
-2. Point `MAIL_FROM_EMAIL` at an address on that domain. The default,
-   `onboarding@resend.dev`, needs no domain but **only delivers to the Resend
-   account's own address** — fine for a first smoke test, useless in production.
-3. Set the four variables in Vercel (Production **and** Preview).
+1. Authenticate `redornude.com` with whichever relay you settle on and publish
+   the SPF and DKIM records it gives you. Gmail cannot do this — it will always
+   send as the Gmail mailbox — so a brand `From` means moving to a relay that
+   supports domain authentication.
+2. Point `MAIL_FROM_EMAIL` at an address on that domain.
+3. Set the SMTP variables and `SITE_URL` in Vercel (Production **and** Preview).
 
-The transport is one file, `lib/email/resend.ts`, talking to one endpoint with
-`fetch`. Nothing else in the codebase knows which provider sends the mail, so
-switching again means rewriting that file and nothing else.
+Adding a third transport means one new file implementing `SendMailInput` →
+`SendMailResult` from `lib/email/types.ts`, plus one branch in
+`lib/email/index.ts`. Nothing that sends mail changes.
 
 ## 7. The overlap with `lib/notify/`
 
 Two outbound paths now run back to back in `confirmBookingPayment`, and they were
 built independently on parallel branches:
 
-| | `sendConfirmations` → `notify()` | `sendBookingInvoice` → Resend |
+| | `sendConfirmations` → `notify()` | `sendBookingInvoice` → SMTP |
 | --- | --- | --- |
 | Purpose | "You're booked" + the reference for `/my-bookings` | The tax invoice |
 | Shape | Generic: channel, template, `data` bag | One fully rendered AR/EN email |
@@ -164,8 +205,8 @@ Worth deciding before that happens. The options, roughly:
    with the seam's intent, and gives WhatsApp for free. Costs work: `notify()`'s
    `data` bag would have to carry, or defer to, a fully rendered document, which
    is not what a template-variable interface is shaped for.
-2. **Add a Resend driver to `notify()` and let the invoice keep its own path.**
-   Smallest change. Keeps one HTTP client and one API key, while the invoice
+2. **Add a real driver to `notify()` and let the invoice keep its own path.**
+   Smallest change. Keeps one transport and one set of credentials, while the invoice
    stays a rendered document rather than a template.
 3. **Fold the booking confirmation into the invoice email.** One email after
    payment, carrying reference, tickets and invoice together. Fewest messages for
@@ -186,7 +227,7 @@ POST /api/gift-cards
      ▼
 sendGiftCardEmails()                        lib/giftcard/email.ts
      ├─ renderGiftCardEmail()               (exported for the preview script)
-     └─ sendMail()                          lib/email/resend.ts
+     └─ sendMail()                          lib/email/ → smtp.ts
 ```
 
 **Two emails, deliberately different.** The recipient gets the card — amount,

@@ -131,7 +131,7 @@ export async function POST(request: Request) {
   // Delivery. The buyer still gets a WhatsApp share button on the success
   // screen — this is the automatic half.
   //
-  // Email goes through lib/giftcard/email.ts and really sends (Resend), the same
+  // Email goes through lib/giftcard/email.ts and really sends (SMTP), the same
   // path the booking invoice uses. WhatsApp still goes through notify(), which
   // is log-only until a provider is chosen. Two paths on purpose — see
   // docs/INVOICE-EMAIL.md §7; the email one is deliberately *not* routed through

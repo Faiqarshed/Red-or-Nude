@@ -33,6 +33,16 @@ async function main() {
     process.exit(1);
   }
 
+  // Both shapes, because they are the same code path with a different member
+  // count — which is exactly the claim worth checking rather than assuming.
+  for (const guests of [1, 2] as const) {
+    console.log(`\n── ${guests === 1 ? "single booking" : "group booking (2 guests)"} ──`);
+    await run(to, guests);
+  }
+}
+
+async function run(to: string, guests: 1 | 2) {
+
   const [branch] = await db.select().from(branches).limit(1);
   const catalogue = await db.select().from(services).where(eq(services.active, true)).limit(2);
   assert.ok(branch && catalogue.length, "run `npm run db:seed` first");
@@ -44,32 +54,37 @@ async function main() {
   assert.ok(chairs.length >= 2, "need at least 2 chairs to book a group");
 
   // Far enough out that it can't collide with real or seeded appointments.
-  const startsAt = new Date(Date.UTC(2030, 6, 14, 6, 0)).toISOString(); // 09:00 Riyadh
+  // Separate slots per scenario so the two runs can't contend for a chair.
+  const startsAt = new Date(Date.UTC(2030, 6, 14 + guests, 6, 0)).toISOString(); // 09:00 Riyadh
   const [svcA, svcB] = catalogue.length > 1 ? catalogue : [catalogue[0], catalogue[0]];
 
   let bookingIds: string[] = [];
 
   try {
-    // -- 1. Hold the chairs, exactly as POST /api/bookings does --------------
+    // -- 1. Hold the chair(s), exactly as POST /api/bookings does -----------
     const held = await createBookings({
       branchId: branch.id,
       startsAt,
       customer: { name: "Invoice Test", phone: TEST_PHONE, email: to, lang: "en" },
       source: "web",
       status: "pending", // the whole point: unpaid, unconfirmed, no ticket yet
-      members: [
-        { serviceId: svcA.id, addonIds: [] },
-        { serviceId: svcB.id, addonIds: [] },
-      ],
+      members:
+        guests === 1
+          ? [{ serviceId: svcA.id, addonIds: [] }]
+          : [
+              { serviceId: svcA.id, addonIds: [] },
+              { serviceId: svcB.id, addonIds: [] },
+            ],
     });
     assert.ok(held.ok, `booking failed: ${held.ok ? "" : held.error}`);
     bookingIds = held.bookings.map((b) => b.id);
 
+    assert.equal(held.bookings.length, guests, "one booking row per guest");
     assert.ok(
       held.bookings.every((b) => b.ticketNo === null),
       "a pending booking must not have a ticket yet",
     );
-    console.log(`held 2 chairs, ${held.totalHalalas / 100} SAR, no tickets yet ✓`);
+    console.log(`held ${guests} chair(s), ${held.totalHalalas / 100} SAR, no tickets yet ✓`);
 
     // -- 2. Charge it. This is the call that emails the invoice. -------------
     const paid = await confirmBookingPayment({
@@ -77,7 +92,7 @@ async function main() {
       method: "mada",
     });
     assert.ok(paid.ok, `payment failed: ${paid.ok ? "" : paid.error}`);
-    assert.equal(paid.tickets.length, 2, "two guests, two tickets");
+    assert.equal(paid.tickets.length, guests, "one ticket per guest");
     console.log(
       `charged ${paid.totalHalalas / 100} SAR → tickets ${paid.tickets.map((t) => t.ticketNo).join(" + ")} ✓`,
     );
@@ -108,10 +123,7 @@ async function main() {
       `invoice ${invoice.number}: ${invoice.subtotalHalalas / 100} + ${invoice.vatHalalas / 100} VAT = ${invoice.totalHalalas / 100} SAR ✓`,
     );
 
-    console.log(
-      `\nAll assertions passed. Look for "[invoice] ${invoice.number} sent to ${to}" above —` +
-        "\nif it says 'not delivered' instead, the booking still succeeded, by design.",
-    );
+    console.log(`  → look for "[invoice] ${invoice.number} sent to ${to}" above`);
   } finally {
     // Only ever the rows this run created.
     if (bookingIds.length) {
