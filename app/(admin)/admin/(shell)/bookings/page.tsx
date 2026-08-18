@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   addons,
@@ -66,6 +66,8 @@ export default async function BookingsPage({
         notes: bookings.notes,
         customerName: customers.name,
         customerPhone: customers.phone,
+        // Why this booking is cheaper than the price list says.
+        refillOfBookingId: bookings.refillOfBookingId,
       })
       .from(bookings)
       .leftJoin(customers, eq(bookings.customerId, customers.id))
@@ -80,6 +82,21 @@ export default async function BookingsPage({
     db.select().from(addons).where(eq(addons.active, true)).orderBy(asc(addons.sort)),
     db.select().from(removalTypes).where(eq(removalTypes.active, true)).orderBy(asc(removalTypes.sort)),
   ]);
+
+  // Resolve the parent reference of any refills on this day. A self-join would
+  // do it in one query, but aliasing a self-referencing table defeats Drizzle's
+  // type inference — and one extra lookup over a single day's bookings is free.
+  const parentIds = rows.map((r) => r.refillOfBookingId).filter(Boolean) as string[];
+  const parentCodes = new Map(
+    parentIds.length
+      ? (
+          await db
+            .select({ id: bookings.id, code: bookings.code })
+            .from(bookings)
+            .where(inArray(bookings.id, parentIds))
+        ).map((p) => [p.id, p.code])
+      : [],
+  );
 
   const addonsByBooking = new Map<string, { ar: string; en: string }[]>();
   for (const link of addonLinks) {
@@ -131,6 +148,7 @@ export default async function BookingsPage({
           notes: r.notes,
           customerName: r.customerName,
           customerPhone: r.customerPhone,
+          refillOfCode: r.refillOfBookingId ? (parentCodes.get(r.refillOfBookingId) ?? null) : null,
         }),
       )}
     />

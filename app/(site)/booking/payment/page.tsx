@@ -43,6 +43,7 @@ export default function PaymentPage() {
   const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tickets, setTickets] = useState<Ticket[] | null>(null);
@@ -86,16 +87,26 @@ export default function PaymentPage() {
               removalTypeId: m.removalTypeId,
               designId: m.designId,
             })),
-            customer: { name: name.trim() || undefined, phone: phone.trim(), lang },
+            customer: {
+              name: name.trim() || undefined,
+              phone: phone.trim(),
+              email: email.trim(),
+              lang,
+            },
+            refillOfCode: booking.refillOf ?? null,
           }),
         });
 
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          // 409 means someone else took the chair while this customer was typing.
-          if (res.status === 409) setError(p.slotTaken);
+          // 409 means the thing they were looking at is gone: either someone
+          // took the chair while they typed, or the refill window just lapsed.
+          if (data.error === "refill-expired") setError(p.refillExpired);
+          else if (res.status === 409) setError(p.slotTaken);
           else if (data.error === "invalid" && data.issues?.includes("customer.phone")) {
             setError(p.invalidPhone);
+          } else if (data.error === "invalid" && data.issues?.includes("customer.email")) {
+            setError(p.invalidEmail);
           } else setError(p.bookingFailed);
           return;
         }
@@ -210,6 +221,21 @@ export default function PaymentPage() {
                     className="w-full rounded-[12px] border border-black/[0.08] px-4 py-3 text-left text-sm text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
                   />
                 </label>
+                {/* Required, because this is where the booking reference goes —
+                    and that reference is the only key to /my-bookings. */}
+                <label className="block text-start">
+                  <span className="mb-1.5 block text-[12px] text-ink/55">{p.customerEmail} *</span>
+                  <input
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    dir="ltr"
+                    type="email"
+                    inputMode="email"
+                    placeholder="sarah@example.com"
+                    className="w-full rounded-[12px] border border-black/[0.08] px-4 py-3 text-left text-sm text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
+                  />
+                  <span className="mt-1.5 block text-[11px] text-ink/40">{p.emailNote}</span>
+                </label>
               </div>
 
               {booking.total < booking.grossTotal && (
@@ -248,9 +274,9 @@ export default function PaymentPage() {
               <button
                 type="button"
                 onClick={confirm}
-                disabled={submitting || !phone.trim()}
+                disabled={submitting || !phone.trim() || !email.trim()}
                 className={`mt-6 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
-                  submitting || !phone.trim()
+                  submitting || !phone.trim() || !email.trim()
                     ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
                     : "bg-red-grad text-white hover:opacity-90"
                 }`}
@@ -377,6 +403,16 @@ function SuccessModal({
             {p.close}
           </button>
         </div>
+
+        {/* The reference above is the customer's only way back in, so say so
+            here rather than relying on the email having arrived yet. */}
+        <p className="mt-4 text-[11px] text-ink/45">{p.keepReference}</p>
+        <Link
+          href="/my-bookings"
+          className="mt-1 inline-block text-[12px] font-semibold text-red underline underline-offset-4"
+        >
+          {p.myBookings}
+        </Link>
       </div>
     </div>
   );

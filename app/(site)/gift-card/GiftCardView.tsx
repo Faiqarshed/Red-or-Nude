@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import { Riyal } from "@/components/icons";
@@ -57,6 +57,7 @@ function DetailField({
 }
 
 export default function GiftCardView({ options }: { options: PublicGiftOptions }) {
+  const router = useRouter();
   const { c, dir, lang } = useI18n();
   const g = c.gift;
   const { values, designs } = options;
@@ -64,8 +65,12 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
   const [design, setDesign] = useState(0);
   const [recipientName, setRecipientName] = useState("");
   const [recipientEmail, setRecipientEmail] = useState("");
+  const [recipientPhone, setRecipientPhone] = useState("");
   const [senderName, setSenderName] = useState("");
   const [message, setMessage] = useState("");
+
+  // A card nobody can be sent is not a purchase — one contact route is the floor.
+  const deliverable = Boolean(recipientPhone.trim() || recipientEmail.trim());
 
   return (
     <main className="min-h-screen bg-cream">
@@ -150,7 +155,14 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                 value={senderName}
                 onChange={setSenderName}
               />
-              <DetailField label={g.sendDate} placeholder="2026-07-02" type="date" dir={dir} />
+              <DetailField
+                label={g.recipientPhone}
+                placeholder="05XXXXXXXX"
+                type="tel"
+                dir={dir}
+                value={recipientPhone}
+                onChange={setRecipientPhone}
+              />
               <label className="block text-start md:col-span-2">
                 <span className="mb-2 block text-[13px] text-ink/55">{g.message}</span>
                 <textarea
@@ -161,6 +173,7 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                   className="w-full resize-none rounded-[12px] border border-black/[0.06] bg-white px-4 py-3 text-start text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40"
                 />
               </label>
+              <p className="text-start text-[12px] text-ink/45 md:col-span-2">{g.contactHint}</p>
             </div>
           </Panel>
         </section>
@@ -186,9 +199,10 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
             <input type="checkbox" defaultChecked className="h-4 w-4 accent-red" />
           </label>
 
-          <Link
-            href="/gift-card/payment"
-            onClick={() =>
+          <button
+            type="button"
+            disabled={!deliverable}
+            onClick={() => {
               saveGiftSelection({
                 amountSar: value,
                 designId: designs[design]?.id ?? null,
@@ -196,14 +210,20 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                 designImg: designs[design]?.img ?? null,
                 recipientName,
                 recipientEmail,
+                recipientPhone,
                 senderName,
                 message,
-              })
-            }
-            className="mt-4 block w-full rounded-[12px] bg-red-grad py-3.5 text-center text-sm font-bold text-white transition-opacity hover:opacity-90"
+              });
+              router.push("/gift-card/payment");
+            }}
+            className={`mt-4 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
+              deliverable
+                ? "bg-red-grad text-white hover:opacity-90"
+                : "cursor-not-allowed bg-black/[0.06] text-ink/40"
+            }`}
           >
             {g.continue}
-          </Link>
+          </button>
         </aside>
       </div>
 

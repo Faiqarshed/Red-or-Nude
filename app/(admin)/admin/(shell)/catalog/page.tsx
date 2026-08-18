@@ -26,6 +26,7 @@ export default async function CatalogPage() {
           description: r.description,
           priceSar: halalasToSar(r.priceHalalas),
           durationMin: r.durationMin,
+          refillDays: r.refillDays,
           image: r.image,
           imageUrl: mediaUrl(r.image),
           active: r.active,

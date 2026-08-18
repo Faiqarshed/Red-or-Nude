@@ -13,6 +13,10 @@ export const SETTING_DEFAULTS = {
   booking_hold_min: 15,
   /** Discount for booking two guests together, off the combined bill. */
   group_discount_percent: 10,
+  /** A refill costs the service price minus this much. */
+  refill_discount_percent: 50,
+  /** How many days before a refill window closes to nudge the customer. */
+  refill_reminder_days: 3,
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

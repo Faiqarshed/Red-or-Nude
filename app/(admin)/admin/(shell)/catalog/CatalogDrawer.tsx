@@ -16,6 +16,7 @@ type FormState = {
   descEn: string;
   priceSar: string;
   durationMin: string;
+  refillDays: string;
   image: string | null;
   isSeasonal: boolean;
   active: boolean;
@@ -28,6 +29,7 @@ const empty: FormState = {
   descEn: "",
   priceSar: "0",
   durationMin: "60",
+  refillDays: "0",
   image: null,
   isSeasonal: false,
   active: true,
@@ -66,6 +68,7 @@ export default function CatalogDrawer({
             descEn: row.description?.en ?? "",
             priceSar: String(row.priceSar),
             durationMin: String(row.durationMin),
+            refillDays: String(row.refillDays ?? 0),
             image: row.image ?? null,
             isSeasonal: row.isSeasonal ?? false,
             active: row.active,
@@ -102,6 +105,7 @@ export default function CatalogDrawer({
             : undefined,
         priceSar: form.priceSar,
         durationMin: form.durationMin,
+        refillDays: kind === "service" ? form.refillDays : undefined,
         image: kind === "removal" ? null : form.image,
         isSeasonal: kind === "addon" ? form.isSeasonal : undefined,
         active: form.active,
@@ -213,6 +217,21 @@ export default function CatalogDrawer({
               onChange={(e) => set("durationMin", e.target.value)}
             />
           </Field>
+          {/* Services only: this is what makes the refill button appear in the
+              customer's booking history, and for how long. */}
+          {kind === "service" ? (
+            <Field label={t.catalog.refillDays} hint={t.catalog.refillDaysHint}>
+              <Input
+                type="number"
+                min={0}
+                step="1"
+                dir="ltr"
+                className="text-left tabular-nums"
+                value={form.refillDays}
+                onChange={(e) => set("refillDays", e.target.value)}
+              />
+            </Field>
+          ) : null}
         </div>
 
         {kind !== "removal" ? (

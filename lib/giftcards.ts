@@ -30,6 +30,7 @@ export type IssueGiftCardInput = {
   buyerEmail?: string | null;
   recipientName?: string | null;
   recipientEmail?: string | null;
+  recipientPhone?: string | null;
   message?: string | null;
   /** Months until expiry; null keeps the card open-ended. */
   expiresInMonths?: number | null;
@@ -68,6 +69,7 @@ export async function issueGiftCard(input: IssueGiftCardInput): Promise<IssueRes
             buyerEmail: input.buyerEmail ?? null,
             recipientName: input.recipientName ?? null,
             recipientEmail: input.recipientEmail ?? null,
+            recipientPhone: input.recipientPhone ?? null,
             message: input.message ?? null,
             expiresAt,
           })

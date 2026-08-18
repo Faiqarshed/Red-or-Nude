@@ -16,6 +16,8 @@ export type CatalogRow = {
   description?: Localized | null;
   priceSar: number;
   durationMin: number;
+  /** Services only: length of the follow-up refill window, 0 = none. */
+  refillDays?: number;
   image?: string | null;
   imageUrl?: string | null;
   isSeasonal?: boolean;

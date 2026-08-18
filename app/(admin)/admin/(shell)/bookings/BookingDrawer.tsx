@@ -53,6 +53,9 @@ export default function BookingDrawer({
 
   const rows: [string, string][] = [
     [t.bookings.code, booking.code],
+    ...(booking.refillOfCode
+      ? ([[t.bookings.refillOf, booking.refillOfCode]] as [string, string][])
+      : []),
     [t.bookings.time, `${localTime(booking.startsAt)} – ${localTime(booking.endsAt)}`],
     [t.bookings.service, pick(booking.serviceName, lang) || "—"],
     [

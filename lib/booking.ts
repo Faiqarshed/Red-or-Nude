@@ -48,6 +48,11 @@ export type BookingSelection = {
    * the catalogue and never trusts this.
    */
   total: number;
+  /**
+   * The booking this one refills, if any. Also display-only in the sense that
+   * matters: the server re-checks the window and re-prices from the catalogue.
+   */
+  refillOf?: string | null;
 };
 
 export const emptySelection: BookingSelection = {
@@ -59,6 +64,7 @@ export const emptySelection: BookingSelection = {
   timeLabel: null,
   grossTotal: 0,
   total: 0,
+  refillOf: null,
 };
 
 const KEY = "ron-booking";
