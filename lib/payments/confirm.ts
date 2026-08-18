@@ -152,9 +152,9 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
 
     // Two separate messages, on purpose. sendConfirmations is the customer's
     // "you're booked" note and goes through the notify() seam, which is still
-    // log-only. sendBookingInvoice is the tax invoice and delivers for real via
-    // Resend. See docs/INVOICE-EMAIL.md §7 — these should almost certainly be
-    // one message once notify() has a real driver.
+    // log-only. sendBookingInvoice is the tax invoice and delivers for real over
+    // SMTP. See docs/INVOICE-EMAIL.md §7 — these should almost certainly be one
+    // message once notify() has a real driver.
     //
     // Both are awaited rather than fired and forgotten: on a serverless host the
     // function is frozen the moment this response is returned, so a detached

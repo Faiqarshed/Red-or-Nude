@@ -59,6 +59,8 @@ assert.ok(!injected.html.includes("<script>"), "sender name must be HTML-escaped
 console.log("\nAll assertions passed. → .preview/giftcard-*.html");
 
 async function send(to: string) {
+  const { activeTransport } = await import("@/lib/email");
+  console.log(`\nsending via: ${activeTransport()}`);
   const { sendGiftCardEmails } = await import("@/lib/giftcard/email");
   const out = await sendGiftCardEmails({ ...sample("en"), recipientEmail: to, buyerEmail: null });
   if (out.recipient !== "sent") {

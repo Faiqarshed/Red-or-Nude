@@ -6,7 +6,7 @@
 // Nothing here is allowed to throw into confirmBookingPayment.
 
 import "server-only";
-import { sendMail } from "@/lib/email/resend";
+import { sendMail } from "@/lib/email";
 import { buildBookingInvoice } from "./data";
 import { renderInvoiceEmail } from "./template";
 

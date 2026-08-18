@@ -1,7 +1,7 @@
 // The gift card email — the card itself, delivered.
 //
 // Same bargain as lib/invoice/: built and rendered server-side, sent through
-// lib/email/resend.ts, and totally failure-isolated. It runs after the buyer has
+// lib/email/ (SMTP), and totally failure-isolated. It runs after the buyer has
 // been charged and the card has been issued, so the card is real and spendable
 // whether or not the mail lands. Nothing here throws.
 //
@@ -14,7 +14,7 @@
 // images. See the header of lib/invoice/template.ts for why.
 
 import "server-only";
-import { sendMail } from "@/lib/email/resend";
+import { sendMail } from "@/lib/email";
 
 const RED = "#b80007";
 const INK = "#1a1a1a";
