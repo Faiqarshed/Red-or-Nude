@@ -68,6 +68,7 @@ export default async function BookingsPage({
         customerPhone: customers.phone,
         // Why this booking is cheaper than the price list says.
         refillOfBookingId: bookings.refillOfBookingId,
+        refillExpiresAt: bookings.refillExpiresAt,
       })
       .from(bookings)
       .leftJoin(customers, eq(bookings.customerId, customers.id))
@@ -149,6 +150,7 @@ export default async function BookingsPage({
           customerName: r.customerName,
           customerPhone: r.customerPhone,
           refillOfCode: r.refillOfBookingId ? (parentCodes.get(r.refillOfBookingId) ?? null) : null,
+          refillExpiresAt: r.refillExpiresAt?.toISOString() ?? null,
         }),
       )}
     />

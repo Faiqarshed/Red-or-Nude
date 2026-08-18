@@ -303,6 +303,17 @@ export const bookings = pgTable(
     // Null until the booking is actually confirmed — an unpaid hold gets no number.
     ticketNo: text("ticket_no"),
 
+    /**
+     * Admin-granted refill window, overriding the one derived from
+     * `services.refill_days`. Null means "use the service's own window".
+     *
+     * Two jobs: extending a window as a goodwill gesture, and granting one at
+     * all for a service that carries none (`refill_days = 0`). Stored as the
+     * moment the offer lapses rather than a day count, so the deadline can't
+     * drift when a service's window length is edited later.
+     */
+    refillExpiresAt: timestamp("refill_expires_at", { withTimezone: true }),
+
     // Two guests booked together share one uuid. No booking_groups table: a group
     // holds no fact its members don't already carry, and the only query anyone
     // runs is "the other rows with this id".
@@ -379,6 +390,40 @@ export const ticketCounters = pgTable(
     next: integer("next").notNull().default(1),
   },
   (t) => ({ pk: primaryKey({ columns: [t.branchId, t.day] }) }),
+);
+
+/**
+ * One-time codes for opening a booking's private details at /my-bookings.
+ *
+ * The booking reference alone is a weak credential — it travels in emails and
+ * gets forwarded — so anything beyond the booking's own summary is gated behind
+ * a code emailed to the address on file. Reference + inbox is two factors with
+ * no account, which is the most that can be asked of a customer who never
+ * signed up.
+ *
+ * `code_hash`, never the code: this row is what guards customer data, so a
+ * database leak must not hand over live codes. Attempts are counted so a code
+ * can be burned after a few wrong guesses rather than brute-forced — six digits
+ * is only a million, and an unthrottled verify would walk it.
+ */
+export const bookingOtps = pgTable(
+  "booking_otps",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bookingId: uuid("booking_id")
+      .notNull()
+      .references(() => bookings.id, { onDelete: "cascade" }),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    /** Set the moment it is used; a code is good for exactly one verification. */
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // Every lookup is "the newest live code for this booking".
+    byBooking: index("booking_otps_booking_idx").on(t.bookingId, t.createdAt),
+  }),
 );
 
 export const bookingAddons = pgTable(

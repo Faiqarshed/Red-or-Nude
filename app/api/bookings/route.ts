@@ -71,6 +71,9 @@ export async function POST(request: Request) {
     // pick again, rather than showing a generic failure. A lapsed refill window
     // is the same shape of problem — what they were looking at is no longer on
     // offer — so it gets 409 too.
+    //
+    // `refill-window` is different: the offer stands, the date is simply outside
+    // it. That is a 400 — the request was wrong, not the world.
     const status =
       result.error === "slot-taken" || result.error === "refill-expired"
         ? 409

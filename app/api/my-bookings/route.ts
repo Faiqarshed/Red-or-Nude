@@ -22,8 +22,7 @@ import { db } from "@/lib/db";
 import { bookings, services } from "@/lib/db/schema";
 import { claimedWindows } from "@/lib/bookings";
 import { halalasToSar } from "@/lib/money";
-import { refillDaysLeft, refillPriceHalalas } from "@/lib/refill";
-import { getSettings } from "@/lib/settings";
+import { refillDaysLeft } from "@/lib/refill";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +77,7 @@ export async function POST(request: Request) {
       serviceName: bookings.serviceName,
       totalHalalas: bookings.totalHalalas,
       refillOfBookingId: bookings.refillOfBookingId,
+      refillExpiresAt: bookings.refillExpiresAt,
       // The live catalogue price, not the snapshot: the server prices a refill
       // off today's price list, so the button has to quote the same number.
       servicePriceHalalas: services.priceHalalas,
@@ -93,8 +93,6 @@ export async function POST(request: Request) {
   if (rows.length === 0) return NextResponse.json({ error: "not-found" }, { status: 404 });
 
   const spentOn = await claimedWindows(rows.map((r) => r.id));
-
-  const settings = await getSettings(["refill_discount_percent"]);
   const now = new Date();
 
   return NextResponse.json({
@@ -106,6 +104,7 @@ export async function POST(request: Request) {
           refillDays: r.refillDays ?? 0,
           alreadyRefilled: spentOn.has(r.id),
           isRefill: Boolean(r.refillOfBookingId),
+          expiresAt: r.refillExpiresAt,
         },
         now,
       );
@@ -118,13 +117,11 @@ export async function POST(request: Request) {
         serviceName: r.serviceName,
         totalSar: halalasToSar(r.totalHalalas),
         isRefill: Boolean(r.refillOfBookingId),
-        // daysLeft 0 means no button — see refillDaysLeft().
-        refill: {
-          daysLeft,
-          priceSar: halalasToSar(
-            refillPriceHalalas(r.servicePriceHalalas ?? 0, settings.refill_discount_percent),
-          ),
-        },
+        // Only *whether* a refill is on offer. The countdown, the price and the
+        // booking link all sit behind the emailed code at
+        // POST /api/my-bookings/refill — otherwise holding a forwarded reference
+        // would be enough to read them, and the code would be gating nothing.
+        hasRefill: daysLeft > 0,
       };
     }),
   });

@@ -489,3 +489,88 @@ One property to keep in mind: the job messages the cohort with *exactly*
 and that day's cohort is never nudged — acceptable while this is a courtesy, and
 the fix if it ever matters is a `reminder_sent_at` column plus a range check
 rather than an equality one.
+
+---
+
+## Part 4 — Granting a refill, and unlocking it
+
+Two additions to the flow above: the salon can grant a window by hand, and the
+customer proves their identity before the offer is shown.
+
+### 4.1 Admin grants
+
+**Admin → Bookings → a booking → Grant refill.** Enter days from today.
+
+Stored as `bookings.refill_expires_at`, a **deadline rather than a day count**,
+so it cannot drift when someone edits the service's `refill_days` afterwards — a
+customer told "you have until the 18th" keeps until the 18th.
+
+Counted from **today, not from the appointment**, because this exists for "give
+her another two weeks" and that is what the customer means by it.
+
+It does three things, all through the same field:
+
+| Days | Effect |
+| --- | --- |
+| > 0 on a service with a window | extends or **shortens** it |
+| > 0 on a service with `refill_days: 0` | creates an offer where there was none |
+| 0 (Revoke) | drops back to the service's own window, which may still be open |
+
+A grant sets a deadline and nothing else. **Every other rule in
+`refillDaysLeft()` still applies**: a booking that has not happened yet, one
+whose refill was already claimed, or a refill of its own stays ineligible however
+generous the grant. `npm run check:fields` asserts exactly that.
+
+Granting is `bookings.manage` only and writes an `audit_log` row
+(`grant-refill` / `revoke-refill`) — a refill is a discount, so who gave it is a
+money question.
+
+### 4.2 The customer unlocks it with an emailed code
+
+The booking reference is a weak credential: it travels in emails and gets
+forwarded. So the listing at `/my-bookings` says only **whether** a refill exists
+(`hasRefill`) — the countdown, the price and the booking link are not in that
+response at all. Tapping it opens a dialog, which emails a six-digit code to the
+address on file; entering it returns the offer.
+
+```
+POST /api/my-bookings/otp     { code }        → emails a code, returns f•••@gmail.com
+POST /api/my-bookings/refill  { code, otp }   → { daysLeft, expiresAt, priceSar, bookUrl }
+```
+
+Reference + inbox is two factors with no account, which is the most that can be
+asked of a customer who never signed up.
+
+The rules the code is held to (`lib/otp.ts`), and why each exists:
+
+- **Hashed at rest.** This row guards customer data; a database dump must not
+  contain live codes. SHA-256 unsalted and unstretched *on purpose* — six digits
+  is a keyspace of one million, so any hash is table-reversible and bcrypt would
+  buy only latency on a request the customer is waiting for. What hashing buys is
+  that a leak has nothing live in it.
+- **Single use**, consumed on the first success.
+- **Ten minutes** — long enough to switch to an inbox, short enough that a
+  forwarded email is not a standing key.
+- **Five attempts**, then the code is burned. Six digits falls to an unthrottled
+  verify in minutes.
+- **One live code per booking** — requesting a new one invalidates the old, so
+  two emails can never both work.
+- **Constant-time comparison**, so a wrong code cannot be narrowed by timing.
+
+Two throttles on the request endpoint, because it has two abuse shapes: per IP
+(walking the reference space) and **per booking** (mailbombing a customer whose
+reference you know — no IP limit alone stops that).
+
+The request endpoint **never reveals whether a reference exists**: an unknown
+code and a real one return the same shape. Otherwise it would be a yes/no oracle
+for guessed references.
+
+> Unlike the invoice, a failed OTP send **surfaces** as a `502` rather than only
+> logging. An invoice that fails still leaves a valid booking; a code that never
+> arrives leaves the customer stuck at a dialog they cannot pass.
+
+### 4.3 What this does not change
+
+The customer still **books their own slot** — the dialog ends at a link to
+`/booking?refill=RON-XXXX`, and that page re-validates the whole offer
+server-side. Nothing returned by the verify endpoint is trusted afterwards.

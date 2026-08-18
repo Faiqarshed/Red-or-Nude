@@ -17,6 +17,7 @@ import {
   validateCvv,
   validateExpiry,
 } from "@/lib/card";
+import { refillDaysLeft, refillWindowEnd } from "@/lib/refill";
 import {
   formatNational,
   toNationalDigits,
@@ -146,5 +147,83 @@ for (const input of ["0512345678", "512345678", "+966512345678", "00966512345678
 }
 assert.equal(formatNational("512345678"), "51 234 5678");
 console.log("  phone: stored form stays 05… and passes the API regex ✓");
+
+// -- refill windows ----------------------------------------------------------
+
+const served = { startsAt: new Date("2026-08-01T10:00:00Z"), status: "completed", alreadyRefilled: false, isRefill: false };
+const today = new Date("2026-08-19T12:00:00Z");
+
+// Derived window: 30 days from the appointment.
+assert.equal(refillDaysLeft({ ...served, refillDays: 30 }, today), 12);
+assert.equal(refillDaysLeft({ ...served, refillDays: 14 }, today), 0, "14-day window has lapsed");
+assert.equal(refillDaysLeft({ ...served, refillDays: 0 }, today), 0, "no window on this service");
+
+// An admin grant replaces the derived deadline — it can extend...
+assert.equal(
+  refillDaysLeft({ ...served, refillDays: 14, expiresAt: new Date("2026-09-18T12:00:00Z") }, today),
+  30,
+  "a grant revives a lapsed window",
+);
+// ...create one where the service has none...
+assert.equal(
+  refillDaysLeft({ ...served, refillDays: 0, expiresAt: new Date("2026-08-24T12:00:00Z") }, today),
+  5,
+  "a grant works on a service with refillDays 0",
+);
+// ...and shorten one.
+assert.equal(
+  refillDaysLeft({ ...served, refillDays: 30, expiresAt: new Date("2026-08-21T12:00:00Z") }, today),
+  2,
+  "a grant can shorten as well as extend",
+);
+// A grant already in the past offers nothing.
+assert.equal(
+  refillDaysLeft({ ...served, refillDays: 30, expiresAt: new Date("2026-08-10T12:00:00Z") }, today),
+  0,
+);
+console.log("  refill: admin grants override the derived window ✓");
+
+// No grant overrides these three — the refill is spent, or was never on offer.
+for (const override of [{ alreadyRefilled: true }, { isRefill: true }]) {
+  assert.equal(
+    refillDaysLeft({ ...served, ...override, refillDays: 30, expiresAt: new Date("2027-01-01T00:00:00Z") }, today),
+    0,
+    `a grant must not revive: ${JSON.stringify(override)}`,
+  );
+}
+// An appointment that has not happened yet cannot be refilled, granted or not.
+assert.equal(
+  refillDaysLeft(
+    { ...served, startsAt: new Date("2026-12-01T10:00:00Z"), status: "confirmed", refillDays: 30, expiresAt: new Date("2027-01-01T00:00:00Z") },
+    today,
+  ),
+  0,
+  "unserved bookings stay ineligible",
+);
+console.log("  refill: grants cannot revive a spent or unserved booking ✓");
+
+// The deadline the picker greys out and the one the server enforces are the
+// same function, so a date can never be offered and then refused.
+assert.equal(
+  refillWindowEnd({ ...served, refillDays: 30 })?.toISOString().slice(0, 10),
+  "2026-08-31",
+  "derived window ends 30 days after the appointment",
+);
+assert.equal(
+  refillWindowEnd({ ...served, refillDays: 30, expiresAt: new Date("2026-09-18T12:00:00Z") })
+    ?.toISOString()
+    .slice(0, 10),
+  "2026-09-18",
+  "a grant replaces the derived deadline",
+);
+assert.equal(refillWindowEnd({ ...served, refillDays: 0 }), null, "no window, no deadline");
+
+// The window bounds the APPOINTMENT, not just the moment of booking: with a
+// window open today, a date past its end must still be out of bounds.
+const end = refillWindowEnd({ ...served, refillDays: 30 })!;
+assert.ok(refillDaysLeft({ ...served, refillDays: 30 }, today) > 0, "offer is open today");
+assert.ok(new Date("2026-10-05T10:00:00Z") > end, "an October slot is past the window");
+assert.ok(new Date("2026-08-25T10:00:00Z") <= end, "a slot inside the window is fine");
+console.log("  refill: window bounds the appointment date, not just the booking time ✓");
 
 console.log("\nAll field boundary checks passed.");

@@ -7,7 +7,7 @@ import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
-import { setBookingStatus } from "./actions";
+import { grantRefill, setBookingStatus } from "./actions";
 import { STATUS_TONE, type BookingRow, type BookingStatus } from "./BookingsView";
 
 // Which status a booking can move to next. Cancelled/no-show are terminal —
@@ -39,8 +39,21 @@ export default function BookingDrawer({
   const { t, lang } = useAdminI18n();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [days, setDays] = useState("30");
+  const [saved, setSaved] = useState(false);
 
   if (!booking) return null;
+
+  const setRefill = (value: number) =>
+    startTransition(async () => {
+      setError(null);
+      setSaved(false);
+      const res = await grantRefill({ id: booking.id, days: value });
+      if (res.ok) {
+        setSaved(true);
+        onChanged();
+      } else setError(t.common.error);
+    });
 
   const move = (status: BookingStatus) =>
     startTransition(async () => {
@@ -108,6 +121,63 @@ export default function BookingDrawer({
           <p className="rounded-xl bg-black/[0.03] px-4 py-3 text-start text-xs text-ink/60">
             {booking.notes}
           </p>
+        ) : null}
+
+        {/* A refill is a discount, so granting one is staff-only and audited.
+            The window is a deadline counted from today, not from the
+            appointment — this exists for "give her another two weeks", and that
+            is what the customer means by it. Every other eligibility rule in
+            refillDaysLeft() still applies on top. */}
+        {canManage ? (
+          <div className="rounded-xl border border-black/[0.06] bg-white p-4">
+            <p className="mb-1 text-start text-xs font-medium text-ink/60">
+              {t.bookings.refillGrant}
+            </p>
+            <p className="mb-3 text-start text-[11px] text-ink/40">
+              {t.bookings.refillGrantHint}
+            </p>
+
+            {booking.refillExpiresAt ? (
+              <p className="mb-3 text-start text-xs text-ink">
+                {t.bookings.refillGrantedUntil}{" "}
+                <span className="font-medium" dir="ltr">
+                  {new Date(booking.refillExpiresAt).toISOString().slice(0, 10)}
+                </span>
+              </p>
+            ) : null}
+
+            <div className="flex items-center gap-2">
+              <input
+                value={days}
+                onChange={(e) => setDays(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                inputMode="numeric"
+                aria-label={t.bookings.refillDays}
+                dir="ltr"
+                className="h-10 w-20 rounded-xl border border-black/10 bg-white px-3 text-start text-sm text-ink outline-none focus:border-sky"
+              />
+              <Button
+                size="sm"
+                disabled={pending || !days || Number(days) < 1}
+                onClick={() => setRefill(Number(days))}
+              >
+                {t.bookings.refillGrant}
+              </Button>
+              {booking.refillExpiresAt ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={pending}
+                  onClick={() => setRefill(0)}
+                >
+                  {t.bookings.refillRevoke}
+                </Button>
+              ) : null}
+            </div>
+
+            {saved ? (
+              <p className="mt-2 text-start text-[11px] text-ink/50">{t.bookings.refillSaved}</p>
+            ) : null}
+          </div>
         ) : null}
 
         {canManage && NEXT[booking.status].length > 0 ? (
