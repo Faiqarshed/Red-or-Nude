@@ -121,6 +121,7 @@ export default function PaymentPage() {
           // 409 means the thing they were looking at is gone: either someone
           // took the chair while they typed, or the refill window just lapsed.
           if (data.error === "refill-expired") setError(p.refillExpired);
+          else if (data.error === "refill-window") setError(p.refillWindow);
           else if (res.status === 409) setError(p.slotTaken);
           else if (data.error === "invalid" && data.issues?.includes("customer.phone")) {
             setError(p.invalidPhone);

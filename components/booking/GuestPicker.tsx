@@ -72,7 +72,13 @@ export function toMemberSelection(
   };
 }
 
-function Card({
+/**
+ * Exported so the refill flow can show the same cards, minus the choosing:
+ * without `onClick` this renders as a plain div — not focusable, no hover
+ * affordance — because a refill repeats a fixed appointment and nothing on it
+ * is selectable.
+ */
+export function Card({
   name,
   price,
   img,
@@ -87,17 +93,18 @@ function Card({
   img: string | null;
   desc?: string;
   selected: boolean;
-  onClick: () => void;
+  onClick?: () => void;
   minutesLabel?: string;
   plus?: boolean;
 }) {
+  const Tag = onClick ? "button" : "div";
   return (
-    <button
+    <Tag
       onClick={onClick}
       className={`flex flex-col items-center rounded-[20px] bg-white p-3 text-center transition-all ${
         selected
           ? "ring-2 ring-red shadow-[0_14px_36px_rgba(184,0,7,0.18)]"
-          : "ring-1 ring-black/[0.04] shadow-[0_10px_30px_rgba(184,0,7,0.05)] hover:ring-red/40"
+          : `ring-1 ring-black/[0.04] shadow-[0_10px_30px_rgba(184,0,7,0.05)] ${onClick ? "hover:ring-red/40" : ""}`
       }`}
     >
       <div
@@ -118,7 +125,7 @@ function Card({
       </div>
       {minutesLabel && <p className="mt-1 text-[10px] font-medium text-ink/50">{minutesLabel}</p>}
       {desc ? <p className="mt-1 text-[8px] leading-3 text-ink/40">{desc}</p> : null}
-    </button>
+    </Tag>
   );
 }
 

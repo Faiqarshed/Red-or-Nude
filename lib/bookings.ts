@@ -21,7 +21,7 @@ import {
   type Localized,
 } from "@/lib/db/schema";
 import { reserveStations, utcToLocalDate } from "@/lib/availability";
-import { refillDaysLeft, refillPriceHalalas } from "@/lib/refill";
+import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 import { halalasToSar, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { formatTicketNo } from "@/lib/tickets";
@@ -71,7 +71,10 @@ export type CreateBookingError =
   | "invalid-service"
   | "slot-taken"
   | "blocked"
+  /** The offer itself has lapsed, or was never on this booking. */
   | "refill-expired"
+  /** The offer is open, but the appointment chosen falls outside its window. */
+  | "refill-window"
   | "failed";
 
 export type CreateBookingsResult =
@@ -220,6 +223,8 @@ async function loadRefillParent(code: string) {
       startsAt: bookings.startsAt,
       status: bookings.status,
       refillOfBookingId: bookings.refillOfBookingId,
+      refillExpiresAt: bookings.refillExpiresAt,
+      removalTypeId: bookings.removalTypeId,
       refillDays: services.refillDays,
     })
     .from(bookings)
@@ -236,6 +241,10 @@ async function loadRefillParent(code: string) {
     refillDays: parent.refillDays ?? 0,
     alreadyRefilled: spent.has(parent.id),
     isRefill: Boolean(parent.refillOfBookingId),
+    // Renamed for refillDaysLeft(), which takes the deadline as `expiresAt`.
+    // Without this an admin-granted window is honoured in the booking history
+    // and then refused here, which is the worst of both.
+    expiresAt: parent.refillExpiresAt,
   };
 }
 
@@ -349,6 +358,17 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     refillParent = await loadRefillParent(input.refillOfCode);
     if (!refillParent) return { ok: false, error: "refill-expired" };
     if (!refillDaysLeft(refillParent)) return { ok: false, error: "refill-expired" };
+
+    // The *appointment* must fall inside the window, not merely the moment of
+    // booking. Checking only `refillDaysLeft` — "is the offer open today" —
+    // let someone open a closing window and book the discounted slot months
+    // out, which is the whole thing the window exists to prevent: a nail refill
+    // is only a refill while the nails are still on.
+    const windowEnd = refillWindowEnd(refillParent);
+    if (windowEnd && startsAt > windowEnd) {
+      return { ok: false, error: "refill-window" };
+    }
+
     // One guest, and the service they had. A refill is not a group outing.
     if (input.members.length !== 1 || input.members[0].serviceId !== refillParent.serviceId) {
       return { ok: false, error: "invalid-service" };
@@ -537,13 +557,35 @@ export async function createBooking(input: CreateBookingInput): Promise<CreateBo
  * lapsed window, an already-claimed one, or a service the salon has since
  * deactivated — and the page then behaves like an ordinary booking.
  */
+export type RefillLine = { id: string; name: Localized; priceSar: number };
+
+/**
+ * A refill is the *same appointment again*, so the offer carries everything the
+ * original booking included — the customer picks nothing.
+ *
+ * Only the service line is discounted. Add-ons and removal are the same amount
+ * of work whether or not it's a refill, which is exactly how `priceMember()`
+ * prices it server-side; this mirrors that so the quote and the charge agree.
+ */
 export type RefillOffer = {
   code: string;
   serviceId: string;
   serviceName: Localized;
+  /** The discounted service line. */
   priceSar: number;
+  /** What that service normally costs, for the struck-through comparison. */
   fullPriceSar: number;
+  addons: RefillLine[];
+  removal: RefillLine | null;
+  /** Service + add-ons + removal — what the customer will actually pay. */
+  totalSar: number;
   daysLeft: number;
+  /**
+   * Last bookable day, `YYYY-MM-DD` in Riyadh. The appointment must fall on or
+   * before this — see the `refill-window` check in createBookings, which is the
+   * authority. The picker uses it to grey out later dates.
+   */
+  lastDate: string | null;
 };
 
 export async function getRefillOffer(code: string): Promise<RefillOffer | null> {
@@ -562,14 +604,60 @@ export async function getRefillOffer(code: string): Promise<RefillOffer | null> 
 
   const settings = await getSettings(["refill_discount_percent"]);
 
+  // Snapshots from the original booking, not today's catalogue: this is a repeat
+  // of what they had. Rows whose add-on was since deleted keep their snapshot
+  // name and price, so the offer still describes the appointment truthfully.
+  const extras = await db
+    .select()
+    .from(bookingAddons)
+    .where(eq(bookingAddons.bookingId, parent.id));
+
+  const addons: RefillLine[] = extras
+    .filter((e) => e.addonId && e.name)
+    .map((e) => ({
+      id: e.addonId as string,
+      name: e.name as Localized,
+      priceSar: halalasToSar(e.priceHalalas),
+    }));
+
+  const [removalRow] = parent.removalTypeId
+    ? await db
+        .select()
+        .from(removalTypes)
+        .where(eq(removalTypes.id, parent.removalTypeId))
+        .limit(1)
+    : [];
+
+  const removal: RefillLine | null = removalRow
+    ? {
+        id: removalRow.id,
+        name: removalRow.name as Localized,
+        priceSar: halalasToSar(removalRow.priceHalalas),
+      }
+    : null;
+
+  const servicePriceSar = halalasToSar(
+    refillPriceHalalas(service.priceHalalas, settings.refill_discount_percent),
+  );
+
   return {
     code: code.trim().toUpperCase(),
     serviceId: service.id,
     serviceName: service.name as Localized,
-    priceSar: halalasToSar(
-      refillPriceHalalas(service.priceHalalas, settings.refill_discount_percent),
-    ),
+    priceSar: servicePriceSar,
     fullPriceSar: halalasToSar(service.priceHalalas),
+    addons,
+    removal,
+    totalSar:
+      servicePriceSar +
+      addons.reduce((sum, a) => sum + a.priceSar, 0) +
+      (removal?.priceSar ?? 0),
     daysLeft,
+    // Same helper the server validates against, so the greyed-out dates and the
+    // rejected ones are the same set.
+    lastDate: (() => {
+      const end = refillWindowEnd(parent);
+      return end ? utcToLocalDate(end) : null;
+    })(),
   };
 }

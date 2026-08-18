@@ -23,6 +23,7 @@ export default function ScheduleModal({
   guests = 1,
   initialDate,
   initialTime,
+  lastDate = null,
   onConfirm,
   onClose,
 }: {
@@ -32,6 +33,16 @@ export default function ScheduleModal({
   guests?: number;
   initialDate: string | null;
   initialTime: string | null;
+  /**
+   * Latest bookable day, `YYYY-MM-DD`, inclusive. Set for a refill, whose
+   * appointment has to fall inside its window — a nail refill is only a refill
+   * while the nails are still on, so a date past the deadline is not a late
+   * booking, it is a full-price appointment.
+   *
+   * The server refuses these too (`refill-window` in lib/bookings.ts); this
+   * stops the customer picking one only to be turned away at payment.
+   */
+  lastDate?: string | null;
   /** Returns the local date, the wall-clock time, and the exact UTC instant. */
   onConfirm: (date: string, time: string, startsAt: string) => void;
   onClose: () => void;
@@ -139,7 +150,10 @@ export default function ScheduleModal({
           // Until the month loads, days render enabled-but-quiet rather than
           // flashing every date to disabled and back.
           const loading = days === null;
-          const disabled = !loading && !days[key];
+          // String compare is safe and cheap on YYYY-MM-DD, and avoids dragging
+          // timezones into a question that is purely about calendar days.
+          const pastWindow = lastDate !== null && key > lastDate;
+          const disabled = pastWindow || (!loading && !days[key]);
           const selected = key === date;
 
           return (

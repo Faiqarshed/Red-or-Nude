@@ -10,6 +10,7 @@ import ScheduleModal from "@/components/booking/ScheduleModal";
 import BranchPicker from "@/components/booking/BranchPicker";
 import Summary from "@/components/booking/Summary";
 import GuestPicker, {
+  Card,
   emptyGuest,
   guestTotals,
   toMemberSelection,
@@ -48,23 +49,40 @@ export default function BookingView({
   // reduced price. Narrowing the data rather than special-casing the UI means
   // pricing, the summary and the slot picker all keep working untouched — and
   // the customer physically cannot swap the service, which is the rule.
-  const { catalog, offer } = useMemo(() => {
+  const { catalog, offer, prefilled } = useMemo(() => {
     const service = refill && fullCatalog.services.find((s) => s.id === refill.serviceId);
     // The salon deactivated the service since — fall back to a normal booking
     // rather than offering something that can no longer be booked.
-    if (!refill || !service) return { catalog: fullCatalog, offer: null };
+    if (!refill || !service) {
+      return { catalog: fullCatalog, offer: null, prefilled: emptyGuest };
+    }
+
+    // A refill repeats the original appointment, so everything it included is
+    // selected up front and the customer picks nothing.
+    //
+    // Add-ons are matched back to the live catalogue by id: one that has since
+    // been retired is dropped rather than carried, because it can no longer be
+    // booked or priced. That means the quote here is always built from the same
+    // selection that gets sent, so what is shown and what is charged agree.
+    const addonIndexes = refill.addons
+      .map((a) => fullCatalog.addons.findIndex((x) => x.id === a.id))
+      .filter((i) => i >= 0);
+
+    const removalId =
+      refill.removal && fullCatalog.removals.some((r) => r.id === refill.removal!.id)
+        ? refill.removal.id
+        : null;
 
     return {
       catalog: { ...fullCatalog, services: [{ ...service, price: refill.priceSar }] },
       offer: refill,
+      prefilled: { service: 0, addons: addonIndexes, removal: removalId, design: null },
     };
   }, [fullCatalog, refill]);
 
   const [branchId, setBranchId] = useState<string | null>(branches[0]?.id ?? null);
-  // With one service on offer it is already chosen; there is nothing to pick.
-  const [guest, setGuest] = useState<GuestState>(
-    offer ? { ...emptyGuest, service: 0 } : emptyGuest,
-  );
+  // On a refill this is already the whole appointment; there is nothing to pick.
+  const [guest, setGuest] = useState<GuestState>(prefilled);
   const [date, setDate] = useState<string | null>(null);
   const [time, setTime] = useState<string | null>(null);
   const [startsAt, setStartsAt] = useState<string | null>(null);
@@ -123,7 +141,12 @@ export default function BookingView({
             }}
           />
 
-          {offer && (
+          {offer ? (
+            /* A refill is the same appointment again, so there is nothing to
+               choose — this lists what it repeats and the customer goes
+               straight to picking a time. Built from the live catalogue and the
+               selection above rather than from the offer, so what is listed here
+               is exactly what gets priced and charged. */
             <div className="rounded-[20px] bg-[#fbeaea] p-5 text-start">
               <p className="font-display text-base font-extrabold text-red">{c.refill.title}</p>
               <p className="mt-1 text-[13px] text-ink/65">
@@ -131,20 +154,56 @@ export default function BookingView({
                   .replace("{service}", pick(offer.serviceName, lang))
                   .replace("{n}", String(offer.daysLeft))}
               </p>
-              <p className="mt-2 text-[12px] text-ink/45">
-                {c.refill.was} {offer.fullPriceSar} → {offer.priceSar}
-              </p>
-            </div>
-          )}
 
-          <GuestPicker
-            catalog={catalog}
-            value={guest}
-            onChange={(next) => {
-              setGuest(next);
-              clearSchedule();
-            }}
-          />
+              <p className="mt-4 text-[11px] uppercase tracking-wider text-ink/40">
+                {c.refill.included}
+              </p>
+
+              {/* The same cards the picker shows, without the choosing — so a
+                  refill looks like the booking it repeats. */}
+              <div className="mt-3 grid grid-cols-2 gap-4 md:grid-cols-4">
+                <Card
+                  name={pick(offer.serviceName, lang)}
+                  price={offer.priceSar}
+                  img={catalog.services[0]?.img ?? null}
+                  desc={`${c.refill.was} ${offer.fullPriceSar}`}
+                  minutesLabel={
+                    catalog.services[0]
+                      ? `${catalog.services[0].durationMin} ${b.minutes.replace(/[0-9]+\s*/, "")}`.trim()
+                      : undefined
+                  }
+                  selected
+                />
+
+                {guest.addons.map((i) => (
+                  <Card
+                    key={catalog.addons[i].id}
+                    name={pick(catalog.addons[i].name, lang)}
+                    price={catalog.addons[i].price}
+                    img={catalog.addons[i].img}
+                    selected
+                  />
+                ))}
+
+                {guest.removal &&
+                  (() => {
+                    const r = catalog.removals.find((x) => x.id === guest.removal)!;
+                    return <Card name={pick(r.name, lang)} price={r.price} img={r.img} selected />;
+                  })()}
+              </div>
+
+              <p className="mt-4 text-[12px] text-ink/45">{c.refill.serviceOnly}</p>
+            </div>
+          ) : (
+            <GuestPicker
+              catalog={catalog}
+              value={guest}
+              onChange={(next) => {
+                setGuest(next);
+                clearSchedule();
+              }}
+            />
+          )}
 
           {!offer && (
           <Link
@@ -174,6 +233,7 @@ export default function BookingView({
 
       {scheduling && branchId && (
         <ScheduleModal
+          lastDate={offer?.lastDate ?? null}
           branchId={branchId}
           durationMin={durationMin}
           initialDate={date}

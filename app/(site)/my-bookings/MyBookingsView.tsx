@@ -24,8 +24,15 @@ type HistoryRow = {
   serviceName: Localized | null;
   totalSar: number;
   isRefill: boolean;
-  /** daysLeft 0 means the window has closed — no button. */
-  refill: { daysLeft: number; priceSar: number };
+  /** Whether a refill is on offer. The details are behind an emailed code. */
+  hasRefill: boolean;
+};
+
+type RefillDetails = {
+  daysLeft: number;
+  expiresAt: string | null;
+  priceSar: number;
+  bookUrl: string | null;
 };
 
 const STATUS_TONE: Record<string, string> = {
@@ -45,6 +52,8 @@ export default function MyBookingsView() {
   const [rows, setRows] = useState<HistoryRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The reference whose refill is being unlocked, if the dialog is open. */
+  const [verifying, setVerifying] = useState<string | null>(null);
 
   const lookup = async (reference: string) => {
     const trimmed = reference.trim();
@@ -145,7 +154,12 @@ export default function MyBookingsView() {
             {rows.length === 0 && <p className="text-start text-sm text-ink/55">{h.empty}</p>}
 
             {rows.map((r) => (
-              <BookingCard key={r.code} row={r} lang={lang} />
+              <BookingCard
+                key={r.code}
+                row={r}
+                lang={lang}
+                onOpenRefill={() => setVerifying(r.code)}
+              />
             ))}
 
             <button
@@ -159,17 +173,24 @@ export default function MyBookingsView() {
         )}
       </div>
 
+      {verifying && <RefillDialog code={verifying} onClose={() => setVerifying(null)} />}
+
       <SiteFooter />
     </main>
   );
 }
 
-function BookingCard({ row, lang }: { row: HistoryRow; lang: "ar" | "en" }) {
+function BookingCard({
+  row,
+  lang,
+  onOpenRefill,
+}: {
+  row: HistoryRow;
+  lang: "ar" | "en";
+  onOpenRefill: () => void;
+}) {
   const { c } = useI18n();
   const h = c.history;
-
-  const countdown =
-    row.refill.daysLeft <= 1 ? h.lastDay : h.daysLeft.replace("{n}", String(row.refill.daysLeft));
 
   return (
     <article className="rounded-[20px] bg-white p-5 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
@@ -217,22 +238,225 @@ function BookingCard({ row, lang }: { row: HistoryRow; lang: "ar" | "en" }) {
         </div>
       </div>
 
-      {/* The whole feature. Absent — not disabled — once the window lapses. */}
-      {row.refill.daysLeft > 0 && (
-        <Link
-          href={`/booking?refill=${row.code}`}
-          className="mt-4 flex items-center justify-between gap-3 rounded-[14px] bg-red-grad px-5 py-3 text-sm font-bold text-white transition-opacity hover:opacity-90"
+      {/* The whole feature. Absent — not disabled — once the window lapses.
+          The countdown and price are deliberately NOT here: they come back from
+          the server only after the emailed code is verified, so a forwarded
+          reference alone reveals nothing about the offer. */}
+      {row.hasRefill && (
+        <button
+          type="button"
+          onClick={onOpenRefill}
+          className="mt-4 flex w-full items-center justify-between gap-3 rounded-[14px] bg-red-grad px-5 py-3 text-start text-sm font-bold text-white transition-opacity hover:opacity-90"
         >
-          <span>{h.refillCta}</span>
-          <span className="flex items-center gap-2 text-[12px] font-semibold opacity-90">
-            <span className="flex items-center gap-1">
-              <Riyal className="h-3 w-3" />
-              {row.refill.priceSar}
-            </span>
-            <span>· {countdown}</span>
-          </span>
-        </Link>
+          <span>{h.refillAvailable}</span>
+          <span className="text-[12px] font-semibold opacity-90">{h.refillTapToView}</span>
+        </button>
       )}
     </article>
+  );
+}
+
+/**
+ * Two steps: ask for a code, then spend it.
+ *
+ * The refill details never travel with the booking listing — they are fetched
+ * only after the code verifies, so the reference on its own reveals nothing
+ * about the offer. See app/api/my-bookings/refill/route.ts.
+ */
+function RefillDialog({ code, onClose }: { code: string; onClose: () => void }) {
+  const { c, lang } = useI18n();
+  const h = c.history;
+
+  const [step, setStep] = useState<"ask" | "enter">("ask");
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [otp, setOtp] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [details, setDetails] = useState<RefillDetails | null>(null);
+
+  const request = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/my-bookings/otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(res.status === 429 ? h.tooMany : h.verifyMailFailed);
+        return;
+      }
+      setSentTo(data.sentTo ?? null);
+      setStep("enter");
+    } catch {
+      setError(h.verifyMailFailed);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const verify = async () => {
+    if (busy || otp.length !== 6) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/my-bookings/refill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, otp }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        setDetails(data.refill as RefillDetails);
+        return;
+      }
+      if (data.error === "too-many-attempts") setError(h.verifyTooMany);
+      else if (data.error === "no-code" || data.error === "expired") setError(h.verifyExpired);
+      else setError(h.verifyWrong);
+      setOtp("");
+    } catch {
+      setError(h.failed);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const countdown = details
+    ? details.daysLeft <= 1
+      ? h.lastDay
+      : h.daysLeft.replace("{n}", String(details.daysLeft))
+    : "";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-[420px] rounded-[24px] bg-white p-7 text-start shadow-[0_40px_100px_rgba(0,0,0,0.25)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {details ? (
+          // ---- verified: the offer itself --------------------------------
+          details.daysLeft > 0 ? (
+            <>
+              <h3 className="font-display text-xl font-extrabold text-ink">{h.refillBadge}</h3>
+              <div className="mt-5 space-y-3 rounded-[16px] bg-[#fbeaea] p-5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[13px] text-ink/55">{h.refillUntil}</span>
+                  <span className="text-[13px] font-semibold text-ink" dir="ltr">
+                    {details.expiresAt
+                      ? formatDateLabel(details.expiresAt.slice(0, 10), lang)
+                      : "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[13px] text-ink/55">{h.refillPrice}</span>
+                  <span className="flex items-center gap-1 font-display text-base font-extrabold text-red">
+                    <Riyal className="h-4 w-4" />
+                    {details.priceSar}
+                  </span>
+                </div>
+                <p className="text-[12px] font-semibold text-red">{countdown}</p>
+              </div>
+
+              {details.bookUrl && (
+                <Link
+                  href={details.bookUrl}
+                  className="mt-5 block rounded-[12px] bg-red-grad py-3.5 text-center text-sm font-bold text-white transition-opacity hover:opacity-90"
+                >
+                  {h.refillCta}
+                </Link>
+              )}
+            </>
+          ) : (
+            // The window closed between listing and verifying. Rare, but the
+            // server is the authority and it just said no.
+            <p className="text-sm text-ink/60">{h.refillGone}</p>
+          )
+        ) : step === "ask" ? (
+          // ---- step 1: request a code ------------------------------------
+          <>
+            <h3 className="font-display text-xl font-extrabold text-ink">{h.verifyTitle}</h3>
+            <p className="mt-2 text-sm text-ink/55">{h.verifyIntro}</p>
+            <button
+              type="button"
+              onClick={request}
+              disabled={busy}
+              className={`mt-6 w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
+                busy ? "cursor-not-allowed bg-black/[0.06] text-ink/40" : "bg-red-grad text-white hover:opacity-90"
+              }`}
+            >
+              {busy ? h.verifySending : h.verifySend}
+            </button>
+          </>
+        ) : (
+          // ---- step 2: spend it ------------------------------------------
+          <>
+            <h3 className="font-display text-xl font-extrabold text-ink">{h.verifyTitle}</h3>
+            <p className="mt-2 text-sm text-ink/55">
+              {h.verifySentTo} <span dir="ltr">{sentTo ?? "—"}</span>
+            </p>
+
+            <label className="mt-5 block">
+              <span className="mb-1.5 block text-[12px] text-ink/55">{h.verifyCodeLabel}</span>
+              <input
+                value={otp}
+                onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                onKeyDown={(e) => e.key === "Enter" && void verify()}
+                dir="ltr"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={6}
+                placeholder="000000"
+                className="w-full rounded-[12px] border border-black/[0.08] px-4 py-3 text-center text-lg font-bold tracking-[0.4em] text-ink outline-none placeholder:text-ink/20 focus:border-red/40"
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={verify}
+              disabled={busy || otp.length !== 6}
+              className={`mt-4 w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
+                busy || otp.length !== 6
+                  ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
+                  : "bg-red-grad text-white hover:opacity-90"
+              }`}
+            >
+              {busy ? h.verifyChecking : h.verifySubmit}
+            </button>
+
+            <button
+              type="button"
+              onClick={request}
+              disabled={busy}
+              className="mt-3 w-full text-center text-[12px] text-ink/45 underline underline-offset-4 hover:text-red"
+            >
+              {h.verifyResend}
+            </button>
+          </>
+        )}
+
+        {error && (
+          <p role="alert" className="mt-4 rounded-[12px] bg-red/[0.08] px-4 py-3 text-xs text-red">
+            {error}
+          </p>
+        )}
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-5 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
+        >
+          {c.payment.close}
+        </button>
+      </div>
+    </div>
   );
 }

@@ -35,6 +35,8 @@ export type BookingRow = {
   customerPhone: string | null;
   /** The booking this one refills, if any — shown so staff know why it's cheaper. */
   refillOfCode?: string | null;
+  /** An admin-granted refill deadline, if one was set by hand. */
+  refillExpiresAt?: string | null;
 };
 
 export type CatalogOption = {
