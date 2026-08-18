@@ -4,11 +4,11 @@
 
 const ar = {
   nav: [
+    { label: "حجوزاتي", href: "/my-bookings" },
     { label: "من نحن", href: "/about" },
     { label: "خدماتنا", href: "/booking" },
     { label: "اختاري الفرع", href: "/#branches" },
     { label: "تسوقي", href: "/shop" },
-    { label: "حجوزاتي", href: "/my-bookings" },
   ],
   header: { otherLang: "English", search: "بحث", wishlist: "المفضلة", cart: "السلة", menu: "القائمة" },
 
@@ -263,11 +263,11 @@ export type Content = typeof ar;
 const en: Content = {
   // Reversed vs. Arabic so that under LTR it reads Shop → About Us left-to-right.
   nav: [
-    { label: "My Bookings", href: "/my-bookings" },
     { label: "Shop", href: "/shop" },
     { label: "Choose the Branch", href: "/#branches" },
     { label: "Our Services", href: "/booking" },
     { label: "About Us", href: "/about" },
+    { label: "My Bookings", href: "/my-bookings" },
   ],
   header: { otherLang: "عربي", search: "Search", wishlist: "Wishlist", cart: "Cart", menu: "Menu" },
 

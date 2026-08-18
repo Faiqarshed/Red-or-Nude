@@ -126,7 +126,6 @@ export default function GroupBookingView({
             value={guests[0]}
             onChange={(next) => setGuest(0, next)}
             label={b.guest1}
-            compact
           />
 
           <GuestPicker
@@ -134,7 +133,6 @@ export default function GroupBookingView({
             value={guests[1]}
             onChange={(next) => setGuest(1, next)}
             label={b.guest2}
-            compact
           />
 
           <Link
