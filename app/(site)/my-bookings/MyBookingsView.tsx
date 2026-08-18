@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
@@ -8,22 +8,24 @@ import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
 import { formatDateLabel } from "@/lib/booking";
+import type { bookingStatus } from "@/lib/db/schema";
 import type { Localized } from "@/lib/localized";
 
 // The refill button lives here and nowhere else — that is the whole point of the
 // feature: it is not a catalogue item, it is something a past booking earns.
 // Whether it shows, and the countdown on it, both come from the server's
-// refillState() so the button can never promise what the API would refuse.
+// refillDaysLeft() so the button can never promise what the API would refuse.
 
 type HistoryRow = {
   code: string;
   startsAt: string;
-  status: keyof ReturnType<typeof useI18n>["c"]["history"]["statuses"];
+  status: (typeof bookingStatus.enumValues)[number];
   ticketNo: string | null;
   serviceName: Localized | null;
   totalSar: number;
   isRefill: boolean;
-  refill: { eligible: boolean; daysLeft: number; priceSar: number };
+  /** daysLeft 0 means the window has closed — no button. */
+  refill: { daysLeft: number; priceSar: number };
 };
 
 const KEY = "ron-last-booking";
@@ -46,42 +48,39 @@ export default function MyBookingsView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const lookup = useCallback(
-    async (reference: string) => {
-      const trimmed = reference.trim();
-      if (!trimmed || loading) return;
+  const lookup = async (reference: string) => {
+    const trimmed = reference.trim();
+    if (!trimmed || loading) return;
 
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch("/api/my-bookings", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: trimmed }),
-        });
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/my-bookings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: trimmed }),
+      });
 
-        if (res.ok) {
-          const data = await res.json();
-          setRows(data.bookings as HistoryRow[]);
-          // Remembered so a returning customer isn't retyping it. Not a
-          // credential store — it's the same reference already in their inbox.
-          localStorage.setItem(KEY, trimmed.toUpperCase());
-          return;
-        }
-
-        setRows(null);
-        if (res.status === 404) setError(h.notFound);
-        else if (res.status === 429) setError(h.tooMany);
-        else setError(h.failed);
-      } catch {
-        setRows(null);
-        setError(h.failed);
-      } finally {
-        setLoading(false);
+      if (res.ok) {
+        const data = await res.json();
+        setRows(data.bookings as HistoryRow[]);
+        // Remembered so a returning customer isn't retyping it. Not a
+        // credential store — it's the same reference already in their inbox.
+        localStorage.setItem(KEY, trimmed.toUpperCase());
+        return;
       }
-    },
-    [h, loading],
-  );
+
+      setRows(null);
+      if (res.status === 404) setError(h.notFound);
+      else if (res.status === 429) setError(h.tooMany);
+      else setError(h.failed);
+    } catch {
+      setRows(null);
+      setError(h.failed);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Come back to the page and it picks up where it left off.
   useEffect(() => {
@@ -90,8 +89,8 @@ export default function MyBookingsView() {
       setCode(saved);
       void lookup(saved);
     }
-    // Only ever on mount: re-running this on every `lookup` identity change
-    // would re-fetch the list after each keystroke-driven re-render.
+    // Mount only — re-running on every render would re-fetch the list after
+    // each keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -227,7 +226,7 @@ function BookingCard({ row, lang }: { row: HistoryRow; lang: "ar" | "en" }) {
       </div>
 
       {/* The whole feature. Absent — not disabled — once the window lapses. */}
-      {row.refill.eligible && (
+      {row.refill.daysLeft > 0 && (
         <Link
           href={`/booking?refill=${row.code}`}
           className="mt-4 flex items-center justify-between gap-3 rounded-[14px] bg-red-grad px-5 py-3 text-sm font-bold text-white transition-opacity hover:opacity-90"

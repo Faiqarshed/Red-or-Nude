@@ -6,12 +6,6 @@
 // customer's screen and the server can never disagree about whether a window is
 // still open. A rule copied into a UI is a rule that drifts.
 
-export type RefillState = {
-  eligible: boolean;
-  /** Whole days left in the window, 0 once it has lapsed. */
-  daysLeft: number;
-};
-
 export type RefillInput = {
   /** When the original appointment started. The window counts from here. */
   startsAt: Date;
@@ -31,26 +25,28 @@ export type RefillInput = {
 
 const DAY_MS = 86_400_000;
 
-export function refillState(b: RefillInput, now: Date = new Date()): RefillState {
+/**
+ * Whole days left in the window. **Zero means no refill is on offer** — there is
+ * no separate `eligible` flag, because a second field that can only ever say
+ * `daysLeft > 0` is a second field to keep in sync.
+ */
+export function refillDaysLeft(b: RefillInput, now: Date = new Date()): number {
   // A service with no window, one already used, or a refill of its own, is
   // simply not offered.
-  if (b.refillDays <= 0 || b.alreadyRefilled || b.isRefill) {
-    return { eligible: false, daysLeft: 0 };
-  }
+  if (b.refillDays <= 0 || b.alreadyRefilled || b.isRefill) return 0;
 
   // You cannot refill something that has not happened yet. `completed` is the
   // salon pressing End; `confirmed` in the past covers the common case of staff
   // not getting round to it — the customer sat in the chair either way.
   const served =
     b.status === "completed" || (b.status === "confirmed" && b.startsAt.getTime() <= now.getTime());
-  if (!served) return { eligible: false, daysLeft: 0 };
+  if (!served) return 0;
 
-  const expiresAt = b.startsAt.getTime() + b.refillDays * DAY_MS;
-  const msLeft = expiresAt - now.getTime();
-  if (msLeft <= 0) return { eligible: false, daysLeft: 0 };
+  const msLeft = b.startsAt.getTime() + b.refillDays * DAY_MS - now.getTime();
+  if (msLeft <= 0) return 0;
 
   // Rounded up, so the last partial day still reads "1 day left" rather than 0.
-  return { eligible: true, daysLeft: Math.ceil(msLeft / DAY_MS) };
+  return Math.ceil(msLeft / DAY_MS);
 }
 
 /** What a refill costs: the service price less the salon's refill discount. */

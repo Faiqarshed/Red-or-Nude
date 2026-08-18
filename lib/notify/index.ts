@@ -31,15 +31,14 @@ export type NotifyMessage = {
   data: Record<string, unknown>;
 };
 
-export type NotifyResult = { ok: boolean; error?: string };
+export type NotifyResult = { ok: boolean };
 
 export type NotifyDriver = {
-  name: string;
   send(message: NotifyMessage): Promise<NotifyResult>;
 };
 
 /** Branch on `process.env.NOTIFY_DRIVER` here once there is a real driver. */
-export function getNotifyDriver(): NotifyDriver {
+function getDriver(): NotifyDriver {
   return logDriver;
 }
 
@@ -51,12 +50,12 @@ export function getNotifyDriver(): NotifyDriver {
 export async function notify(message: NotifyMessage): Promise<NotifyResult> {
   // Nothing to send to. Not an error — plenty of customers give one contact,
   // not both.
-  if (!message.to.trim()) return { ok: false, error: "no-recipient" };
+  if (!message.to.trim()) return { ok: false };
 
   try {
-    return await getNotifyDriver().send(message);
+    return await getDriver().send(message);
   } catch (err) {
     console.error(`[notify] ${message.template} to ${message.channel} failed`, err);
-    return { ok: false, error: "send-failed" };
+    return { ok: false };
   }
 }

@@ -16,7 +16,7 @@ import { db } from "@/lib/db";
 import { bookings, branches, customers, services, stations } from "@/lib/db/schema";
 import { createBooking, createBookings } from "@/lib/bookings";
 import { splitGroupPrice, vatIncludedIn } from "@/lib/money";
-import { refillPriceHalalas, refillState } from "@/lib/refill";
+import { refillDaysLeft, refillPriceHalalas } from "@/lib/refill";
 import { formatTicketNo } from "@/lib/tickets";
 
 const TEST_PHONE = "0500000001";
@@ -84,36 +84,35 @@ function checkRefill() {
   const served = (daysAgo: number) => new Date(now.getTime() - daysAgo * DAY);
   const base = { status: "completed", refillDays: 30, alreadyRefilled: false, isRefill: false };
 
-  // Open at both ends of the window.
-  assert.equal(refillState({ ...base, startsAt: served(1) }, now).eligible, true);
-  assert.equal(refillState({ ...base, startsAt: served(1) }, now).daysLeft, 29);
-  assert.equal(refillState({ ...base, startsAt: served(29.5) }, now).daysLeft, 1, "the last part-day still counts");
+  // Open at both ends of the window. Zero days left IS "no refill on offer" —
+  // there is no separate flag, so these asserts pin both meanings at once.
+  assert.equal(refillDaysLeft({ ...base, startsAt: served(1) }, now), 29);
+  assert.equal(refillDaysLeft({ ...base, startsAt: served(29.5) }, now), 1, "the last part-day still counts");
 
   // And shut one moment after it.
-  assert.equal(refillState({ ...base, startsAt: served(30) }, now).eligible, false);
-  assert.equal(refillState({ ...base, startsAt: served(31) }, now).daysLeft, 0);
+  assert.equal(refillDaysLeft({ ...base, startsAt: served(30) }, now), 0);
+  assert.equal(refillDaysLeft({ ...base, startsAt: served(31) }, now), 0);
 
   // The three ways a booking earns no button at all.
-  assert.equal(refillState({ ...base, startsAt: served(1), refillDays: 0 }, now).eligible, false, "no window on this service");
-  assert.equal(refillState({ ...base, startsAt: served(1), alreadyRefilled: true }, now).eligible, false, "window already spent");
-  assert.equal(refillState({ ...base, startsAt: served(1), isRefill: true }, now).eligible, false, "a refill does not earn another");
+  assert.equal(refillDaysLeft({ ...base, startsAt: served(1), refillDays: 0 }, now), 0, "no window on this service");
+  assert.equal(refillDaysLeft({ ...base, startsAt: served(1), alreadyRefilled: true }, now), 0, "window already spent");
+  assert.equal(refillDaysLeft({ ...base, startsAt: served(1), isRefill: true }, now), 0, "a refill does not earn another");
 
   // Lashes are a shorter window off the same code path.
-  assert.equal(refillState({ ...base, startsAt: served(13), refillDays: 14 }, now).eligible, true);
-  assert.equal(refillState({ ...base, startsAt: served(15), refillDays: 14 }, now).eligible, false);
+  assert.equal(refillDaysLeft({ ...base, startsAt: served(13), refillDays: 14 }, now), 1);
+  assert.equal(refillDaysLeft({ ...base, startsAt: served(15), refillDays: 14 }, now), 0);
 
   // An appointment that has not happened yet cannot be refilled, and a booking
   // that was never paid for was never served.
   assert.equal(
-    refillState({ ...base, status: "confirmed", startsAt: new Date(now.getTime() + DAY) }, now).eligible,
-    false,
+    refillDaysLeft({ ...base, status: "confirmed", startsAt: new Date(now.getTime() + DAY) }, now),
+    0,
     "cannot refill a future appointment",
   );
-  assert.equal(refillState({ ...base, status: "pending", startsAt: served(1) }, now).eligible, false);
-  assert.equal(refillState({ ...base, status: "cancelled", startsAt: served(1) }, now).eligible, false);
-  assert.equal(
-    refillState({ ...base, status: "confirmed", startsAt: served(1) }, now).eligible,
-    true,
+  assert.equal(refillDaysLeft({ ...base, status: "pending", startsAt: served(1) }, now), 0);
+  assert.equal(refillDaysLeft({ ...base, status: "cancelled", startsAt: served(1) }, now), 0);
+  assert.ok(
+    refillDaysLeft({ ...base, status: "confirmed", startsAt: served(1) }, now) > 0,
     "a past confirmed booking counts as served even if staff never pressed End",
   );
 

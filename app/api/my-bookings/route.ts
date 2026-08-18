@@ -7,12 +7,13 @@
 // or email back: the reference proves someone booked, not who they are.
 
 import { NextResponse } from "next/server";
-import { and, desc, eq, inArray, notInArray } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings, services } from "@/lib/db/schema";
+import { claimedWindows } from "@/lib/bookings";
 import { halalasToSar } from "@/lib/money";
-import { refillPriceHalalas, refillState } from "@/lib/refill";
+import { refillDaysLeft, refillPriceHalalas } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -91,33 +92,14 @@ export async function POST(request: Request) {
     .orderBy(desc(bookings.startsAt))
     .limit(HISTORY_LIMIT);
 
-  // Which of these have already had their refill claimed. One query for the
-  // whole page rather than one per row.
-  const spentOn = new Set(
-    rows.length
-      ? (
-          await db
-            .select({ parent: bookings.refillOfBookingId })
-            .from(bookings)
-            .where(
-              and(
-                inArray(
-                  bookings.refillOfBookingId,
-                  rows.map((r) => r.id),
-                ),
-                notInArray(bookings.status, ["cancelled", "no_show"]),
-              ),
-            )
-        ).map((r) => r.parent)
-      : [],
-  );
+  const spentOn = await claimedWindows(rows.map((r) => r.id));
 
   const settings = await getSettings(["refill_discount_percent"]);
   const now = new Date();
 
   return NextResponse.json({
     bookings: rows.map((r) => {
-      const state = refillState(
+      const daysLeft = refillDaysLeft(
         {
           startsAt: r.startsAt,
           status: r.status,
@@ -136,9 +118,9 @@ export async function POST(request: Request) {
         serviceName: r.serviceName,
         totalSar: halalasToSar(r.totalHalalas),
         isRefill: Boolean(r.refillOfBookingId),
+        // daysLeft 0 means no button — see refillDaysLeft().
         refill: {
-          eligible: state.eligible,
-          daysLeft: state.daysLeft,
+          daysLeft,
           priceSar: halalasToSar(
             refillPriceHalalas(r.servicePriceHalalas ?? 0, settings.refill_discount_percent),
           ),

@@ -8,8 +8,6 @@
 import type { NotifyDriver, NotifyMessage, NotifyResult } from "./index";
 
 export const logDriver: NotifyDriver = {
-  name: "log",
-
   async send(message: NotifyMessage): Promise<NotifyResult> {
     console.log(
       `[notify:log] ${message.template} → ${message.channel} ${message.to} (${message.lang})`,

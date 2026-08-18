@@ -30,9 +30,11 @@ is *does it have a refill and for how long*, and a column answers it.
 charged in full — they are the same work either way — so only the service line
 moves. The chair is held for the same duration as the full service.
 
-**The one rule, in one place.** `refillState()` in
-[lib/refill.ts](../lib/refill.ts) decides eligibility and the countdown. It is
-pure, dependency-free, and called by both the screen and the server:
+**The one rule, in one place.** `refillDaysLeft()` in
+[lib/refill.ts](../lib/refill.ts) returns the days remaining, where **0 means no
+refill is on offer** — there is no separate eligibility flag to fall out of sync
+with the countdown. It is pure, dependency-free, and called by both the screen
+and the server:
 
 | Caller | Uses it to |
 |---|---|
@@ -50,7 +52,7 @@ A booking is eligible when **all** of these hold:
 - no refill has been claimed against it already
 - it is not itself a refill (a refill does not earn another — otherwise a
   customer would never pay full price again; flip the `isRefill` condition in
-  `refillState()` if the salon wants them to chain)
+  `refillDaysLeft()` if the salon wants them to chain)
 - `now <= startsAt + refill_days`
 
 **How a customer reaches their history.** Customers have no account. The
@@ -129,7 +131,7 @@ custom-amount box remains, bounded 50–2000 SAR.
 ### 1.3 The notification seam
 
 [lib/notify/](../lib/notify/) is deliberately the same shape as the existing
-payment seam: a `NotifyDriver` interface, a `getNotifyDriver()` with one line to
+payment seam: a `NotifyDriver` interface, a `getDriver()` with one line to
 change, and a log-only driver. Every place that should send a message already
 calls `notify()`:
 
@@ -308,7 +310,6 @@ Write a driver next to the log one:
 import type { NotifyDriver, NotifyMessage, NotifyResult } from "./index";
 
 export const whatsappDriver: NotifyDriver = {
-  name: "whatsapp",
   async send(message: NotifyMessage): Promise<NotifyResult> {
     if (message.channel !== "whatsapp") return { ok: false, error: "wrong-channel" };
 
@@ -330,16 +331,16 @@ export const whatsappDriver: NotifyDriver = {
       }),
     });
 
-    if (!res.ok) return { ok: false, error: `http-${res.status}` };
-    return { ok: true };
+    if (!res.ok) console.error(`[notify:whatsapp] http ${res.status}`);
+    return { ok: res.ok };
   },
 };
 ```
 
-Then branch in [lib/notify/index.ts](../lib/notify/index.ts):
+Then branch in `getDriver()` — the one line in [lib/notify/index.ts](../lib/notify/index.ts):
 
 ```ts
-export function getNotifyDriver(): NotifyDriver {
+function getDriver(): NotifyDriver {
   return process.env.NOTIFY_DRIVER === "whatsapp" ? whatsappDriver : logDriver;
 }
 ```
@@ -376,7 +377,6 @@ Identical shape, different transport — the seam does not care:
 ```ts
 // lib/notify/email.ts  (Resend shown; any HTTP mail API is the same five lines)
 export const emailDriver: NotifyDriver = {
-  name: "email",
   async send(message) {
     if (message.channel !== "email") return { ok: false, error: "wrong-channel" };
     const res = await fetch("https://api.resend.com/emails", {
@@ -392,7 +392,7 @@ export const emailDriver: NotifyDriver = {
         html: renderTemplate(message),  // message.data → HTML, RTL for Arabic
       }),
     });
-    return res.ok ? { ok: true } : { ok: false, error: `http-${res.status}` };
+    return { ok: res.ok };
   },
 };
 ```
@@ -401,10 +401,9 @@ Since a real deployment wants **both** channels, route on
 `message.channel` rather than picking one driver:
 
 ```ts
-export function getNotifyDriver(): NotifyDriver {
+function getDriver(): NotifyDriver {
   if (process.env.NOTIFY_DRIVER !== "live") return logDriver;
   return {
-    name: "live",
     send: (m) => (m.channel === "email" ? emailDriver.send(m) : whatsappDriver.send(m)),
   };
 }

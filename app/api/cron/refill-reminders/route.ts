@@ -6,11 +6,12 @@
 // docs/REFILL-AND-GIFT-CARDS.md.
 
 import { NextResponse } from "next/server";
-import { and, eq, gte, inArray, lt, notInArray } from "drizzle-orm";
+import { and, eq, gte, inArray, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers, services } from "@/lib/db/schema";
+import { claimedWindows } from "@/lib/bookings";
 import { notify } from "@/lib/notify";
-import { refillState } from "@/lib/refill";
+import { refillDaysLeft } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
   // date to a range of appointment days lets the database do the filtering:
   // a window closes at startsAt + refillDays, so we want the bookings whose
   // appointment was refillDays - reminderDays ago. Since refillDays varies per
-  // service, scan the widest plausible span and let refillState() decide.
+  // service, scan the widest plausible span and let refillDaysLeft() decide.
   const oldest = new Date(now.getTime() - 365 * DAY_MS);
 
   const rows = await db
@@ -59,29 +60,12 @@ export async function GET(request: Request) {
       ),
     );
 
-  const claimed = new Set(
-    rows.length
-      ? (
-          await db
-            .select({ parent: bookings.refillOfBookingId })
-            .from(bookings)
-            .where(
-              and(
-                inArray(
-                  bookings.refillOfBookingId,
-                  rows.map((r) => r.id),
-                ),
-                notInArray(bookings.status, ["cancelled", "no_show"]),
-              ),
-            )
-        ).map((r) => r.parent)
-      : [],
-  );
+  const claimed = await claimedWindows(rows.map((r) => r.id));
 
   let sent = 0;
 
   for (const row of rows) {
-    const state = refillState(
+    const daysLeft = refillDaysLeft(
       {
         startsAt: row.startsAt,
         status: row.status,
@@ -93,16 +77,17 @@ export async function GET(request: Request) {
     );
 
     // Exactly the cohort whose window closes on the reminder day. Run daily and
-    // every booking is nudged once.
+    // every booking is nudged once. The `!daysLeft` guard matters: 0 means no
+    // refill is on offer, so a reminder_days of 0 must not match everything.
     //
     // ponytail: a missed run means that day's cohort gets no reminder at all.
     // Add a `reminder_sent_at` column and a range check if that ever matters.
-    if (!state.eligible || state.daysLeft !== settings.refill_reminder_days) continue;
+    if (!daysLeft || daysLeft !== settings.refill_reminder_days) continue;
 
     const data = {
       code: row.code,
       serviceName: row.serviceName,
-      daysLeft: state.daysLeft,
+      daysLeft,
       bookingUrl: "/my-bookings",
     };
 

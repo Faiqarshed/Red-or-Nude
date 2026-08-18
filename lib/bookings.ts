@@ -21,7 +21,7 @@ import {
   type Localized,
 } from "@/lib/db/schema";
 import { reserveStations, utcToLocalDate } from "@/lib/availability";
-import { refillPriceHalalas, refillState } from "@/lib/refill";
+import { refillDaysLeft, refillPriceHalalas } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 import { halalasToSar, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { formatTicketNo } from "@/lib/tickets";
@@ -208,7 +208,7 @@ async function priceMember(m: BookingMember, refillPercent = 0): Promise<Priced 
 }
 
 /**
- * The booking a refill is claiming, with everything `refillState` needs to
+ * The booking a refill is claiming, with everything `refillDaysLeft` needs to
  * judge it: when it happened, whether it was served, how long its service's
  * window is, and whether that window has already been spent.
  */
@@ -229,23 +229,38 @@ async function loadRefillParent(code: string) {
 
   if (!parent) return null;
 
-  const [spent] = await db
-    .select({ id: bookings.id })
-    .from(bookings)
-    .where(
-      and(
-        eq(bookings.refillOfBookingId, parent.id),
-        notInArray(bookings.status, ["cancelled", "no_show"]),
-      ),
-    )
-    .limit(1);
+  const spent = await claimedWindows([parent.id]);
 
   return {
     ...parent,
     refillDays: parent.refillDays ?? 0,
-    alreadyRefilled: Boolean(spent),
+    alreadyRefilled: spent.has(parent.id),
     isRefill: Boolean(parent.refillOfBookingId),
   };
+}
+
+/**
+ * Of these bookings, which have already had their refill claimed.
+ *
+ * One query for a whole page rather than one per row, and one definition of
+ * "claimed" — a cancelled or no-show refill hands the window back, exactly as
+ * the `bookings_refill_of_unique` index has it. Written once because the
+ * history, the reminder job and the write path all have to agree.
+ */
+export async function claimedWindows(bookingIds: string[]): Promise<Set<string>> {
+  if (!bookingIds.length) return new Set();
+
+  const rows = await db
+    .select({ parent: bookings.refillOfBookingId })
+    .from(bookings)
+    .where(
+      and(
+        inArray(bookings.refillOfBookingId, bookingIds),
+        notInArray(bookings.status, ["cancelled", "no_show"]),
+      ),
+    );
+
+  return new Set(rows.map((r) => r.parent as string));
 }
 
 /**
@@ -333,7 +348,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   if (input.refillOfCode) {
     refillParent = await loadRefillParent(input.refillOfCode);
     if (!refillParent) return { ok: false, error: "refill-expired" };
-    if (!refillState(refillParent).eligible) return { ok: false, error: "refill-expired" };
+    if (!refillDaysLeft(refillParent)) return { ok: false, error: "refill-expired" };
     // One guest, and the service they had. A refill is not a group outing.
     if (input.members.length !== 1 || input.members[0].serviceId !== refillParent.serviceId) {
       return { ok: false, error: "invalid-service" };
@@ -532,7 +547,9 @@ export type RefillOffer = {
 export async function getRefillOffer(code: string): Promise<RefillOffer | null> {
   const parent = await loadRefillParent(code);
   if (!parent?.serviceId) return null;
-  if (!refillState(parent).eligible) return null;
+
+  const daysLeft = refillDaysLeft(parent);
+  if (!daysLeft) return null;
 
   const [service] = await db
     .select()
@@ -551,6 +568,6 @@ export async function getRefillOffer(code: string): Promise<RefillOffer | null> 
       refillPriceHalalas(service.priceHalalas, settings.refill_discount_percent),
     ),
     fullPriceSar: halalasToSar(service.priceHalalas),
-    daysLeft: refillState(parent).daysLeft,
+    daysLeft,
   };
 }
