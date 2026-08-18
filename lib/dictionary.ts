@@ -88,8 +88,6 @@ const ar = {
     groupDiscount: "خصم الحجز الثنائي ١٠٪",
     sameSlotNote: "الموعد مشترك بين الضيفتين — نفس اليوم ونفس الوقت.",
     nextGuest: "التالي: اختيار خدمات الضيفة الثانية",
-    editGuest: "تعديل",
-    guestReady: "تم الاختيار",
   },
 
   payment: {
@@ -176,7 +174,6 @@ const ar = {
   refill: {
     title: "إعادة تعبئة",
     note: "إعادة تعبئة لخدمة {service} — بسعر مخفّض، وباقٍ {n} يوم على انتهاء المهلة.",
-    locked: "هذه إعادة تعبئة، لذلك الخدمة محددة مسبقاً.",
     was: "بدلاً من",
   },
 
@@ -349,8 +346,6 @@ const en: Content = {
     groupDiscount: "Group discount 10%",
     sameSlotNote: "Both guests share one appointment — same day, same time.",
     nextGuest: "Next: choose Guest 2's services",
-    editGuest: "Edit",
-    guestReady: "Selected",
   },
 
   payment: {
@@ -437,7 +432,6 @@ const en: Content = {
   refill: {
     title: "Refill",
     note: "Refill of your {service} — at a reduced price, with {n} days left in the window.",
-    locked: "This is a refill, so the service is already chosen.",
     was: "was",
   },
 
