@@ -7,7 +7,7 @@ import { db } from "@/lib/db";
 import { bookings } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
-import { createBooking, isSlotConflict } from "@/lib/bookings";
+import { createBookings, isSlotConflict } from "@/lib/bookings";
 import { reserveStations } from "@/lib/availability";
 
 export type Result = { ok: true } | { ok: false; error: string };
@@ -132,26 +132,27 @@ export async function createWalkIn(input: WalkInInput): Promise<Result & { code?
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.path.join(".") ?? "invalid" };
 
   const data = parsed.data;
-  const result = await createBooking({
+  const result = await createBookings({
     branchId: data.branchId,
-    serviceId: data.serviceId,
-    addonIds: data.addonIds,
-    removalTypeId: data.removalTypeId ?? null,
     startsAt: data.startsAt,
     customer: { name: data.name, phone: data.phone },
     source: "walk_in",
     notes: data.notes,
+    members: [
+      { serviceId: data.serviceId, addonIds: data.addonIds, removalTypeId: data.removalTypeId ?? null },
+    ],
   });
 
   if (!result.ok) return { ok: false, error: result.error };
 
+  const [booking] = result.bookings;
   await recordAudit(actor, {
     action: "create",
     entity: "bookings",
-    entityId: result.id,
+    entityId: booking.id,
     diff: { source: { from: null, to: "walk_in" } },
   });
 
   revalidate();
-  return { ok: true, code: result.code };
+  return { ok: true, code: booking.code };
 }

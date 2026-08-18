@@ -10,9 +10,23 @@ import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import type { MemberSelection } from "@/lib/booking";
 
-function Row({ label, value }: { label: string; value: string }) {
+/** Label/value box. "panel" is the summary card's own look; "plain" is a bordered
+ * variant used by the payment page's booking review, which sits outside a panel. */
+export function Row({
+  label,
+  value,
+  variant = "panel",
+}: {
+  label: string;
+  value: string;
+  variant?: "panel" | "plain";
+}) {
+  const box =
+    variant === "panel"
+      ? "rounded-[14px] bg-cream/70 p-4 text-start ring-1 ring-black/[0.04]"
+      : "rounded-[14px] border border-black/[0.05] p-4";
   return (
-    <div className="rounded-[14px] bg-cream/70 p-4 text-start ring-1 ring-black/[0.04]">
+    <div className={box}>
       <p className="mb-1 text-[11px] text-ink/45">{label}</p>
       <p className="text-sm font-semibold text-ink">{value}</p>
     </div>

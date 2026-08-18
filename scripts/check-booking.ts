@@ -14,7 +14,7 @@ import assert from "node:assert";
 import { and, eq, like } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, branches, customers, services, stations } from "@/lib/db/schema";
-import { createBooking, createBookings } from "@/lib/bookings";
+import { createBookings } from "@/lib/bookings";
 import { splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { formatTicketNo } from "@/lib/tickets";
 
@@ -92,10 +92,9 @@ async function main() {
   const base = Date.UTC(2030, 5, 10, 6, 0); // 09:00 Riyadh
 
   const book = (offsetMin: number) =>
-    createBooking({
+    createBookings({
       branchId: branch.id,
-      serviceId: service.id,
-      addonIds: [],
+      members: [{ serviceId: service.id, addonIds: [] }],
       startsAt: new Date(base + offsetMin * 60_000).toISOString(),
       customer: { phone: TEST_PHONE },
       source: "web",
@@ -212,10 +211,10 @@ async function main() {
   console.log("  group: subtotal + VAT == total on both rows ✓");
 
   // -- Walk-ins are not payment-gated, and share the web ticket queue -------
-  // The admin form calls createBooking(), the compatibility wrapper. A walk-in
-  // customer is standing at the desk, so they are seated immediately and take
-  // the next number from the same per-branch, per-day queue as web bookings —
-  // the salon calls out one continuous sequence.
+  // The admin form calls createBookings() with one member. A walk-in customer
+  // is standing at the desk, so they are seated immediately and take the next
+  // number from the same per-branch, per-day queue as web bookings — the salon
+  // calls out one continuous sequence.
   await cleanup(branch.id);
   const web = await createBookings({
     branchId: branch.id,
@@ -227,26 +226,26 @@ async function main() {
   });
   assert.ok(web.ok);
 
-  const walkIn = await createBooking({
+  const walkIn = await createBookings({
     branchId: branch.id,
-    serviceId: svcA.id,
-    addonIds: [],
     startsAt: new Date(base).toISOString(),
     customer: { phone: "0500000002" },
     source: "walk_in",
+    members: [{ serviceId: svcA.id, addonIds: [] }],
   });
   assert.ok(walkIn.ok, `walk-in failed: ${walkIn.ok ? "" : walkIn.error}`);
-  assert.ok(walkIn.ticketNo, "a walk-in is seated now and must get a ticket immediately");
+  const [walkInBooking] = walkIn.ok ? walkIn.bookings : [];
+  assert.ok(walkInBooking?.ticketNo, "a walk-in is seated now and must get a ticket immediately");
 
   const [webRow] = await db.select().from(bookings).where(eq(bookings.id, web.bookings[0].id));
-  const [walkRow] = await db.select().from(bookings).where(eq(bookings.id, walkIn.id));
+  const [walkRow] = await db.select().from(bookings).where(eq(bookings.id, walkInBooking.id));
   assert.equal(walkRow.status, "confirmed", "a walk-in is confirmed on the spot");
   assert.equal(
-    Number(walkIn.ticketNo.slice(1)) - Number(webRow.ticketNo!.slice(1)),
+    Number(walkInBooking.ticketNo!.slice(1)) - Number(webRow.ticketNo!.slice(1)),
     1,
-    `walk-in must take the next number after the web booking, got ${webRow.ticketNo} then ${walkIn.ticketNo}`,
+    `walk-in must take the next number after the web booking, got ${webRow.ticketNo} then ${walkInBooking.ticketNo}`,
   );
-  console.log(`  walk-in: ${webRow.ticketNo} (web) then ${walkIn.ticketNo} (desk), one queue ✓`);
+  console.log(`  walk-in: ${webRow.ticketNo} (web) then ${walkInBooking.ticketNo} (desk), one queue ✓`);
 
   // -- An unpaid hold gets no ticket ---------------------------------------
   await cleanup(branch.id);

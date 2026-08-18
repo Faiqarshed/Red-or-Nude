@@ -9,6 +9,8 @@ import PaymentMethods from "@/components/PaymentMethods";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { clearBooking, emptySelection, loadBooking, type BookingSelection } from "@/lib/booking";
+import type { ConfirmedTicket } from "@/lib/payments/confirm";
+import { Row } from "@/components/booking/Summary";
 
 // Figma: Desktop-2 payment step (276:1902 / 276:6624) + success modal (276:6765).
 //
@@ -23,17 +25,6 @@ import { clearBooking, emptySelection, loadBooking, type BookingSelection } from
 // The gateway itself is still a stand-in (lib/payments/fake.ts) — no money moves
 // until PAYMENT_DRIVER points at Moyasar or Tap.
 
-type Ticket = {
-  code: string;
-  ticketNo: string;
-  stationLabel: string | null;
-  serviceName: { ar: string; en: string } | null;
-  startsAt: string;
-  totalHalalas: number;
-};
-
-const METHOD_KEYS = ["cardTitle", "madaTitle", "stcTitle", "appleTitle"] as const;
-
 export default function PaymentPage() {
   const { c, lang } = useI18n();
   const p = c.payment;
@@ -45,7 +36,7 @@ export default function PaymentPage() {
   const [phone, setPhone] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tickets, setTickets] = useState<Ticket[] | null>(null);
+  const [tickets, setTickets] = useState<ConfirmedTicket[] | null>(null);
   const [method, setMethod] = useState(p.cardTitle);
   /** Set once the hold exists, so a retry after a decline doesn't re-book. */
   const [heldCode, setHeldCode] = useState<string | null>(null);
@@ -60,10 +51,15 @@ export default function PaymentPage() {
   const hasSelection = booking.members.length > 0 && booking.startsAt !== null;
 
   /** Which enum value the API wants for the label the customer clicked. */
-  const methodCode = (): "card" | "mada" | "stc" | "apple" => {
-    const i = METHOD_KEYS.findIndex((k) => p[k] === method);
-    return (["card", "mada", "stc", "apple"] as const)[i === -1 ? 0 : i];
-  };
+  const methodCode = (): "card" | "mada" | "stc" | "apple" =>
+    (
+      {
+        [p.cardTitle]: "card",
+        [p.madaTitle]: "mada",
+        [p.stcTitle]: "stc",
+        [p.appleTitle]: "apple",
+      } as const
+    )[method] ?? "card";
 
   const confirm = async () => {
     if (!hasSelection || submitting) return;
@@ -166,20 +162,22 @@ export default function PaymentPage() {
                       </p>
                     )}
                     <div className="grid grid-cols-2 gap-3">
-                      <Field label={p.rowService} value={m.service ?? "—"} />
-                      <Field
+                      <Row variant="plain" label={p.rowService} value={m.service ?? "—"} />
+                      <Row
+                        variant="plain"
                         label={c.booking.addons}
                         value={m.addons.length ? m.addons.join("، ") : c.booking.none}
                       />
-                      <Field label={c.booking.removal} value={m.removal ?? c.booking.none} />
-                      <Field label={c.booking.total} value={String(m.price)} />
+                      <Row variant="plain" label={c.booking.removal} value={m.removal ?? c.booking.none} />
+                      <Row variant="plain" label={c.booking.total} value={String(m.price)} />
                     </div>
                   </div>
                 ))}
               </div>
 
               <div className="mt-3">
-                <Field
+                <Row
+                  variant="plain"
                   label={c.booking.appointment}
                   value={
                     booking.dateLabel && booking.timeLabel
@@ -281,22 +279,13 @@ export default function PaymentPage() {
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-[14px] border border-black/[0.05] p-4">
-      <p className="mb-1 text-[11px] text-ink/45">{label}</p>
-      <p className="text-sm font-semibold text-ink">{value}</p>
-    </div>
-  );
-}
-
 function SuccessModal({
   tickets,
   booking,
   method,
   onClose,
 }: {
-  tickets: Ticket[];
+  tickets: ConfirmedTicket[];
   booking: BookingSelection;
   method: string;
   onClose: () => void;

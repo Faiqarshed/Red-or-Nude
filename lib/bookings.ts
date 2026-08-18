@@ -66,25 +66,6 @@ export type CreateBookingsResult =
   | { ok: true; groupId: string | null; totalHalalas: number; bookings: CreatedBooking[] }
   | { ok: false; error: CreateBookingError };
 
-// ---- the original one-guest API, unchanged for existing callers -------------
-
-export type CreateBookingInput = {
-  branchId: string;
-  serviceId: string;
-  addonIds: string[];
-  removalTypeId?: string | null;
-  designId?: string | null;
-  startsAt: string; // ISO UTC
-  customer: { name?: string | null; phone: string; email?: string | null; lang?: "ar" | "en" };
-  source: "web" | "walk_in" | "phone";
-  notes?: string | null;
-  technicianId?: string | null;
-};
-
-export type CreateBookingResult =
-  | { ok: true; id: string; code: string; ticketNo: string | null; totalHalalas: number }
-  | { ok: false; error: CreateBookingError };
-
 /**
  * Rolls the transaction back and surfaces a business reason rather than a crash.
  * Every check a booking needs now lives inside one transaction, so the only way
@@ -375,34 +356,4 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     console.error("[bookings] create failed", err);
     return { ok: false, error: "failed" };
   }
-}
-
-/** One guest. Thin wrapper so the admin walk-in form is unaffected by the above. */
-export async function createBooking(input: CreateBookingInput): Promise<CreateBookingResult> {
-  const result = await createBookings({
-    branchId: input.branchId,
-    startsAt: input.startsAt,
-    customer: input.customer,
-    source: input.source,
-    notes: input.notes,
-    technicianId: input.technicianId,
-    members: [
-      {
-        serviceId: input.serviceId,
-        addonIds: input.addonIds,
-        removalTypeId: input.removalTypeId,
-        designId: input.designId,
-      },
-    ],
-  });
-
-  if (!result.ok) return result;
-  const [only] = result.bookings;
-  return {
-    ok: true,
-    id: only.id,
-    code: only.code,
-    ticketNo: only.ticketNo,
-    totalHalalas: only.totalHalalas,
-  };
 }
