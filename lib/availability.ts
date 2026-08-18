@@ -13,8 +13,8 @@
 // Arabia has no DST, so the conversion is a fixed +3 offset (see lib/time.ts).
 
 import "server-only";
-import { and, eq, gte, inArray, lt, ne, or, isNull } from "drizzle-orm";
-import { db } from "@/lib/db";
+import { and, asc, eq, gt, gte, lt, ne, or, isNull } from "drizzle-orm";
+import { db, type Tx } from "@/lib/db";
 import { bookings, branchHours, closures, stations } from "@/lib/db/schema";
 import { UTC_OFFSET_HOURS, riyadhWeekday } from "@/lib/time";
 import { getSettings } from "@/lib/settings";
@@ -119,6 +119,7 @@ function computeDay(
   dateStr: string,
   durationMin: number,
   now: Date,
+  minStations = 1,
 ): Slot[] {
   const weekday = riyadhWeekday(localToUtc(dateStr, "12:00"));
   const hours = ctx.hours.get(weekday);
@@ -155,7 +156,7 @@ function computeDay(
     slots.push({
       time: utcToLocalTime(startsAt),
       startsAt: startsAt.toISOString(),
-      available: freeStationIds.length > 0 && startsAt >= earliest,
+      available: freeStationIds.length >= minStations && startsAt >= earliest,
       freeStationIds,
     });
   }
@@ -163,17 +164,31 @@ function computeDay(
   return slots;
 }
 
-/** Bookable slots for one day. */
+/**
+ * Bookable slots for one day.
+ *
+ * `guests` is how many chairs must be free at once — 2 for a group booking, so a
+ * slot with only one chair left is correctly shown as unavailable.
+ *
+ * When two guests have different durations, ask for the longer one: the booking
+ * then claims a strict subset of what was checked, so a slot shown as free can
+ * never fail on confirm.
+ *
+ * ponytail: slightly conservative — it hides an end-of-day slot where one chair
+ * is free long enough and another only briefly. The exact answer means computing
+ * free sets per duration; add it if the salon reports losing bookings.
+ */
 export async function getDayAvailability(
   branchId: string,
   dateStr: string,
   durationMin: number,
   now: Date = new Date(),
+  guests = 1,
 ): Promise<Slot[]> {
   const from = localToUtc(dateStr, "00:00");
   const to = new Date(from.getTime() + DAY_MS);
   const ctx = await loadContext(branchId, from, to);
-  return computeDay(ctx, dateStr, durationMin, now);
+  return computeDay(ctx, dateStr, durationMin, now, guests);
 }
 
 /**
@@ -186,6 +201,7 @@ export async function getMonthAvailability(
   month: number, // 1-12
   durationMin: number,
   now: Date = new Date(),
+  guests = 1,
 ): Promise<Record<string, boolean>> {
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -197,39 +213,65 @@ export async function getMonthAvailability(
   const out: Record<string, boolean> = {};
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${year}-${pad(month)}-${pad(day)}`;
-    out[dateStr] = computeDay(ctx, dateStr, durationMin, now).some((s) => s.available);
+    out[dateStr] = computeDay(ctx, dateStr, durationMin, now, guests).some((s) => s.available);
   }
   return out;
 }
 
 /**
- * Pick a station for a new booking. Returns null when the slot is already gone —
+ * Claim `count` chairs for a booking. Returns null when there aren't enough free —
  * callers must treat that as a conflict, not an error.
+ *
+ * MUST be called inside a transaction, and the caller must insert its bookings in
+ * that same transaction. The `for update` lock below is what makes "choose a chair"
+ * and "write the booking" one indivisible step. Without it, two overlapping bookings
+ * with *different* start times both pass the check and land on the same chair — the
+ * `bookings_station_slot_unique` constraint only catches an identical `starts_at`.
+ *
+ * Ordered by `sort` so concurrent transactions always take the rows in the same
+ * order, which is what keeps this deadlock-free.
+ *
+ * `ignoreBookingId` excludes one booking from the conflict scan — a booking being
+ * rescheduled must not see itself as the thing blocking its own move.
  */
-export async function findFreeStation(
+export async function reserveStations(
+  tx: Tx,
   branchId: string,
   startsAt: Date,
   endsAt: Date,
-): Promise<string | null> {
-  const [stationRows, conflicting] = await Promise.all([
-    db
-      .select({ id: stations.id })
-      .from(stations)
-      .where(and(eq(stations.branchId, branchId), eq(stations.active, true))),
-    db
-      .select({ stationId: bookings.stationId })
-      .from(bookings)
-      .where(
-        and(
-          eq(bookings.branchId, branchId),
-          lt(bookings.startsAt, endsAt),
-          gte(bookings.endsAt, startsAt),
-          ne(bookings.status, "cancelled"),
-          ne(bookings.status, "no_show"),
-        ),
-      ),
-  ]);
+  count: number,
+  ignoreBookingId?: string,
+): Promise<string[] | null> {
+  const stationRows = await tx
+    .select({ id: stations.id })
+    .from(stations)
+    .where(and(eq(stations.branchId, branchId), eq(stations.active, true)))
+    .orderBy(asc(stations.sort))
+    .for("update");
 
-  const taken = new Set(conflicting.map((b) => b.stationId).filter(Boolean) as string[]);
-  return stationRows.find((s) => !taken.has(s.id))?.id ?? null;
+  const conflicting = await tx
+    .select({ id: bookings.id, stationId: bookings.stationId })
+    .from(bookings)
+    .where(
+      and(
+        eq(bookings.branchId, branchId),
+        // Strict on both ends — a booking that finishes exactly when this one
+        // starts is not a conflict. This must match computeDay's predicate
+        // character for character, or a slot shown as free fails on confirm.
+        lt(bookings.startsAt, endsAt),
+        gt(bookings.endsAt, startsAt),
+        ne(bookings.status, "cancelled"),
+        ne(bookings.status, "no_show"),
+      ),
+    );
+
+  const taken = new Set(
+    conflicting
+      .filter((b) => b.id !== ignoreBookingId)
+      .map((b) => b.stationId)
+      .filter(Boolean) as string[],
+  );
+
+  const free = stationRows.filter((s) => !taken.has(s.id)).map((s) => s.id);
+  return free.length >= count ? free.slice(0, count) : null;
 }

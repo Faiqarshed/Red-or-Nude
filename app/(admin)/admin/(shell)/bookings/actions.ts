@@ -1,14 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, ne } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookings, stations } from "@/lib/db/schema";
+import { bookings } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
-import { createBooking } from "@/lib/bookings";
-import { findFreeStation } from "@/lib/availability";
+import { createBooking, isSlotConflict } from "@/lib/bookings";
+import { reserveStations } from "@/lib/availability";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
@@ -79,19 +79,25 @@ export async function rescheduleBooking(input: {
   const startsAt = new Date(parsed.data.startsAt);
   const endsAt = new Date(startsAt.getTime() + durationMs);
 
-  // Its own chair is fair game; findFreeStation would otherwise see this very
-  // booking as the conflict.
-  const freeStation = await findFreeStationExcluding(before.branchId, startsAt, endsAt, before.id);
-  if (!freeStation) return { ok: false, error: "slot-taken" };
-
+  // Claim and move in one transaction, so nobody can take the target chair
+  // between the check and the update. Its own chair is fair game — hence the
+  // ignore id, or the booking would see itself as the conflict.
   try {
-    await db
-      .update(bookings)
-      .set({ startsAt, endsAt, stationId: freeStation, updatedAt: new Date() })
-      .where(eq(bookings.id, before.id));
+    const moved = await db.transaction(async (tx) => {
+      const [stationId] =
+        (await reserveStations(tx, before.branchId, startsAt, endsAt, 1, before.id)) ?? [];
+      if (!stationId) return false;
+
+      await tx
+        .update(bookings)
+        .set({ startsAt, endsAt, stationId, updatedAt: new Date() })
+        .where(eq(bookings.id, before.id));
+      return true;
+    });
+
+    if (!moved) return { ok: false, error: "slot-taken" };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.includes("bookings_station_slot_unique")) return { ok: false, error: "slot-taken" };
+    if (isSlotConflict(err)) return { ok: false, error: "slot-taken" };
     console.error("[bookings] reschedule failed", err);
     return { ok: false, error: "failed" };
   }
@@ -105,34 +111,6 @@ export async function rescheduleBooking(input: {
 
   revalidate();
   return { ok: true };
-}
-
-/** Like findFreeStation, but ignores one booking — used when moving it. */
-async function findFreeStationExcluding(
-  branchId: string,
-  startsAt: Date,
-  endsAt: Date,
-  ignoreId: string,
-): Promise<string | null> {
-  const [stationRows, existing] = await Promise.all([
-    db
-      .select({ id: stations.id })
-      .from(stations)
-      .where(and(eq(stations.branchId, branchId), eq(stations.active, true))),
-    db
-      .select({ id: bookings.id, stationId: bookings.stationId, startsAt: bookings.startsAt, endsAt: bookings.endsAt })
-      .from(bookings)
-      .where(and(eq(bookings.branchId, branchId), ne(bookings.status, "cancelled"), ne(bookings.status, "no_show"))),
-  ]);
-
-  const taken = new Set(
-    existing
-      .filter((b) => b.id !== ignoreId && b.startsAt < endsAt && b.endsAt > startsAt)
-      .map((b) => b.stationId)
-      .filter(Boolean) as string[],
-  );
-
-  return stationRows.find((s) => !taken.has(s.id))?.id ?? null;
 }
 
 const walkInSchema = z.object({

@@ -7,6 +7,8 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 .DS_Store
 *.pem
+# editors drop these beside the file they're saving
+*.tmp.*
 npm-debug.log*
 .env*
 !.env.example

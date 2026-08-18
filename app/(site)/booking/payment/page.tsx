@@ -12,9 +12,27 @@ import { clearBooking, emptySelection, loadBooking, type BookingSelection } from
 
 // Figma: Desktop-2 payment step (276:1902 / 276:6624) + success modal (276:6765).
 //
-// Confirming here is what creates the real booking: POST /api/bookings writes
-// the appointment, reserves a chair and returns a reference code. Payment itself
-// is still a stub — a gateway (Moyasar/Tap) lands in a later phase.
+// Two calls, in order:
+//   POST /api/bookings         → holds the chair(s), rows written as `pending`
+//   POST /api/payments/confirm → charges, confirms, and issues the ticket numbers
+//
+// Nothing is a booking until the second one succeeds. A declined card leaves the
+// hold in place so the customer can retry without losing their slot, which is why
+// the created code is kept in state between attempts.
+//
+// The gateway itself is still a stand-in (lib/payments/fake.ts) — no money moves
+// until PAYMENT_DRIVER points at Moyasar or Tap.
+
+type Ticket = {
+  code: string;
+  ticketNo: string;
+  stationLabel: string | null;
+  serviceName: { ar: string; en: string } | null;
+  startsAt: string;
+  totalHalalas: number;
+};
+
+const METHOD_KEYS = ["cardTitle", "madaTitle", "stcTitle", "appleTitle"] as const;
 
 export default function PaymentPage() {
   const { c, lang } = useI18n();
@@ -27,8 +45,10 @@ export default function PaymentPage() {
   const [phone, setPhone] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [code, setCode] = useState<string | null>(null);
+  const [tickets, setTickets] = useState<Ticket[] | null>(null);
   const [method, setMethod] = useState(p.cardTitle);
+  /** Set once the hold exists, so a retry after a decline doesn't re-book. */
+  const [heldCode, setHeldCode] = useState<string | null>(null);
 
   useEffect(() => {
     const saved = loadBooking();
@@ -37,20 +57,13 @@ export default function PaymentPage() {
   }, []);
 
   // A direct visit with nothing selected has nothing to pay for.
-  const hasSelection = booking.serviceId !== null && booking.startsAt !== null;
+  const hasSelection = booking.members.length > 0 && booking.startsAt !== null;
 
-  const summary = [
-    { label: p.rowService, value: booking.service ?? "—" },
-    { label: c.booking.addons, value: booking.addons.length ? booking.addons.join("، ") : c.booking.none },
-    { label: c.booking.removal, value: booking.removal ?? c.booking.none },
-    {
-      label: c.booking.appointment,
-      value:
-        booking.dateLabel && booking.timeLabel
-          ? `${booking.dateLabel} - ${booking.timeLabel}`
-          : c.booking.notSelected,
-    },
-  ];
+  /** Which enum value the API wants for the label the customer clicked. */
+  const methodCode = (): "card" | "mada" | "stc" | "apple" => {
+    const i = METHOD_KEYS.findIndex((k) => p[k] === method);
+    return (["card", "mada", "stc", "apple"] as const)[i === -1 ? 0 : i];
+  };
 
   const confirm = async () => {
     if (!hasSelection || submitting) return;
@@ -58,33 +71,59 @@ export default function PaymentPage() {
     setSubmitting(true);
 
     try {
-      const res = await fetch("/api/bookings", {
+      // Step 1 — hold the chairs, unless a previous attempt already did.
+      let code = heldCode;
+      if (!code) {
+        const res = await fetch("/api/bookings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            branchId: booking.branchId,
+            startsAt: booking.startsAt,
+            members: booking.members.map((m) => ({
+              serviceId: m.serviceId,
+              addonIds: m.addonIds,
+              removalTypeId: m.removalTypeId,
+              designId: m.designId,
+            })),
+            customer: { name: name.trim() || undefined, phone: phone.trim(), lang },
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          // 409 means someone else took the chair while this customer was typing.
+          if (res.status === 409) setError(p.slotTaken);
+          else if (data.error === "invalid" && data.issues?.includes("customer.phone")) {
+            setError(p.invalidPhone);
+          } else setError(p.bookingFailed);
+          return;
+        }
+
+        code = (await res.json()).bookings[0].code as string;
+        setHeldCode(code);
+      }
+
+      // Step 2 — take the money. Only this confirms anything.
+      const pay = await fetch("/api/payments/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          branchId: booking.branchId,
-          serviceId: booking.serviceId,
-          addonIds: booking.addonIds,
-          removalTypeId: booking.removalTypeId,
-          designId: booking.designId,
-          startsAt: booking.startsAt,
-          customer: { name: name.trim() || undefined, phone: phone.trim(), lang },
-        }),
+        body: JSON.stringify({ code, method: methodCode() }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        setCode(data.code);
+      if (pay.ok) {
+        const data = await pay.json();
+        setTickets(data.tickets);
         clearBooking();
         return;
       }
 
-      const data = await res.json().catch(() => ({}));
-      // 409 means someone else took the chair while this customer was typing —
-      // send them back to pick another time rather than showing a dead end.
-      if (res.status === 409) setError(p.slotTaken);
-      else if (data.error === "invalid" && data.issues?.includes("customer.phone")) {
-        setError(p.invalidPhone);
+      const data = await pay.json().catch(() => ({}));
+      if (data.error === "payment-declined") setError(p.declined);
+      else if (data.error === "expired") {
+        // The hold is gone; a retry would confirm nothing, so send them back.
+        setHeldCode(null);
+        setError(p.expired);
       } else setError(p.bookingFailed);
     } catch {
       setError(p.bookingFailed);
@@ -118,17 +157,39 @@ export default function PaymentPage() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-3">
-                {summary.map((r) => (
-                  <div key={r.label} className="rounded-[14px] border border-black/[0.05] p-4">
-                    <p className="mb-1 text-[11px] text-ink/45">{r.label}</p>
-                    <p className="text-sm font-semibold text-ink">{r.value}</p>
+              <div className="space-y-4">
+                {booking.members.map((m, i) => (
+                  <div key={i}>
+                    {booking.members.length > 1 && (
+                      <p className="mb-2 font-display text-sm font-extrabold text-red">
+                        {i === 0 ? c.booking.guest1 : c.booking.guest2}
+                      </p>
+                    )}
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label={p.rowService} value={m.service ?? "—"} />
+                      <Field
+                        label={c.booking.addons}
+                        value={m.addons.length ? m.addons.join("، ") : c.booking.none}
+                      />
+                      <Field label={c.booking.removal} value={m.removal ?? c.booking.none} />
+                      <Field label={c.booking.total} value={String(m.price)} />
+                    </div>
                   </div>
                 ))}
               </div>
 
-              {/* A booking needs someone to belong to — the static flow never
-                  asked who was booking. */}
+              <div className="mt-3">
+                <Field
+                  label={c.booking.appointment}
+                  value={
+                    booking.dateLabel && booking.timeLabel
+                      ? `${booking.dateLabel} - ${booking.timeLabel}`
+                      : c.booking.notSelected
+                  }
+                />
+              </div>
+
+              {/* A booking needs someone to belong to — the picker never asked. */}
               <div className="mt-4 space-y-3">
                 <label className="block text-start">
                   <span className="mb-1.5 block text-[12px] text-ink/55">{p.customerName}</span>
@@ -150,6 +211,25 @@ export default function PaymentPage() {
                   />
                 </label>
               </div>
+
+              {booking.total < booking.grossTotal && (
+                <div className="mt-4 space-y-1.5 rounded-[14px] bg-cream/60 p-4 text-[13px]">
+                  <div className="flex items-center justify-between text-ink/55">
+                    <span className="flex items-center gap-1">
+                      <Riyal className="h-3 w-3" />
+                      {booking.grossTotal}
+                    </span>
+                    <span>{p.subtotal}</span>
+                  </div>
+                  <div className="flex items-center justify-between font-semibold text-red">
+                    <span className="flex items-center gap-1">
+                      −<Riyal className="h-3 w-3" />
+                      {booking.grossTotal - booking.total}
+                    </span>
+                    <span>{p.groupDiscount}</span>
+                  </div>
+                </div>
+              )}
 
               <div className="mt-4 flex items-center justify-between rounded-[14px] bg-[#fbeaea] p-4">
                 <div className="flex items-center gap-1 font-display text-2xl font-extrabold text-red">
@@ -177,7 +257,8 @@ export default function PaymentPage() {
               >
                 {submitting ? p.confirming : p.confirmPay}
               </button>
-              <p className="mt-3 flex items-center justify-center gap-1.5 text-[12px] text-ink/45">
+              <p className="mt-3 text-center text-[11px] text-ink/40">{p.payFirstNote}</p>
+              <p className="mt-2 flex items-center justify-center gap-1.5 text-[12px] text-ink/45">
                 <Lock className="h-3.5 w-3.5" />
                 {p.secure}
               </p>
@@ -188,10 +269,10 @@ export default function PaymentPage() {
 
       <SiteFooter />
 
-      {code && (
+      {tickets && (
         <SuccessModal
+          tickets={tickets}
           booking={booking}
-          code={code}
           method={method}
           onClose={() => router.push("/")}
         />
@@ -200,27 +281,28 @@ export default function PaymentPage() {
   );
 }
 
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[14px] border border-black/[0.05] p-4">
+      <p className="mb-1 text-[11px] text-ink/45">{label}</p>
+      <p className="text-sm font-semibold text-ink">{value}</p>
+    </div>
+  );
+}
+
 function SuccessModal({
+  tickets,
   booking,
-  code,
   method,
   onClose,
 }: {
+  tickets: Ticket[];
   booking: BookingSelection;
-  code: string;
   method: string;
   onClose: () => void;
 }) {
-  const { c } = useI18n();
+  const { c, lang } = useI18n();
   const p = c.payment;
-  const rows = [
-    { label: p.rowService, value: booking.service ?? "—" },
-    { label: p.rowAddons, value: booking.addons.length ? booking.addons.join("، ") : c.booking.none },
-    { label: p.rowRemoval, value: booking.removal ?? c.booking.none },
-    { label: p.rowDate, value: booking.dateLabel ?? "—" },
-    { label: p.rowTime, value: booking.timeLabel ?? "—" },
-    { label: p.rowMethod, value: method },
-  ];
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm">
@@ -230,15 +312,41 @@ function SuccessModal({
         <h3 className="font-display text-2xl font-extrabold text-ink">{p.successTitle}</h3>
         <p className="mx-auto mt-2 max-w-[320px] text-sm text-ink/55">{p.successSub}</p>
 
-        {/* The reference the salon will ask for on the phone. */}
-        <p className="mt-4 inline-block rounded-full bg-[#f6f6f6] px-5 py-2 font-display text-lg font-extrabold tracking-wider text-red" dir="ltr">
-          {code}
-        </p>
+        {/* The number the salon calls out, and the chair it belongs to. One block
+            per guest — a pair gets consecutive numbers on different chairs. */}
+        <div className="mt-6 space-y-3">
+          {tickets.map((t) => (
+            <div key={t.code} className="rounded-[18px] bg-[#fbeaea] p-5">
+              <p className="text-[11px] uppercase tracking-wider text-red/60">{p.ticketLabel}</p>
+              <p className="font-display text-4xl font-extrabold tracking-wider text-red" dir="ltr">
+                {t.ticketNo}
+              </p>
+              <div className="mt-3 flex items-center justify-center gap-4 text-[13px]">
+                <span className="text-ink/55">
+                  {p.stationLabel}{" "}
+                  <span className="font-bold text-ink" dir="ltr">
+                    {t.stationLabel ?? "—"}
+                  </span>
+                </span>
+                {t.serviceName && (
+                  <span className="font-semibold text-ink">{t.serviceName[lang]}</span>
+                )}
+              </div>
+              <p className="mt-2 text-[11px] text-ink/40" dir="ltr">
+                {p.reference}: {t.code}
+              </p>
+            </div>
+          ))}
+        </div>
 
         <div className="mt-6 rounded-[16px] bg-[#f6f6f6] p-5 text-start">
           <p className="mb-3 font-display text-base font-extrabold text-red">{p.detailsTitle}</p>
           <div className="divide-y divide-black/[0.06]">
-            {rows.map((r) => (
+            {[
+              { label: p.rowDate, value: booking.dateLabel ?? "—" },
+              { label: p.rowTime, value: booking.timeLabel ?? "—" },
+              { label: p.rowMethod, value: method },
+            ].map((r) => (
               <div key={r.label} className="flex items-center justify-between py-2.5">
                 <span className="text-[13px] text-ink/50">{r.label}</span>
                 <span className="text-[13px] font-semibold text-ink">{r.value}</span>

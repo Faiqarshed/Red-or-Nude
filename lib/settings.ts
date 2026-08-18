@@ -9,6 +9,10 @@ export const SETTING_DEFAULTS = {
   booking_lead_time_min: 60,
   currency: "SAR",
   timezone: "Asia/Riyadh",
+  /** How long an unpaid web booking holds its chair before it's swept. */
+  booking_hold_min: 15,
+  /** Discount for booking two guests together, off the combined bill. */
+  group_discount_percent: 10,
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
