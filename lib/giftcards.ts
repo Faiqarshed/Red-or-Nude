@@ -30,6 +30,7 @@ export type IssueGiftCardInput = {
   buyerEmail?: string | null;
   recipientName?: string | null;
   recipientEmail?: string | null;
+  recipientPhone?: string | null;
   message?: string | null;
   /** Months until expiry; null keeps the card open-ended. */
   expiresInMonths?: number | null;
@@ -37,7 +38,7 @@ export type IssueGiftCardInput = {
 };
 
 export type IssueResult =
-  | { ok: true; id: string; code: string }
+  | { ok: true; id: string; code: string; expiresAt: Date | null }
   | { ok: false; error: "invalid-amount" | "failed" };
 
 export async function issueGiftCard(input: IssueGiftCardInput): Promise<IssueResult> {
@@ -68,6 +69,7 @@ export async function issueGiftCard(input: IssueGiftCardInput): Promise<IssueRes
             buyerEmail: input.buyerEmail ?? null,
             recipientName: input.recipientName ?? null,
             recipientEmail: input.recipientEmail ?? null,
+            recipientPhone: input.recipientPhone ?? null,
             message: input.message ?? null,
             expiresAt,
           })
@@ -84,7 +86,7 @@ export async function issueGiftCard(input: IssueGiftCardInput): Promise<IssueRes
         return card;
       });
 
-      return { ok: true, id: row.id, code: row.code };
+      return { ok: true, id: row.id, code: row.code, expiresAt };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes("gift_cards_code_unique")) continue;

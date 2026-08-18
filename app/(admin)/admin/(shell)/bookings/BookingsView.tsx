@@ -33,6 +33,8 @@ export type BookingRow = {
   notes: string | null;
   customerName: string | null;
   customerPhone: string | null;
+  /** The booking this one refills, if any — shown so staff know why it's cheaper. */
+  refillOfCode?: string | null;
 };
 
 export type CatalogOption = {

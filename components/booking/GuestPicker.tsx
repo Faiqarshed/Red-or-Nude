@@ -4,8 +4,9 @@
 // choice and the seasonal design pop-up.
 //
 // Extracted from BookingView so /booking renders it once and /booking/group
-// renders it twice. Everything that differs between one guest and two lives in
-// the parent — the branch, the time slot and the bill are shared, this is not.
+// renders it inside each guest's accordion panel. Everything that differs
+// between one guest and two lives in the parent — the branch, the time slot,
+// the bill and the "Guest 1" heading are all its business, not this one's.
 //
 // Controlled: the parent owns the state so it can price the whole bill and clear
 // a chosen slot when a change makes it no longer fit.
@@ -125,17 +126,11 @@ export default function GuestPicker({
   catalog,
   value,
   onChange,
-  label,
-  compact = false,
 }: {
   catalog: PublicCatalog;
   value: GuestState;
   /** Any change here can alter duration, so the parent re-checks the chosen slot. */
   onChange: (next: GuestState) => void;
-  /** "Guest 1" heading — omitted on the single-guest page. */
-  label?: string;
-  /** Tighter grids, for two pickers side by side. */
-  compact?: boolean;
 }) {
   const { c, lang } = useI18n();
   const b = c.booking;
@@ -164,20 +159,13 @@ export default function GuestPicker({
 
   return (
     <section className="space-y-8">
-      {label && (
-        <div className="flex items-center gap-3">
-          <span className="rounded-full bg-red px-4 py-1.5 font-display text-sm font-extrabold text-white">
-            {label}
-          </span>
-          <span className="h-px flex-1 bg-black/[0.07]" />
-        </div>
-      )}
-
       <div>
         <h2 className="mb-5 text-start font-display text-2xl font-extrabold text-ink">
           {b.selectService}
         </h2>
-        <div className={`grid gap-5 ${compact ? "grid-cols-2" : "grid-cols-2 md:grid-cols-4"}`}>
+        {/* Four across on desktop whether or not this is the two-guest page —
+            the service grid should look the same everywhere it appears. */}
+        <div className="grid grid-cols-2 gap-5 md:grid-cols-4">
           {services.map((s, i) => (
             <Card
               key={s.id}
@@ -197,7 +185,7 @@ export default function GuestPicker({
         <h2 className="mb-5 text-start font-display text-2xl font-extrabold text-ink">
           {b.addonsTitle}
         </h2>
-        <div className={`grid gap-5 ${compact ? "grid-cols-2" : "grid-cols-2 md:grid-cols-5"}`}>
+        <div className="grid grid-cols-2 gap-5 md:grid-cols-4">
           {addons.map((a, i) => (
             <Card
               key={a.id}

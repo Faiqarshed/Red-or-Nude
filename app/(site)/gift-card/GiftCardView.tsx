@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import { Riyal } from "@/components/icons";
 import { GiftCardArt } from "@/components/gift/GiftCardArt";
+import PhoneField from "@/components/PhoneField";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
 import { saveGiftSelection } from "@/lib/giftcard-selection";
@@ -30,6 +31,7 @@ function DetailField({
   dir,
   value,
   onChange,
+  maxLength,
 }: {
   label: string;
   placeholder: string;
@@ -37,6 +39,7 @@ function DetailField({
   dir: "rtl" | "ltr";
   value?: string;
   onChange?: (v: string) => void;
+  maxLength?: number;
 }) {
   const ltr = type === "email";
   return (
@@ -48,6 +51,7 @@ function DetailField({
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange?.(e.target.value)}
+        maxLength={maxLength}
         className={`w-full rounded-[12px] border border-black/[0.06] bg-white px-4 py-3.5 text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40 ${
           ltr ? "text-left" : "text-start"
         }`}
@@ -56,7 +60,12 @@ function DetailField({
   );
 }
 
+const AMOUNT_MIN = 50;
+const AMOUNT_MAX = 2000;
+const MESSAGE_MAX = 500;
+
 export default function GiftCardView({ options }: { options: PublicGiftOptions }) {
+  const router = useRouter();
   const { c, dir, lang } = useI18n();
   const g = c.gift;
   const { values, designs } = options;
@@ -64,8 +73,14 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
   const [design, setDesign] = useState(0);
   const [recipientName, setRecipientName] = useState("");
   const [recipientEmail, setRecipientEmail] = useState("");
+  const [recipientPhone, setRecipientPhone] = useState("");
   const [senderName, setSenderName] = useState("");
   const [message, setMessage] = useState("");
+  /** Raw text of the custom-amount box; `value` holds the amount actually used. */
+  const [custom, setCustom] = useState("");
+
+  // A card nobody can be sent is not a purchase — one contact route is the floor.
+  const deliverable = Boolean(recipientPhone.trim() || recipientEmail.trim());
 
   return (
     <main className="min-h-screen bg-cream">
@@ -81,7 +96,10 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                 <button
                   key={v}
                   type="button"
-                  onClick={() => setValue(v)}
+                  onClick={() => {
+                    setValue(v);
+                    setCustom("");
+                  }}
                   className={`flex items-center justify-center gap-1 rounded-[12px] border py-3 font-display font-bold transition-colors ${
                     value === v
                       ? "border-red bg-red text-white"
@@ -96,8 +114,22 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
             <p className="mt-5 text-start text-[13px] text-ink/55">{g.customHint}</p>
             <input
               type="number"
+              inputMode="numeric"
+              min={AMOUNT_MIN}
+              max={AMOUNT_MAX}
+              step={10}
               placeholder={g.customPlaceholder}
-              onChange={(e) => setValue(Number(e.target.value) || value)}
+              value={custom}
+              onChange={(e) => setCustom(e.target.value.replace(/\D/g, "").slice(0, 4))}
+              // Clamped on blur, not on every keystroke: clamping as they type
+              // makes "5" jump to "50" before they can finish typing "500".
+              onBlur={() => {
+                const n = Number(custom);
+                if (!custom) return;
+                const clamped = Math.min(Math.max(n, AMOUNT_MIN), AMOUNT_MAX);
+                setCustom(String(clamped));
+                setValue(clamped);
+              }}
               className="mt-2 w-full rounded-[12px] border border-black/[0.06] bg-white px-4 py-3.5 text-start text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40"
             />
           </Panel>
@@ -135,6 +167,7 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                 dir={dir}
                 value={recipientEmail}
                 onChange={setRecipientEmail}
+                maxLength={200}
               />
               <DetailField
                 label={g.recipientName}
@@ -142,6 +175,7 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                 dir={dir}
                 value={recipientName}
                 onChange={setRecipientName}
+                maxLength={120}
               />
               <DetailField
                 label={g.senderName}
@@ -149,18 +183,31 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                 dir={dir}
                 value={senderName}
                 onChange={setSenderName}
+                maxLength={120}
               />
-              <DetailField label={g.sendDate} placeholder="2026-07-02" type="date" dir={dir} />
+              {/* Optional here — the card can go by email instead — so it only
+                  complains once something has actually been typed. */}
+              <PhoneField
+                label={g.recipientPhone}
+                value={recipientPhone}
+                onChange={setRecipientPhone}
+                showError={recipientPhone.length > 0}
+              />
               <label className="block text-start md:col-span-2">
                 <span className="mb-2 block text-[13px] text-ink/55">{g.message}</span>
                 <textarea
                   rows={2}
                   value={message}
-                  onChange={(e) => setMessage(e.target.value)}
+                  onChange={(e) => setMessage(e.target.value.slice(0, MESSAGE_MAX))}
+                  maxLength={MESSAGE_MAX}
                   placeholder={g.messagePlaceholder}
                   className="w-full resize-none rounded-[12px] border border-black/[0.06] bg-white px-4 py-3 text-start text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40"
                 />
+                <span className="mt-1 block text-end text-[11px] text-ink/40" dir="ltr">
+                  {message.length} / {MESSAGE_MAX}
+                </span>
               </label>
+              <p className="text-start text-[12px] text-ink/45 md:col-span-2">{g.contactHint}</p>
             </div>
           </Panel>
         </section>
@@ -186,9 +233,10 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
             <input type="checkbox" defaultChecked className="h-4 w-4 accent-red" />
           </label>
 
-          <Link
-            href="/gift-card/payment"
-            onClick={() =>
+          <button
+            type="button"
+            disabled={!deliverable}
+            onClick={() => {
               saveGiftSelection({
                 amountSar: value,
                 designId: designs[design]?.id ?? null,
@@ -196,14 +244,20 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                 designImg: designs[design]?.img ?? null,
                 recipientName,
                 recipientEmail,
+                recipientPhone,
                 senderName,
                 message,
-              })
-            }
-            className="mt-4 block w-full rounded-[12px] bg-red-grad py-3.5 text-center text-sm font-bold text-white transition-opacity hover:opacity-90"
+              });
+              router.push("/gift-card/payment");
+            }}
+            className={`mt-4 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
+              deliverable
+                ? "bg-red-grad text-white hover:opacity-90"
+                : "cursor-not-allowed bg-black/[0.06] text-ink/40"
+            }`}
           >
             {g.continue}
-          </Link>
+          </button>
         </aside>
       </div>
 

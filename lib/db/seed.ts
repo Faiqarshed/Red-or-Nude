@@ -15,10 +15,13 @@ config({ path: ".env.local" });
 // here now: once the database is the source of truth, this is import fixture
 // data, not application code.
 const SEED_SERVICES = [
-  { name: "Acrylic", price: 280, img: "/service-nails.webp", durationMin: 90 },
-  { name: "Classic Manicure", price: 90, img: "/service-nails.webp", durationMin: 45 },
-  { name: "BIAB", price: 220, img: "/service-nails.webp", durationMin: 75 },
-  { name: "Gel Polish", price: 150, img: "/service-nails.webp", durationMin: 60 },
+  { name: "Acrylic", price: 280, img: "/service-nails.webp", durationMin: 90, refillDays: 30 },
+  { name: "Classic Manicure", price: 90, img: "/service-nails.webp", durationMin: 45, refillDays: 0 },
+  { name: "BIAB", price: 220, img: "/service-nails.webp", durationMin: 75, refillDays: 30 },
+  { name: "Gel Polish", price: 150, img: "/service-nails.webp", durationMin: 60, refillDays: 30 },
+  // Lashes carry a shorter window than nails — the reason refillDays is per
+  // service rather than one salon-wide number.
+  { name: "Lash Extensions", price: 350, img: "/service-1.webp", durationMin: 120, refillDays: 14 },
 ];
 
 const SEED_ADDONS = [
@@ -219,6 +222,7 @@ async function main() {
       description: { ar: SEED_SERVICE_DESC, en: SEED_SERVICE_DESC },
       priceHalalas: sarToHalalas(svc.price),
       durationMin: svc.durationMin,
+      refillDays: svc.refillDays,
       image: svc.img,
       sort: i,
     })),
@@ -263,7 +267,7 @@ async function main() {
 
   console.log("→ gift cards");
   await db.insert(s.giftCardValues).values(
-    [600, 500, 400, 300, 250, 150].map((amount, i) => ({
+    [100, 250, 400, 500].map((amount, i) => ({
       amountHalalas: sarToHalalas(amount),
       sort: i,
     })),
@@ -277,6 +281,10 @@ async function main() {
       image: "/gift/design-anniversary.webp",
       sort: 3,
     },
+    // The occasion is the card design — no separate occasion column, because the
+    // artwork and the occasion are the same choice from the customer's side.
+    { name: { ar: "زواج", en: "Marriage" }, image: "/gift/design-congrats.webp", sort: 4 },
+    { name: { ar: "تخرج", en: "Graduation" }, image: "/gift/design-congrats.webp", sort: 5 },
   ]);
 
   console.log("✓ seed complete");

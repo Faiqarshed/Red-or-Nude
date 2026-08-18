@@ -30,9 +30,15 @@ const body = z.object({
     name: z.string().trim().max(120).optional(),
     // Saudi mobile numbers, with or without country code.
     phone: z.string().trim().regex(/^(\+?966|0)?5\d{8}$/, "invalid-phone"),
-    email: z.string().email().optional().or(z.literal("")),
+    // Required on the web, unlike a walk-in, for two independent reasons: it
+    // carries the booking reference that is the only key to /my-bookings, and
+    // it is where the invoice is sent the moment the charge clears. Walk-ins go
+    // through createBookings directly and may still have no address.
+    email: z.string().trim().email("invalid-email").max(200),
     lang: z.enum(["ar", "en"]).optional(),
   }),
+  /** Set by the refill button in the customer's booking history. */
+  refillOfCode: z.string().trim().max(20).nullable().optional(),
   notes: z.string().max(500).optional(),
 });
 
@@ -62,8 +68,15 @@ export async function POST(request: Request) {
 
   if (!result.ok) {
     // 409 for a lost race: the UI should refresh the slots and let the customer
-    // pick again, rather than showing a generic failure.
-    const status = result.error === "slot-taken" ? 409 : result.error === "blocked" ? 403 : 400;
+    // pick again, rather than showing a generic failure. A lapsed refill window
+    // is the same shape of problem — what they were looking at is no longer on
+    // offer — so it gets 409 too.
+    const status =
+      result.error === "slot-taken" || result.error === "refill-expired"
+        ? 409
+        : result.error === "blocked"
+          ? 403
+          : 400;
     return NextResponse.json({ error: result.error }, { status });
   }
 

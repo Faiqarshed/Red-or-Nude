@@ -45,6 +45,8 @@ const itemSchema = z.object({
   // Entered in riyals; stored in halalas.
   priceSar: z.coerce.number().min(0).max(100_000),
   durationMin: z.coerce.number().int().min(0).max(600),
+  // Services only. 0 = this service has no follow-up refill.
+  refillDays: z.coerce.number().int().min(0).max(365).optional(),
   image: z.string().max(400).nullable().optional(),
   isSeasonal: z.boolean().optional(),
   active: z.boolean(),
@@ -83,7 +85,12 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
 
   const values =
     data.kind === "service"
-      ? { ...common, description: data.description ?? null, image: data.image ?? null }
+      ? {
+          ...common,
+          description: data.description ?? null,
+          image: data.image ?? null,
+          refillDays: data.refillDays ?? 0,
+        }
       : data.kind === "addon"
         ? { ...common, image: data.image ?? null, isSeasonal: data.isSeasonal ?? false }
         : common;

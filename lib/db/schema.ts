@@ -14,6 +14,7 @@ import {
   boolean,
   date,
   index,
+  type AnyPgColumn,
   integer,
   jsonb,
   pgEnum,
@@ -181,6 +182,15 @@ export const services = pgTable("services", {
   // New vs. the static site, which showed a flat "15 MIN" for everything.
   // Real durations are what make the availability engine work.
   durationMin: integer("duration_min").notNull().default(60),
+  /**
+   * How many days after the appointment this service can be refilled: 30 for
+   * nails, 14 for lashes, 0 for services that have no refill at all.
+   *
+   * A column rather than a service category, because "does it have a refill and
+   * for how long" is the only question anyone asks — a taxonomy would be a
+   * second thing to keep in sync for no extra answer.
+   */
+  refillDays: integer("refill_days").notNull().default(0),
   image: text("image"),
   sort: integer("sort").notNull().default(0),
   active: boolean("active").notNull().default(true),
@@ -308,6 +318,14 @@ export const bookings = pgTable(
     vatHalalas: integer("vat_halalas").notNull().default(0),
     totalHalalas: integer("total_halalas").notNull().default(0),
 
+    /**
+     * Set when this booking is the follow-up refill of an earlier one. Its
+     * presence is also how we know that booking's window has been used up.
+     */
+    refillOfBookingId: uuid("refill_of_booking_id").references((): AnyPgColumn => bookings.id, {
+      onDelete: "set null",
+    }),
+
     promoCodeId: uuid("promo_code_id"),
     notes: text("notes"),
     cancelReason: text("cancel_reason"),
@@ -325,6 +343,12 @@ export const bookings = pgTable(
     // chair-and-time for everyone else.
     slotUnique: uniqueIndex("bookings_station_slot_unique")
       .on(t.stationId, t.startsAt)
+      .where(sql`${t.status} not in ('cancelled', 'no_show')`),
+    // One refill per booking, decided by the database rather than by a read
+    // that two concurrent requests could both pass. Partial for the same reason
+    // as the slot index: a cancelled refill gives the window back.
+    refillOnce: uniqueIndex("bookings_refill_of_unique")
+      .on(t.refillOfBookingId)
       .where(sql`${t.status} not in ('cancelled', 'no_show')`),
     byBranchTime: index("bookings_branch_time_idx").on(t.branchId, t.startsAt),
     byStatus: index("bookings_status_idx").on(t.status),
@@ -424,6 +448,8 @@ export const giftCards = pgTable(
     buyerEmail: text("buyer_email"),
     recipientName: text("recipient_name"),
     recipientEmail: text("recipient_email"),
+    // The card is sent over WhatsApp, so a phone matters as much as an email.
+    recipientPhone: text("recipient_phone"),
     message: text("message"),
     status: giftCardStatus("status").notNull().default("active"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),

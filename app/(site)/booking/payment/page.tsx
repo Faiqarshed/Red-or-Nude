@@ -6,9 +6,11 @@ import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import PaymentMethods from "@/components/PaymentMethods";
+import PhoneField from "@/components/PhoneField";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { clearBooking, emptySelection, loadBooking, type BookingSelection } from "@/lib/booking";
+import { isValidSaudiMobile, toStoredPhone } from "@/lib/phone";
 
 // Figma: Desktop-2 payment step (276:1902 / 276:6624) + success modal (276:6765).
 //
@@ -43,12 +45,16 @@ export default function PaymentPage() {
   const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tickets, setTickets] = useState<Ticket[] | null>(null);
   const [method, setMethod] = useState(p.cardTitle);
   /** Set once the hold exists, so a retry after a decline doesn't re-book. */
   const [heldCode, setHeldCode] = useState<string | null>(null);
+  /** Card fields live inside PaymentMethods; this mirrors their validity up. */
+  const [cardValid, setCardValid] = useState(false);
+  const [phoneTouched, setPhoneTouched] = useState(false);
 
   useEffect(() => {
     const saved = loadBooking();
@@ -59,6 +65,14 @@ export default function PaymentPage() {
   // A direct visit with nothing selected has nothing to pay for.
   const hasSelection = booking.members.length > 0 && booking.startsAt !== null;
 
+  // The invoice is emailed the moment the charge clears, so an address is as
+  // required as the phone number. Kept loose on purpose — the server's zod
+  // schema is the real check, and a strict regex here only ever rejects
+  // addresses that are actually valid.
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const phoneOk = isValidSaudiMobile(phone);
+  const canSubmit = phoneOk && emailOk && cardValid;
+
   /** Which enum value the API wants for the label the customer clicked. */
   const methodCode = (): "card" | "mada" | "stc" | "apple" => {
     const i = METHOD_KEYS.findIndex((k) => p[k] === method);
@@ -67,6 +81,12 @@ export default function PaymentPage() {
 
   const confirm = async () => {
     if (!hasSelection || submitting) return;
+    // PaymentMethods has its own confirm button, which doesn't know about these
+    // fields — so the guard lives here rather than only on the disabled prop.
+    if (!emailOk) {
+      setError(p.invalidEmail);
+      return;
+    }
     setError(null);
     setSubmitting(true);
 
@@ -86,16 +106,26 @@ export default function PaymentPage() {
               removalTypeId: m.removalTypeId,
               designId: m.designId,
             })),
-            customer: { name: name.trim() || undefined, phone: phone.trim(), lang },
+            customer: {
+              name: name.trim() || undefined,
+              phone: toStoredPhone(phone),
+              email: email.trim(),
+              lang,
+            },
+            refillOfCode: booking.refillOf ?? null,
           }),
         });
 
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          // 409 means someone else took the chair while this customer was typing.
-          if (res.status === 409) setError(p.slotTaken);
+          // 409 means the thing they were looking at is gone: either someone
+          // took the chair while they typed, or the refill window just lapsed.
+          if (data.error === "refill-expired") setError(p.refillExpired);
+          else if (res.status === 409) setError(p.slotTaken);
           else if (data.error === "invalid" && data.issues?.includes("customer.phone")) {
             setError(p.invalidPhone);
+          } else if (data.error === "invalid" && data.issues?.includes("customer.email")) {
+            setError(p.invalidEmail);
           } else setError(p.bookingFailed);
           return;
         }
@@ -137,7 +167,11 @@ export default function PaymentPage() {
       <SiteHeader />
 
       <div className="mx-auto grid max-w-page gap-8 px-6 pb-24 pt-[120px] md:px-12 lg:grid-cols-[1fr_540px] lg:px-16">
-        <PaymentMethods onConfirm={confirm} onMethodChange={setMethod} />
+        <PaymentMethods
+          onConfirm={confirm}
+          onMethodChange={setMethod}
+          onValidityChange={setCardValid}
+        />
 
         {/* Summary */}
         <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)]">
@@ -196,19 +230,36 @@ export default function PaymentPage() {
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
+                    maxLength={120}
+                    autoComplete="name"
                     className="w-full rounded-[12px] border border-black/[0.08] px-4 py-3 text-sm text-ink outline-none focus:border-red/40"
                   />
                 </label>
+                <PhoneField
+                  label={p.customerPhone}
+                  value={phone}
+                  onChange={setPhone}
+                  required
+                  showError={phoneTouched}
+                  onBlur={() => setPhoneTouched(true)}
+                />
+                {/* Required twice over: it carries the booking reference that
+                    is the only key to /my-bookings, and it is where the invoice
+                    goes the instant the charge clears. */}
                 <label className="block text-start">
-                  <span className="mb-1.5 block text-[12px] text-ink/55">{p.customerPhone} *</span>
+                  <span className="mb-1.5 block text-[12px] text-ink/55">{p.customerEmail} *</span>
                   <input
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     dir="ltr"
-                    inputMode="tel"
-                    placeholder="05XXXXXXXX"
+                    type="email"
+                    inputMode="email"
+                    autoComplete="email"
+                    maxLength={200}
+                    placeholder="sarah@example.com"
                     className="w-full rounded-[12px] border border-black/[0.08] px-4 py-3 text-left text-sm text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
                   />
+                  <span className="mt-1.5 block text-[11px] text-ink/40">{p.emailNote}</span>
                 </label>
               </div>
 
@@ -248,9 +299,9 @@ export default function PaymentPage() {
               <button
                 type="button"
                 onClick={confirm}
-                disabled={submitting || !phone.trim()}
+                disabled={submitting || !canSubmit}
                 className={`mt-6 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
-                  submitting || !phone.trim()
+                  submitting || !canSubmit
                     ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
                     : "bg-red-grad text-white hover:opacity-90"
                 }`}
@@ -377,6 +428,16 @@ function SuccessModal({
             {p.close}
           </button>
         </div>
+
+        {/* The reference above is the customer's only way back in, so say so
+            here rather than relying on the email having arrived yet. */}
+        <p className="mt-4 text-[11px] text-ink/45">{p.keepReference}</p>
+        <Link
+          href="/my-bookings"
+          className="mt-1 inline-block text-[12px] font-semibold text-red underline underline-offset-4"
+        >
+          {p.myBookings}
+        </Link>
       </div>
     </div>
   );

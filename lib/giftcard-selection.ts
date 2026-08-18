@@ -11,6 +11,8 @@ export type GiftSelection = {
   designImg: string | null;
   recipientName: string;
   recipientEmail: string;
+  /** WhatsApp number the card is sent to. Either this or the email is required. */
+  recipientPhone: string;
   senderName: string;
   message: string;
 };

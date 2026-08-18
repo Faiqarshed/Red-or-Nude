@@ -20,8 +20,9 @@ Three things the client asked for:
 3. **Group booking for two.** Two guests, each choosing their own services, on one
    shared appointment time, on one bill, 10% cheaper. Two tickets, two chairs.
 
-**Not** in this phase: customer accounts, invoice history, email/SMS, a real
-payment gateway, and any admin panel screens.
+**Not** in this phase: customer accounts, invoice history, SMS, a real payment
+gateway, and any admin panel screens. (Invoice *email* landed afterwards —
+`docs/INVOICE-EMAIL.md`.)
 
 ---
 
@@ -83,6 +84,7 @@ name, a group-level promo).
 | `components/booking/Summary.tsx` | The bill panel, one guest or two. |
 | `app/(site)/booking/group/` | The two-guest page. |
 | `scripts/check-booking.ts` | `npm run check` — all the invariants. |
+| `lib/invoice/` + `lib/email/` | The invoice emailed after a successful charge. See `docs/INVOICE-EMAIL.md`. |
 
 ### Database
 

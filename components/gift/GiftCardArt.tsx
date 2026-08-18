@@ -11,13 +11,15 @@ import type { Localized } from "@/lib/localized";
 // and recipient name change per order, so only those are rendered as real
 // text on top here.
 
-type Kind = "red" | "congrats" | "birthday" | "anniversary";
+type Kind = "red" | "congrats" | "birthday" | "anniversary" | "marriage" | "graduation";
 
 const THEME: Record<Kind, { textColor: string; subColor: string }> = {
   red: { textColor: "#ffffff", subColor: "#ffffff" },
   congrats: { textColor: "#3d3d3d", subColor: "#767676" },
   birthday: { textColor: "#4f6b78", subColor: "#82a0ac" },
   anniversary: { textColor: "#8a7050", subColor: "#ab9678" },
+  marriage: { textColor: "#8a5f6d", subColor: "#b08b96" },
+  graduation: { textColor: "#3f4f6b", subColor: "#7d8ba6" },
 };
 
 function kindOf(name: Localized | null | undefined): Kind {
@@ -25,6 +27,8 @@ function kindOf(name: Localized | null | undefined): Kind {
   if (en.includes("congrat")) return "congrats";
   if (en.includes("birthday")) return "birthday";
   if (en.includes("anniversary")) return "anniversary";
+  if (en.includes("marriage") || en.includes("wedding")) return "marriage";
+  if (en.includes("graduat")) return "graduation";
   return "red";
 }
 

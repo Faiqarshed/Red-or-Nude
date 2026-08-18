@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { SearchIcon, HeartIcon, CartIcon } from "./icons";
 import { useI18n } from "@/lib/i18n";
 
 export default function SiteHeader() {
@@ -46,7 +45,10 @@ export default function SiteHeader() {
           ))}
         </nav>
 
-        {/* Desktop actions (always right). Toggle sits at the outer edge. */}
+        {/* Desktop actions (always right).
+            Cart, wishlist and search were buttons with no handler — nothing to
+            add to, nothing to favourite, nothing to search. Removed until there
+            is; the icons are still in components/icons.tsx. */}
         <div dir="rtl" className="hidden items-center gap-5 lg:flex lg:gap-7">
           <button
             dir="ltr"
@@ -54,15 +56,6 @@ export default function SiteHeader() {
             className="rounded-full border-[1.5px] border-red px-6 py-1.5 font-serif text-lg italic text-red transition-colors hover:bg-red hover:text-white"
           >
             {c.header.otherLang}
-          </button>
-          <button aria-label={c.header.cart} className="text-red transition-opacity hover:opacity-70">
-            <CartIcon />
-          </button>
-          <button aria-label={c.header.wishlist} className="text-red transition-opacity hover:opacity-70">
-            <HeartIcon />
-          </button>
-          <button aria-label={c.header.search} className="text-red transition-opacity hover:opacity-70">
-            <SearchIcon />
           </button>
         </div>
 
@@ -94,15 +87,6 @@ export default function SiteHeader() {
             ))}
           </nav>
           <div className="mt-6 flex items-center justify-end gap-6 border-t border-red/10 pt-5 text-red">
-            <button aria-label={c.header.search} className="hover:opacity-70">
-              <SearchIcon />
-            </button>
-            <button aria-label={c.header.wishlist} className="hover:opacity-70">
-              <HeartIcon />
-            </button>
-            <button aria-label={c.header.cart} className="hover:opacity-70">
-              <CartIcon />
-            </button>
             <button
               dir="ltr"
               onClick={toggle}

@@ -1,10 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import {
+  CARD_NUMBER_MAX,
+  cvvLength,
+  formatCardNumber,
+  formatExpiry,
+  validateCard,
+  type CardErrors,
+  type FieldError,
+} from "@/lib/card";
 
 // Shared "Select Payment Method" panel (card form + mada / STC Pay / Apple Pay).
 // Used by the booking and gift-card payment steps.
+//
+// The card fields were previously uncontrolled and decorative — nothing read
+// them and Confirm fired whatever was typed. They are now validated against
+// lib/card.ts, which holds the rules so they can be tested and can't drift.
+//
+// Card data still never leaves the browser. When a real gateway lands it will
+// collect the PAN in its own hosted iframe, which is what keeps this origin out
+// of PCI scope; these rules only catch typos before the customer is told
+// "declined". `onValidityChange` lets a page disable its own confirm button too,
+// since both this panel and the summary panel can start a payment.
 type MethodId = "card" | "mada" | "stc" | "apple";
 
 function Radio({ active }: { active: boolean }) {
@@ -38,11 +57,26 @@ function Field({
   placeholder,
   ltr = false,
   dir,
+  value,
+  onChange,
+  onBlur,
+  error,
+  inputMode,
+  maxLength,
+  autoComplete,
 }: {
   label: string;
   placeholder: string;
   ltr?: boolean;
   dir: "rtl" | "ltr";
+  value: string;
+  onChange: (v: string) => void;
+  onBlur?: () => void;
+  /** Shown only once the field has been touched, so typing isn't nagged at. */
+  error?: string | null;
+  inputMode?: "numeric" | "text";
+  maxLength?: number;
+  autoComplete?: string;
 }) {
   return (
     <label className="block">
@@ -50,10 +84,18 @@ function Field({
       <input
         dir={ltr ? "ltr" : dir}
         placeholder={placeholder}
-        className={`w-full rounded-[12px] border border-black/[0.06] bg-white px-4 py-3.5 text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40 ${
-          ltr ? "text-left" : "text-start"
-        }`}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
+        inputMode={inputMode}
+        maxLength={maxLength}
+        autoComplete={autoComplete}
+        aria-invalid={error ? true : undefined}
+        className={`w-full rounded-[12px] border bg-white px-4 py-3.5 text-sm text-ink outline-none placeholder:text-ink/35 ${
+          error ? "border-red/60 focus:border-red" : "border-black/[0.06] focus:border-red/40"
+        } ${ltr ? "text-left" : "text-start"}`}
       />
+      {error && <span className="mt-1.5 block text-[11px] text-red">{error}</span>}
     </label>
   );
 }
@@ -61,13 +103,70 @@ function Field({
 export default function PaymentMethods({
   onConfirm,
   onMethodChange,
+  onValidityChange,
 }: {
   onConfirm: () => void;
   onMethodChange?: (label: string) => void;
+  /** Fires whenever the panel becomes payable, so a page can gate its own button. */
+  onValidityChange?: (valid: boolean) => void;
 }) {
   const { c, dir } = useI18n();
   const p = c.payment;
   const [method, setMethod] = useState<MethodId>("card");
+
+  const [card, setCard] = useState({ number: "", name: "", expiry: "", cvv: "" });
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+
+  const errors: CardErrors = useMemo(() => validateCard(card), [card]);
+
+  // The other three methods hand off to their own app or sheet — there is
+  // nothing on this page for us to validate.
+  const payable = method !== "card" || Object.keys(errors).length === 0;
+
+  useEffect(() => {
+    onValidityChange?.(payable);
+  }, [payable, onValidityChange]);
+
+  const messageFor = (key: keyof CardErrors): string | null => {
+    if (!touched[key]) return null;
+    const code: FieldError | undefined = errors[key];
+    if (!code) return null;
+
+    const e = p.cardErrors;
+    switch (code) {
+      case "required":
+        return e.required;
+      case "card-length":
+        return e.cardLength;
+      case "card-checksum":
+        return e.cardChecksum;
+      case "expiry-format":
+        return e.expiryFormat;
+      case "expiry-month":
+        return e.expiryMonth;
+      case "expiry-past":
+        return e.expiryPast;
+      case "expiry-far":
+        return e.expiryFar;
+      case "cvv-length":
+        return e.cvvLength.replace("{n}", String(cvvLength(card.number)));
+      case "name-short":
+        return e.nameShort;
+    }
+  };
+
+  const set = (key: keyof typeof card, value: string) =>
+    setCard((prev) => ({ ...prev, [key]: value }));
+  const blur = (key: string) => () => setTouched((prev) => ({ ...prev, [key]: true }));
+
+  /** Mark everything touched so a click on a disabled-looking form explains itself. */
+  const attemptConfirm = () => {
+    if (!payable) {
+      setTouched({ number: true, name: true, expiry: true, cvv: true });
+      return;
+    }
+    onConfirm();
+  };
 
   const labels: Record<MethodId, string> = {
     card: p.cardTitle,
@@ -114,16 +213,70 @@ export default function PaymentMethods({
 
         {method === "card" && (
           <div className="mt-6 space-y-5">
-            <Field label={p.cardNumber} placeholder="1234 5678 9012 3456" ltr dir={dir} />
-            <Field label={p.cardName} placeholder={p.cardNamePlaceholder} dir={dir} />
+            <Field
+              label={p.cardNumber}
+              placeholder="1234 5678 9012 3456"
+              ltr
+              dir={dir}
+              value={card.number}
+              // Reformatted as they type, so the grouping follows the brand
+              // (Amex is 4-6-5) instead of fighting the caret.
+              onChange={(v) => set("number", formatCardNumber(v))}
+              onBlur={blur("number")}
+              error={messageFor("number")}
+              inputMode="numeric"
+              maxLength={CARD_NUMBER_MAX + 3}
+              autoComplete="cc-number"
+            />
+            <Field
+              label={p.cardName}
+              placeholder={p.cardNamePlaceholder}
+              dir={dir}
+              value={card.name}
+              onChange={(v) => set("name", v)}
+              onBlur={blur("name")}
+              error={messageFor("name")}
+              maxLength={120}
+              autoComplete="cc-name"
+            />
             <div className="grid grid-cols-2 gap-4">
-              <Field label={p.cvv} placeholder="123" ltr dir={dir} />
-              <Field label={p.expiry} placeholder="MM/YY" ltr dir={dir} />
+              <Field
+                label={p.cvv}
+                placeholder={cvvLength(card.number) === 4 ? "1234" : "123"}
+                ltr
+                dir={dir}
+                value={card.cvv}
+                // Digits only, and never more than the brand's code length.
+                onChange={(v) => set("cvv", v.replace(/\D/g, "").slice(0, cvvLength(card.number)))}
+                onBlur={blur("cvv")}
+                error={messageFor("cvv")}
+                inputMode="numeric"
+                maxLength={4}
+                autoComplete="cc-csc"
+              />
+              <Field
+                label={p.expiry}
+                placeholder="MM/YY"
+                ltr
+                dir={dir}
+                value={card.expiry}
+                onChange={(v) => set("expiry", formatExpiry(v))}
+                onBlur={blur("expiry")}
+                error={messageFor("expiry")}
+                inputMode="numeric"
+                maxLength={5}
+                autoComplete="cc-exp"
+              />
             </div>
             <button
               type="button"
-              onClick={onConfirm}
-              className="w-full rounded-[12px] bg-red-grad py-4 text-center text-sm font-bold text-white transition-opacity hover:opacity-90"
+              onClick={attemptConfirm}
+              aria-disabled={!payable}
+              className={`w-full rounded-[12px] py-4 text-center text-sm font-bold transition-opacity ${
+                payable
+                  ? "bg-red-grad text-white hover:opacity-90"
+                  : "cursor-not-allowed bg-black/[0.06] text-ink/40"
+              }`}
             >
               {p.confirm}
             </button>

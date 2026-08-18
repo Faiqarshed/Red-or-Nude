@@ -9,14 +9,22 @@ import { GiftCardArt } from "@/components/gift/GiftCardArt";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { clearGiftSelection, loadGiftSelection, type GiftSelection } from "@/lib/giftcard-selection";
+import { SAUDI_DIALLING_CODE, formatNational, toStoredPhone } from "@/lib/phone";
 
 // Figma: Desktop-2 gift-card payment step (325:7705) + success modal (325:8088).
 //
-// Confirming issues a real gift card via POST /api/gift-cards and returns the
-// redeemable code. Payment itself is still a stub.
+// Confirming charges the card and issues a real gift card via POST
+// /api/gift-cards, which returns the redeemable code. The gateway behind that
+// charge is still the stand-in driver (lib/payments/fake.ts).
+//
+// Delivery is the buyer's tap: the success modal opens WhatsApp with the message
+// ready. An automatic send happens too, but only once a provider is configured —
+// see lib/notify/.
+
+const METHOD_KEYS = ["cardTitle", "madaTitle", "stcTitle", "appleTitle"] as const;
 
 export default function GiftCardPaymentPage() {
-  const { c } = useI18n();
+  const { c, lang } = useI18n();
   const gp = c.giftPay;
   const p = c.payment;
   const [done, setDone] = useState(false);
@@ -25,12 +33,20 @@ export default function GiftCardPaymentPage() {
   const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  /** Card fields live inside PaymentMethods; this mirrors their validity up. */
+  const [cardValid, setCardValid] = useState(false);
 
   useEffect(() => {
     setSelection(loadGiftSelection());
   }, []);
 
   const total = selection?.amountSar ?? 0;
+
+  /** Which enum value the API wants for the label the customer clicked. */
+  const methodCode = (): "card" | "mada" | "stc" | "apple" => {
+    const i = METHOD_KEYS.findIndex((k) => p[k] === method);
+    return (["card", "mada", "stc", "apple"] as const)[i === -1 ? 0 : i];
+  };
 
   const confirm = async () => {
     if (!selection || submitting) return;
@@ -43,10 +59,15 @@ export default function GiftCardPaymentPage() {
         body: JSON.stringify({
           amountSar: selection.amountSar,
           designId: selection.designId,
+          method: methodCode(),
           buyerName: selection.senderName || undefined,
           recipientName: selection.recipientName || undefined,
           recipientEmail: selection.recipientEmail || undefined,
+          recipientPhone: selection.recipientPhone
+            ? toStoredPhone(selection.recipientPhone)
+            : undefined,
           message: selection.message || undefined,
+          lang,
         }),
       });
       if (res.ok) {
@@ -54,9 +75,12 @@ export default function GiftCardPaymentPage() {
         setCode(data.code);
         setDone(true);
         clearGiftSelection();
-      } else {
-        setError(p.bookingFailed);
+        return;
       }
+
+      const data = await res.json().catch(() => ({}));
+      // Nothing was issued on a decline, so retrying is safe and cheap.
+      setError(data.error === "payment-declined" ? p.declined : p.bookingFailed);
     } catch {
       setError(p.bookingFailed);
     } finally {
@@ -66,7 +90,13 @@ export default function GiftCardPaymentPage() {
 
   const summary = [
     { label: gp.recipient, value: selection?.recipientName || "—" },
-    { label: gp.recipientEmail, value: selection?.recipientEmail || "—", ltr: true },
+    {
+      label: selection?.recipientPhone ? gp.recipientPhone : gp.recipientEmail,
+      value: selection?.recipientPhone
+        ? `${SAUDI_DIALLING_CODE} ${formatNational(selection.recipientPhone)}`
+        : selection?.recipientEmail || "—",
+      ltr: true,
+    },
     { label: gp.grandTotal, amount: total },
   ];
 
@@ -75,7 +105,11 @@ export default function GiftCardPaymentPage() {
       <SiteHeader />
 
       <div className="mx-auto grid max-w-page gap-8 px-6 pb-24 pt-[120px] md:px-12 lg:grid-cols-[1fr_540px] lg:px-16">
-        <PaymentMethods onConfirm={confirm} onMethodChange={setMethod} />
+        <PaymentMethods
+          onConfirm={confirm}
+          onMethodChange={setMethod}
+          onValidityChange={setCardValid}
+        />
 
         {/* Summary */}
         <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)]">
@@ -123,9 +157,9 @@ export default function GiftCardPaymentPage() {
           <button
             type="button"
             onClick={confirm}
-            disabled={submitting || !selection}
+            disabled={submitting || !selection || !cardValid}
             className={`mt-6 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
-              submitting || !selection
+              submitting || !selection || !cardValid
                 ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
                 : "bg-red-grad text-white hover:opacity-90"
             }`}
@@ -153,6 +187,13 @@ export default function GiftCardPaymentPage() {
   );
 }
 
+/** wa.me wants digits only, with the country code and no leading zero. */
+function waNumber(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  if (digits.startsWith("966")) return digits;
+  return `966${digits.replace(/^0+/, "")}`;
+}
+
 function SuccessModal({
   method,
   code,
@@ -167,8 +208,28 @@ function SuccessModal({
   const { c } = useI18n();
   const gp = c.giftPay;
   const p = c.payment;
+  const [copied, setCopied] = useState(false);
+
+  // Built on the client so it carries whatever host the buyer is actually on —
+  // localhost in development, the real domain in production.
+  const link = typeof window === "undefined" ? `/gift/${code}` : `${window.location.origin}/gift/${code}`;
+  // The occasion message first, then the card itself.
+  const text = [
+    selection?.message,
+    gp.whatsappText
+      .replace("{amount}", String(selection?.amountSar ?? 0))
+      .replace("{link}", link),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  // With a number it opens that chat; without one WhatsApp asks who to send to.
+  const waHref = selection?.recipientPhone
+    ? `https://wa.me/${waNumber(selection.recipientPhone)}?text=${encodeURIComponent(text)}`
+    : `https://wa.me/?text=${encodeURIComponent(text)}`;
+
   const rows = [
-    { label: gp.to, value: selection?.recipientEmail || selection?.recipientName || "—", ltr: true },
+    { label: gp.to, value: selection?.recipientPhone || selection?.recipientEmail || selection?.recipientName || "—", ltr: true },
     { label: gp.from, value: selection?.senderName || "—" },
     { label: gp.method, value: method },
   ];
@@ -177,9 +238,28 @@ function SuccessModal({
       <div className="w-full max-w-[480px] rounded-[24px] bg-white p-8 text-center shadow-[0_40px_100px_rgba(0,0,0,0.25)]">
         <img src="/pay/success-check.webp" alt="" className="mx-auto mb-5 h-20 w-20" />
         <h3 className="font-display text-2xl font-extrabold text-ink">{gp.successTitle}</h3>
-        <p className="mt-2 text-sm text-ink/55">
-          {gp.successSubPrefix} <span dir="ltr">{selection?.recipientEmail || "—"}</span>
-        </p>
+        <p className="mt-2 text-sm text-ink/55">{gp.shareHint}</p>
+
+        {/* The delivery step. A plain link, so it works on every phone with no
+            API key, no approved template and no provider account. */}
+        <a
+          href={waHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-4 flex w-full items-center justify-center gap-2 rounded-[12px] bg-[#25d366] py-3.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
+        >
+          {gp.sendWhatsapp}
+        </a>
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard?.writeText(link);
+            setCopied(true);
+          }}
+          className="mt-2 text-[12px] font-semibold text-ink/50 underline underline-offset-4 hover:text-red"
+        >
+          {copied ? gp.copied : gp.copyLink}
+        </button>
 
         {/* The redeemable code — this is the actual product. */}
         <p

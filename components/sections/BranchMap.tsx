@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { PinIcon, ClockIcon } from "../icons";
 import { useI18n } from "@/lib/i18n";
 
@@ -32,9 +33,12 @@ export default function BranchMap() {
                 <span className="block pr-[0.6em]">{c.branch.line1}</span>
                 <span className="block">{c.branch.line2}</span>
               </h2>
-              <button className="w-fit self-end rounded-[100px] border-4 border-sky bg-white/40 px-8 py-3 font-display text-[clamp(26px,4.3vw,56px)] font-bold text-ink backdrop-blur-sm transition-colors hover:bg-sky/20 lg:border-[6px] lg:px-16 lg:py-5">
+              <Link
+                href="/booking"
+                className="w-fit self-end rounded-[100px] border-4 border-sky bg-white/40 px-8 py-3 font-display text-[clamp(26px,4.3vw,56px)] font-bold text-ink backdrop-blur-sm transition-colors hover:bg-sky/20 lg:border-[6px] lg:px-16 lg:py-5"
+              >
                 {c.branch.cta}
-              </button>
+              </Link>
             </>
           ) : (
             <h2 className="flex flex-col items-start gap-3 font-display text-[clamp(34px,5.3vw,66px)] font-thin leading-none text-ink lg:gap-5">
@@ -69,14 +73,12 @@ export default function BranchMap() {
                   <span>{b.hours}</span>
                 </li>
               </ul>
-              <div className="flex gap-4">
-                <button className="flex-[2] rounded-[18px] bg-sky py-4 font-display text-lg font-bold text-ink transition-opacity hover:opacity-90">
-                  {c.branch.bookNow}
-                </button>
-                <button className="flex-1 rounded-[18px] bg-sky py-4 font-display text-lg font-bold text-ink transition-opacity hover:opacity-90">
-                  {c.branch.details}
-                </button>
-              </div>
+              <Link
+                href="/booking"
+                className="block rounded-[18px] bg-sky py-4 text-center font-display text-lg font-bold text-ink transition-opacity hover:opacity-90"
+              >
+                {c.branch.bookNow}
+              </Link>
             </div>
           ))}
         </div>
