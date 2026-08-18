@@ -16,6 +16,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { giftCardDesigns, payments } from "@/lib/db/schema";
 import { issueGiftCard } from "@/lib/giftcards";
+import { sendGiftCardEmails } from "@/lib/giftcard/email";
 import { notify } from "@/lib/notify";
 import { getDriver } from "@/lib/payments";
 import { sarToHalalas } from "@/lib/money";
@@ -128,21 +129,46 @@ export async function POST(request: Request) {
   });
 
   // Delivery. The buyer still gets a WhatsApp share button on the success
-  // screen — this is the automatic half, and it's a no-op until a driver exists.
+  // screen — this is the automatic half.
+  //
+  // Email goes through lib/giftcard/email.ts and really sends (Resend), the same
+  // path the booking invoice uses. WhatsApp still goes through notify(), which
+  // is log-only until a provider is chosen. Two paths on purpose — see
+  // docs/INVOICE-EMAIL.md §7; the email one is deliberately *not* routed through
+  // notify() as well, or a real notify driver would send this card twice.
+  //
+  // Awaited, not fired and forgotten: on a serverless host the function is
+  // frozen the moment this response returns. Neither call can fail the sale —
+  // the card is issued and paid for, and both swallow their own errors.
   const lang = d.lang ?? "ar";
-  const data = {
+
+  await sendGiftCardEmails({
     code: result.code,
     amountSar: d.amountSar,
-    senderName: d.buyerName ?? null,
-    recipientName: d.recipientName ?? null,
-    message: d.message ?? null,
-    cardUrl: `/gift/${result.code}`,
-  };
-  if (d.recipientEmail) {
-    await notify({ channel: "email", to: d.recipientEmail, template: "gift-card", lang, data });
-  }
+    senderName: d.buyerName || null,
+    recipientName: d.recipientName || null,
+    recipientEmail: d.recipientEmail || null,
+    buyerEmail: d.buyerEmail || null,
+    message: d.message || null,
+    expiresAt: result.expiresAt,
+    lang,
+  });
+
   if (d.recipientPhone) {
-    await notify({ channel: "whatsapp", to: d.recipientPhone, template: "gift-card", lang, data });
+    await notify({
+      channel: "whatsapp",
+      to: d.recipientPhone,
+      template: "gift-card",
+      lang,
+      data: {
+        code: result.code,
+        amountSar: d.amountSar,
+        senderName: d.buyerName ?? null,
+        recipientName: d.recipientName ?? null,
+        message: d.message ?? null,
+        cardUrl: `/gift/${result.code}`,
+      },
+    });
   }
 
   return NextResponse.json({ id: result.id, code: result.code }, { status: 201 });

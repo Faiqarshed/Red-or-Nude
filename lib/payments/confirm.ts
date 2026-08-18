@@ -18,6 +18,7 @@ import { bookings, customers, payments, stations, type Localized } from "@/lib/d
 import { allocateTickets } from "@/lib/bookings";
 import { utcToLocalDate } from "@/lib/availability";
 import { notify } from "@/lib/notify";
+import { sendBookingInvoice } from "@/lib/invoice/send";
 import { getDriver, type PaymentMethod } from "./index";
 
 export type ConfirmedTicket = {
@@ -149,7 +150,18 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
       );
     const labelOf = new Map(chairs.map((c) => [c.id, c.label]));
 
+    // Two separate messages, on purpose. sendConfirmations is the customer's
+    // "you're booked" note and goes through the notify() seam, which is still
+    // log-only. sendBookingInvoice is the tax invoice and delivers for real via
+    // Resend. See docs/INVOICE-EMAIL.md §7 — these should almost certainly be
+    // one message once notify() has a real driver.
+    //
+    // Both are awaited rather than fired and forgotten: on a serverless host the
+    // function is frozen the moment this response is returned, so a detached
+    // promise would simply never finish. Neither can fail the payment — each
+    // swallows its own errors and logs.
     await sendConfirmations(members, tickets, labelOf);
+    await sendBookingInvoice(members.map((m) => m.id));
 
     return {
       ok: true,

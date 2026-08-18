@@ -12,3 +12,6 @@ tsconfig.tsbuildinfo
 npm-debug.log*
 .env*
 !.env.example
+
+# Invoice email previews (scripts/preview-invoice.ts)
+.preview/

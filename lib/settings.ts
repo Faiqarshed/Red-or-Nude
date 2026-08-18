@@ -17,6 +17,10 @@ export const SETTING_DEFAULTS = {
   refill_discount_percent: 50,
   /** How many days before a refill window closes to nudge the customer. */
   refill_reminder_days: 3,
+  /** Seller identity on the invoice. A KSA tax invoice must carry both. */
+  business_legal_name: "Red or Nude",
+  /** 15 digits from ZATCA. Empty until registration lands; the line is hidden. */
+  vat_number: "",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

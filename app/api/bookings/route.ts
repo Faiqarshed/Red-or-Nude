@@ -30,9 +30,11 @@ const body = z.object({
     name: z.string().trim().max(120).optional(),
     // Saudi mobile numbers, with or without country code.
     phone: z.string().trim().regex(/^(\+?966|0)?5\d{8}$/, "invalid-phone"),
-    // Required on the web, unlike a walk-in: this is where the booking
-    // reference is sent, and that reference is the only key to /my-bookings.
-    email: z.string().trim().email("invalid-email"),
+    // Required on the web, unlike a walk-in, for two independent reasons: it
+    // carries the booking reference that is the only key to /my-bookings, and
+    // it is where the invoice is sent the moment the charge clears. Walk-ins go
+    // through createBookings directly and may still have no address.
+    email: z.string().trim().email("invalid-email").max(200),
     lang: z.enum(["ar", "en"]).optional(),
   }),
   /** Set by the refill button in the customer's booking history. */

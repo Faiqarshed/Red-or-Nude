@@ -1,13 +1,22 @@
-// The customer's booking history, opened with a booking reference.
+// One booking, opened with its own reference.
 //
 // Customers have no account, so the reference is the credential. It is generated
 // server-side, printed once on the success screen and emailed to the address
 // given at checkout (lib/payments/confirm.ts), so holding one is evidence you
 // made the booking. That is also why the response never echoes the name, phone
 // or email back: the reference proves someone booked, not who they are.
+//
+// A reference opens *that* booking and nothing else. It used to resolve the code
+// to a customer and return their whole history, which meant one leaked or
+// guessed reference exposed every appointment that person had ever made — a much
+// bigger prize for anyone walking the code space, and more than the holder of a
+// single reference is entitled to.
+//
+// Note for group bookings: each guest's row has its own code, so a reference
+// opens that guest's booking, not both halves of the bill.
 
 import { NextResponse } from "next/server";
-import { desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings, services } from "@/lib/db/schema";
@@ -19,8 +28,6 @@ import { getSettings } from "@/lib/settings";
 export const dynamic = "force-dynamic";
 
 const body = z.object({ code: z.string().trim().min(4).max(20) });
-
-const HISTORY_LIMIT = 20;
 
 // A reference is five characters of a 32-character alphabet. That is a large
 // space, but not so large that an unthrottled endpoint couldn't be walked, and
@@ -61,16 +68,6 @@ export async function POST(request: Request) {
 
   const code = parsed.data.code.toUpperCase();
 
-  const [anchor] = await db
-    .select({ customerId: bookings.customerId })
-    .from(bookings)
-    .where(eq(bookings.code, code))
-    .limit(1);
-
-  // Unknown reference, or a booking with no customer attached — the same answer
-  // either way, so a caller learns nothing from the difference.
-  if (!anchor?.customerId) return NextResponse.json({ error: "not-found" }, { status: 404 });
-
   const rows = await db
     .select({
       id: bookings.id,
@@ -88,9 +85,12 @@ export async function POST(request: Request) {
     })
     .from(bookings)
     .leftJoin(services, eq(services.id, bookings.serviceId))
-    .where(eq(bookings.customerId, anchor.customerId))
-    .orderBy(desc(bookings.startsAt))
-    .limit(HISTORY_LIMIT);
+    .where(eq(bookings.code, code))
+    .limit(1);
+
+  // Unknown reference. The response is deliberately the same shape of "no" the
+  // throttle gives, so a caller learns nothing from the difference.
+  if (rows.length === 0) return NextResponse.json({ error: "not-found" }, { status: 404 });
 
   const spentOn = await claimedWindows(rows.map((r) => r.id));
 

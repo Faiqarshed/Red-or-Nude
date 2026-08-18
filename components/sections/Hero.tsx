@@ -3,6 +3,19 @@
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 
+// The cut-out in /hero-hands.webp runs off the bottom of its own canvas, so the
+// forearm ends on a hard horizontal edge baked into the file. The image is
+// height-locked to its container, which puts that edge partway down the hero —
+// visible on tall windows, hidden on short ones, which is why it only showed up
+// on some screens.
+//
+// Fading the last fifth of the image dissolves the arm into the cream instead of
+// guillotining it. Purely presentational, and it only touches the lower forearm:
+// the fingers sit around 45–60% of the image height, well above where the fade
+// begins. -webkit- prefix included for Safari, which still needs it.
+const FADE_BOTTOM = "linear-gradient(to bottom, #000 76%, rgba(0,0,0,0.55) 88%, transparent 99%)";
+const fadeBottom = { maskImage: FADE_BOTTOM, WebkitMaskImage: FADE_BOTTOM } as const;
+
 function CardArrow() {
   // Red capsule outline (Figma 108:4121) — narrower on mobile.
   return (
@@ -40,6 +53,7 @@ export default function Hero() {
             <img
               src="/hero-hands.webp"
               alt=""
+              style={fadeBottom}
               className="absolute right-0 top-0 h-full max-w-none select-none"
             />
           </div>
@@ -69,6 +83,7 @@ export default function Hero() {
             <img
               src="/hero-hands.webp"
               alt=""
+              style={fadeBottom}
               className="absolute right-0 top-0 h-full max-w-none select-none"
             />
           </div>

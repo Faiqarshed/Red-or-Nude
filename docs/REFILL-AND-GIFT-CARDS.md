@@ -15,8 +15,8 @@ payment providers be plugged in later without touching any of this code.
 
 Some services earn a discounted follow-up booking, valid for a fixed number of
 days: nails 30, lashes 14. The refill is never in the service catalogue. It
-appears only as a button inside the customer's own booking history, counts down,
-and disappears when the window closes. After that they book the full service.
+appears only as a button on the customer's own booking, reached with that
+booking's reference; it counts down and disappears when the window closes. After that they book the full service.
 
 **Where the window length comes from.** One column, `services.refill_days`
 ([lib/db/schema.ts](../lib/db/schema.ts)). `0` means the service has no refill at
@@ -55,17 +55,25 @@ A booking is eligible when **all** of these hold:
   `refillDaysLeft()` if the salon wants them to chain)
 - `now <= startsAt + refill_days`
 
-**How a customer reaches their history.** Customers have no account. The
+**How a customer reaches their booking.** Customers have no account. The
 credential is the booking reference (`RON-4F2K`): generated server-side, shown
 once on the success screen, and emailed to the address captured at checkout. Ask
-for it at `/my-bookings` and you get that customer's bookings back. Because the
+for it at `/my-bookings` and you get **that one booking** back. Because the
 reference is the only key, **email is now required at checkout** — that change is
 in [app/api/bookings/route.ts](../app/api/bookings/route.ts) and the payment
 form. Walk-ins created by staff are unaffected; email stays optional there.
 
+A reference opens the booking it belongs to and nothing else. It originally
+resolved the code to a customer and returned their whole history, which meant one
+guessed or forwarded reference exposed every appointment that person had ever
+made — far more than the holder of a single reference is entitled to, and a much
+bigger prize for anyone walking the code space. On a group booking each guest's
+row has its own reference, so a code opens that guest's booking rather than both
+halves of the bill.
+
 The lookup returns no name, phone or email — the reference proves *someone*
-booked, not *who*. Unknown references and references with no customer both return
-the same `404`, and the route is throttled to 10 attempts per minute per IP.
+booked, not *who*. Unknown references return `404`, and the route is throttled to
+10 attempts per minute per IP.
 
 **Booking a refill.** The button links to `/booking?refill=RON-XXXX`. The page
 re-validates the code server-side ([getRefillOffer()](../lib/bookings.ts)) and,

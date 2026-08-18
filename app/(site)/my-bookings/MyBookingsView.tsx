@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
@@ -27,8 +27,6 @@ type HistoryRow = {
   /** daysLeft 0 means the window has closed — no button. */
   refill: { daysLeft: number; priceSar: number };
 };
-
-const KEY = "ron-last-booking";
 
 const STATUS_TONE: Record<string, string> = {
   pending: "bg-black/[0.06] text-ink/60",
@@ -64,9 +62,6 @@ export default function MyBookingsView() {
       if (res.ok) {
         const data = await res.json();
         setRows(data.bookings as HistoryRow[]);
-        // Remembered so a returning customer isn't retyping it. Not a
-        // credential store — it's the same reference already in their inbox.
-        localStorage.setItem(KEY, trimmed.toUpperCase());
         return;
       }
 
@@ -82,20 +77,12 @@ export default function MyBookingsView() {
     }
   };
 
-  // Come back to the page and it picks up where it left off.
-  useEffect(() => {
-    const saved = localStorage.getItem(KEY);
-    if (saved) {
-      setCode(saved);
-      void lookup(saved);
-    }
-    // Mount only — re-running on every render would re-fetch the list after
-    // each keystroke.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const forget = () => {
-    localStorage.removeItem(KEY);
+  // Nothing is remembered between visits. The reference is the credential for a
+  // booking, and this page is reachable by anyone on a shared or public browser
+  // — leaving the last one prefilled hands the next person a working key, and
+  // re-running the lookup on mount opens someone else's booking unprompted.
+  // It lives in the customer's inbox; they can paste it again.
+  const clear = () => {
     setRows(null);
     setCode("");
     setError(null);
@@ -120,8 +107,13 @@ export default function MyBookingsView() {
             <span className="mb-1.5 block text-[12px] text-ink/55">{h.codeLabel}</span>
             <input
               value={code}
-              onChange={(e) => setCode(e.target.value)}
+              // References are uppercase and drawn from a 32-character alphabet
+              // with no I/O/0/1, so lowercase input is always a case slip.
+              onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 20))}
               dir="ltr"
+              maxLength={20}
+              autoComplete="off"
+              spellCheck={false}
               placeholder="RON-4F2K"
               className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-left text-sm uppercase tracking-wider text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
             />
@@ -158,7 +150,7 @@ export default function MyBookingsView() {
 
             <button
               type="button"
-              onClick={forget}
+              onClick={clear}
               className="mt-2 text-[12px] text-ink/45 underline underline-offset-4 hover:text-red"
             >
               {h.forget}

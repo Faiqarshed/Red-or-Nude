@@ -3,12 +3,14 @@
 // English object is type-checked against it so nothing can drift out of sync.
 
 const ar = {
+  // Only destinations that exist. /about and /shop have no page yet, so their
+  // entries are parked here rather than shipped as 404s:
+  //   { label: "من نحن", href: "/about" }
+  //   { label: "تسوقي", href: "/shop" }
   nav: [
-    { label: "حجوزاتي", href: "/my-bookings" },
-    { label: "من نحن", href: "/about" },
+    { label: "الحجوزات", href: "/my-bookings" },
     { label: "خدماتنا", href: "/booking" },
     { label: "اختاري الفرع", href: "/#branches" },
-    { label: "تسوقي", href: "/shop" },
   ],
   header: { otherLang: "English", search: "بحث", wishlist: "المفضلة", cart: "السلة", menu: "القائمة" },
 
@@ -109,9 +111,20 @@ const ar = {
     cardNamePlaceholder: "الاسم كما هو مكتوب على البطاقة",
     expiry: "تاريخ الانتهاء",
     cvv: "CVV",
+    cardErrors: {
+      required: "هذا الحقل مطلوب",
+      cardLength: "رقم البطاقة غير مكتمل",
+      cardChecksum: "رقم البطاقة غير صحيح، تأكدي من الأرقام",
+      expiryFormat: "أدخلي تاريخ الانتهاء بصيغة شهر/سنة",
+      expiryMonth: "الشهر يجب أن يكون بين 01 و 12",
+      expiryPast: "انتهت صلاحية هذه البطاقة",
+      expiryFar: "تاريخ الانتهاء بعيد جداً، تأكدي من السنة",
+      cvvLength: "رمز التحقق يجب أن يكون {n} أرقام",
+      nameShort: "أدخلي الاسم كما هو مكتوب على البطاقة",
+    },
     confirm: "تأكيد",
     successTitle: "تم الحجز بنجاح!",
-    successSub: "سيتم إرسال تفاصيل الموعد والرقم المرجعي إلى بريدك الإلكتروني",
+    successSub: "أرسلنا الفاتورة وتفاصيل الموعد والرقم المرجعي إلى بريدك الإلكتروني",
     detailsTitle: "تفاصيل الموعد",
     rowService: "الخدمة",
     rowAddons: "الأضافات",
@@ -130,6 +143,9 @@ const ar = {
     confirming: "جارٍ تأكيد الحجز…",
     slotTaken: "تم حجز هذا الموعد للتو. اختاري وقتاً آخر من صفحة الحجز.",
     invalidPhone: "رقم الجوال غير صحيح (مثال: 0512345678)",
+    phoneRequired: "رقم الجوال مطلوب",
+    phoneLength: "رقم الجوال يجب أن يكون ٩ أرقام بعد +966",
+    phonePrefix: "رقم الجوال يجب أن يبدأ بـ 5",
     bookingFailed: "تعذر إتمام الحجز، حاولي مرة أخرى",
     noSelection: "لم يتم اختيار أي خدمة بعد",
     ticketLabel: "رقم التذكرة",
@@ -141,19 +157,19 @@ const ar = {
     subtotal: "المجموع قبل الخصم",
     groupDiscount: "خصم الحجز الثنائي ١٠٪",
     refillExpired: "انتهت مهلة إعادة التعبئة لهذا الحجز. يمكنك حجز الخدمة كاملة من جديد.",
-    keepReference: "احتفظي بالرقم المرجعي — به تفتحين صفحة حجوزاتي.",
-    myBookings: "حجوزاتي",
+    keepReference: "احتفظي بالرقم المرجعي — به تفتحين صفحة الحجوزات.",
+    myBookings: "الحجوزات",
   },
 
   history: {
-    title: "حجوزاتي",
+    title: "الحجوزات",
     sub: "أدخلي الرقم المرجعي لحجزك (مثال: RON-4F2K) — أرسلناه إلى بريدك بعد الدفع.",
     codeLabel: "الرقم المرجعي",
     view: "عرض",
     loading: "جارٍ البحث…",
     notFound: "لم نجد حجزاً بهذا الرقم. تأكدي من الرقم المرجعي في بريدك.",
     tooMany: "محاولات كثيرة. انتظري دقيقة ثم حاولي مرة أخرى.",
-    failed: "تعذر عرض الحجوزات، حاولي مرة أخرى",
+    failed: "تعذر عرض الحجز، حاولي مرة أخرى",
     empty: "لا توجد حجوزات",
     ticket: "التذكرة",
     refillBadge: "إعادة تعبئة",
@@ -262,12 +278,11 @@ export type Content = typeof ar;
 
 const en: Content = {
   // Reversed vs. Arabic so that under LTR it reads Shop → About Us left-to-right.
+  // See the Arabic nav above. Parked: { "Shop", "/shop" }, { "About Us", "/about" }.
   nav: [
-    { label: "Shop", href: "/shop" },
     { label: "Choose the Branch", href: "/#branches" },
     { label: "Our Services", href: "/booking" },
-    { label: "About Us", href: "/about" },
-    { label: "My Bookings", href: "/my-bookings" },
+    { label: "Bookings", href: "/my-bookings" },
   ],
   header: { otherLang: "عربي", search: "Search", wishlist: "Wishlist", cart: "Cart", menu: "Menu" },
 
@@ -367,9 +382,20 @@ const en: Content = {
     cardNamePlaceholder: "Name as it appears on card",
     expiry: "Expiry Date",
     cvv: "CVV",
+    cardErrors: {
+      required: "This field is required",
+      cardLength: "That card number is incomplete",
+      cardChecksum: "That card number isn't valid — check the digits",
+      expiryFormat: "Enter the expiry as MM/YY",
+      expiryMonth: "Month must be between 01 and 12",
+      expiryPast: "That card has expired",
+      expiryFar: "That expiry is too far out — check the year",
+      cvvLength: "The security code must be {n} digits",
+      nameShort: "Enter the name as printed on the card",
+    },
     confirm: "Confirm",
     successTitle: "Booking Confirmed!",
-    successSub: "Your appointment details and booking reference are on their way to your email",
+    successSub: "Your invoice, appointment details and booking reference are on their way to your inbox",
     detailsTitle: "Appointment Details",
     rowService: "Service",
     rowAddons: "Add-ons",
@@ -388,6 +414,9 @@ const en: Content = {
     confirming: "Confirming…",
     slotTaken: "That time was just booked. Please pick another slot.",
     invalidPhone: "Invalid mobile number (e.g. 0512345678)",
+    phoneRequired: "Mobile number is required",
+    phoneLength: "A mobile number is 9 digits after +966",
+    phonePrefix: "Saudi mobile numbers start with 5",
     bookingFailed: "Couldn't complete the booking, please try again",
     noSelection: "No service selected yet",
     ticketLabel: "Ticket",
@@ -399,19 +428,19 @@ const en: Content = {
     subtotal: "Subtotal",
     groupDiscount: "Group discount 10%",
     refillExpired: "The refill window for that booking has closed. You can book the full service again.",
-    keepReference: "Keep your reference — it's how you open My Bookings.",
-    myBookings: "My bookings",
+    keepReference: "Keep your reference — it's how you open Bookings.",
+    myBookings: "Bookings",
   },
 
   history: {
-    title: "My bookings",
+    title: "Bookings",
     sub: "Enter your booking reference (e.g. RON-4F2K) — we emailed it to you after payment.",
     codeLabel: "Booking reference",
     view: "View",
     loading: "Looking it up…",
     notFound: "No booking found with that reference. Check the one in your email.",
     tooMany: "Too many attempts. Wait a minute and try again.",
-    failed: "Couldn't load your bookings, please try again",
+    failed: "Couldn't load that booking, please try again",
     empty: "No bookings yet",
     ticket: "Ticket",
     refillBadge: "Refill",

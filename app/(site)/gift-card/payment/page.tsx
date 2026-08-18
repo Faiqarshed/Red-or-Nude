@@ -9,6 +9,7 @@ import { GiftCardArt } from "@/components/gift/GiftCardArt";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { clearGiftSelection, loadGiftSelection, type GiftSelection } from "@/lib/giftcard-selection";
+import { SAUDI_DIALLING_CODE, formatNational, toStoredPhone } from "@/lib/phone";
 
 // Figma: Desktop-2 gift-card payment step (325:7705) + success modal (325:8088).
 //
@@ -32,6 +33,8 @@ export default function GiftCardPaymentPage() {
   const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  /** Card fields live inside PaymentMethods; this mirrors their validity up. */
+  const [cardValid, setCardValid] = useState(false);
 
   useEffect(() => {
     setSelection(loadGiftSelection());
@@ -60,7 +63,9 @@ export default function GiftCardPaymentPage() {
           buyerName: selection.senderName || undefined,
           recipientName: selection.recipientName || undefined,
           recipientEmail: selection.recipientEmail || undefined,
-          recipientPhone: selection.recipientPhone || undefined,
+          recipientPhone: selection.recipientPhone
+            ? toStoredPhone(selection.recipientPhone)
+            : undefined,
           message: selection.message || undefined,
           lang,
         }),
@@ -87,7 +92,9 @@ export default function GiftCardPaymentPage() {
     { label: gp.recipient, value: selection?.recipientName || "—" },
     {
       label: selection?.recipientPhone ? gp.recipientPhone : gp.recipientEmail,
-      value: selection?.recipientPhone || selection?.recipientEmail || "—",
+      value: selection?.recipientPhone
+        ? `${SAUDI_DIALLING_CODE} ${formatNational(selection.recipientPhone)}`
+        : selection?.recipientEmail || "—",
       ltr: true,
     },
     { label: gp.grandTotal, amount: total },
@@ -98,7 +105,11 @@ export default function GiftCardPaymentPage() {
       <SiteHeader />
 
       <div className="mx-auto grid max-w-page gap-8 px-6 pb-24 pt-[120px] md:px-12 lg:grid-cols-[1fr_540px] lg:px-16">
-        <PaymentMethods onConfirm={confirm} onMethodChange={setMethod} />
+        <PaymentMethods
+          onConfirm={confirm}
+          onMethodChange={setMethod}
+          onValidityChange={setCardValid}
+        />
 
         {/* Summary */}
         <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)]">
@@ -146,9 +157,9 @@ export default function GiftCardPaymentPage() {
           <button
             type="button"
             onClick={confirm}
-            disabled={submitting || !selection}
+            disabled={submitting || !selection || !cardValid}
             className={`mt-6 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
-              submitting || !selection
+              submitting || !selection || !cardValid
                 ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
                 : "bg-red-grad text-white hover:opacity-90"
             }`}

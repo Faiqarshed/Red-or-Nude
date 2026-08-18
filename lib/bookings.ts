@@ -405,8 +405,10 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
         .onConflictDoUpdate({
           target: customers.phone,
           // Don't blank an existing name or email with an empty one from a
-          // rushed form — but do record a newly supplied one, which is how a
-          // returning customer ever gets an address on file.
+          // rushed form — but do record a newly supplied one: it is how a
+          // returning customer gets an address on file, and it keeps the
+          // invoice going to the address typed at checkout rather than a stale
+          // one.
           set: {
             name: input.customer.name?.trim() || undefined,
             email: email ?? undefined,
