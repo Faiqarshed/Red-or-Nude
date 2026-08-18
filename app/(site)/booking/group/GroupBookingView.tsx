@@ -9,9 +9,16 @@
 //
 // The calendar is asked for two free chairs at once (guests=2) using the LONGER
 // of the two durations, so a slot shown here can always be booked.
+//
+// The two pickers are an accordion rather than one above the other: a full
+// service grid plus add-ons is a screenful each, so stacking them meant
+// scrolling past everything Guest 1 chose to reach Guest 2, with no way to see
+// at a glance whether Guest 2 had been filled in at all. One open at a time,
+// with each header summarising that guest, keeps the whole flow on one screen.
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { Riyal } from "@/components/icons";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
@@ -51,6 +58,8 @@ export default function GroupBookingView({
   const [startsAt, setStartsAt] = useState<string | null>(null);
   const [agree, setAgree] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  /** Which guest's picker is expanded. Exactly one, always. */
+  const [openGuest, setOpenGuest] = useState<0 | 1>(0);
 
   const clearSchedule = () => {
     setDate(null);
@@ -121,19 +130,73 @@ export default function GroupBookingView({
             }}
           />
 
-          <GuestPicker
-            catalog={catalog}
-            value={guests[0]}
-            onChange={(next) => setGuest(0, next)}
-            label={b.guest1}
-          />
+          <div className="space-y-4">
+            {([0, 1] as const).map((i) => (
+              <section
+                key={i}
+                className="overflow-hidden rounded-[20px] bg-white ring-1 ring-black/[0.04]"
+              >
+                <button
+                  type="button"
+                  onClick={() => setOpenGuest(i)}
+                  aria-expanded={openGuest === i}
+                  className="flex w-full items-center gap-3 p-5 text-start transition-colors hover:bg-black/[0.015]"
+                >
+                  <span
+                    className={`rounded-full px-4 py-1.5 font-display text-sm font-extrabold ${
+                      openGuest === i ? "bg-red text-white" : "bg-[#f7e8e8] text-red"
+                    }`}
+                  >
+                    {i === 0 ? b.guest1 : b.guest2}
+                  </span>
 
-          <GuestPicker
-            catalog={catalog}
-            value={guests[1]}
-            onChange={(next) => setGuest(1, next)}
-            label={b.guest2}
-          />
+                  {/* What this guest has picked, so a collapsed panel still says
+                      whether it needs attention. */}
+                  <span className="min-w-0 flex-1 truncate text-sm text-ink/60">
+                    {members[i].service ?? b.notSelected}
+                  </span>
+
+                  {totals[i].price > 0 && (
+                    <span className="flex shrink-0 items-center gap-1 font-display text-sm font-extrabold text-ink">
+                      <Riyal className="h-3 w-3 text-red" />
+                      {totals[i].price}
+                    </span>
+                  )}
+
+                  <span
+                    aria-hidden
+                    className={`shrink-0 text-ink/35 transition-transform ${
+                      openGuest === i ? "rotate-180" : ""
+                    }`}
+                  >
+                    ▾
+                  </span>
+                </button>
+
+                {openGuest === i && (
+                  <div className="border-t border-black/[0.05] px-5 pb-6 pt-6">
+                    <GuestPicker
+                      catalog={catalog}
+                      value={guests[i]}
+                      onChange={(next) => setGuest(i, next)}
+                    />
+
+                    {/* Guest 1 has somewhere to go next; Guest 2 does not — the
+                        summary beside them is the next step. */}
+                    {i === 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setOpenGuest(1)}
+                        className="mt-8 w-full rounded-[12px] bg-red-grad py-3.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
+                      >
+                        {b.nextGuest}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </section>
+            ))}
+          </div>
 
           <Link
             href="/booking"

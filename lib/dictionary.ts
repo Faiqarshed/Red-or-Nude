@@ -87,6 +87,9 @@ const ar = {
     subtotal: "المجموع قبل الخصم",
     groupDiscount: "خصم الحجز الثنائي ١٠٪",
     sameSlotNote: "الموعد مشترك بين الضيفتين — نفس اليوم ونفس الوقت.",
+    nextGuest: "التالي: اختيار خدمات الضيفة الثانية",
+    editGuest: "تعديل",
+    guestReady: "تم الاختيار",
   },
 
   payment: {
@@ -345,6 +348,9 @@ const en: Content = {
     subtotal: "Subtotal",
     groupDiscount: "Group discount 10%",
     sameSlotNote: "Both guests share one appointment — same day, same time.",
+    nextGuest: "Next: choose Guest 2's services",
+    editGuest: "Edit",
+    guestReady: "Selected",
   },
 
   payment: {
