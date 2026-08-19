@@ -7,7 +7,7 @@
 
 import "server-only";
 import { randomInt, randomUUID } from "node:crypto";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
 import {
   addons,
@@ -57,6 +57,14 @@ export type CreateBookingsInput = {
   refillOfCode?: string | null;
   notes?: string | null;
   technicianId?: string | null;
+  /**
+   * Pin the booking to one specific chair instead of letting the engine choose.
+   *
+   * Set only by the station QR add-on (brief §2.7), where the customer is
+   * already sitting somewhere and is asking about *that* chair. Everywhere else
+   * this stays unset and the lowest free station wins, as before.
+   */
+  stationId?: string | null;
 };
 
 export type CreatedBooking = {
@@ -411,6 +419,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
         startsAt,
         latestEndsAt,
         guests.length,
+        { onlyStationId: input.stationId ?? undefined },
       );
       if (!stationIds) throw new BookingAbort("slot-taken");
 
@@ -550,6 +559,87 @@ export async function createBooking(input: CreateBookingInput): Promise<CreateBo
     ticketNo: only.ticketNo,
     totalHalalas: only.totalHalalas,
   };
+}
+
+export type RescheduleResult =
+  | { ok: true; startsAt: Date; stationIds: string[] }
+  | { ok: false; error: "not-found" | "slot-taken" | "failed" };
+
+/**
+ * Move a booking to a new start time, keeping its duration and price.
+ *
+ * One implementation, two callers — the admin's booking drawer and the
+ * customer's own history (brief §2.6) — for the same reason `createBookings`
+ * has one: the two must not drift on what counts as a free chair.
+ *
+ * It deliberately does **not** enforce the 3-hour customer window or any
+ * permission: this is the mechanics of moving a booking. Who is allowed to move
+ * it, and how late, belongs to the caller — the admin can move an appointment
+ * ten minutes before it starts, and should be able to.
+ *
+ * A group moves as a unit. Every guest starting at the same moment is a §2.4
+ * invariant, so moving one member and not the others would produce a booking
+ * that could never have been made in the first place.
+ */
+export async function rescheduleBooking(input: {
+  id: string;
+  startsAt: Date;
+}): Promise<RescheduleResult> {
+  if (Number.isNaN(input.startsAt.getTime())) return { ok: false, error: "failed" };
+
+  const [anchor] = await db.select().from(bookings).where(eq(bookings.id, input.id)).limit(1);
+  if (!anchor) return { ok: false, error: "not-found" };
+
+  const members = anchor.groupId
+    ? await db
+        .select()
+        .from(bookings)
+        .where(eq(bookings.groupId, anchor.groupId))
+        .orderBy(asc(bookings.createdAt), asc(bookings.id))
+    : [anchor];
+
+  // Each guest keeps their own duration — moving an appointment must not
+  // silently shorten or lengthen it, and in a group the two may differ.
+  const durations = members.map((m) => m.endsAt.getTime() - m.startsAt.getTime());
+  const latestEndsAt = new Date(input.startsAt.getTime() + Math.max(...durations));
+
+  try {
+    const moved = await db.transaction(async (tx) => {
+      // Claim and move in one transaction, so nobody can take the target chair
+      // between the check and the update. Their own chairs are fair game —
+      // hence the ignore ids, or a booking would see itself as the conflict.
+      const stationIds = await reserveStations(
+        tx,
+        anchor.branchId,
+        input.startsAt,
+        latestEndsAt,
+        members.length,
+        { ignoreBookingIds: members.map((m) => m.id) },
+      );
+      if (!stationIds) return null;
+
+      for (const [i, member] of members.entries()) {
+        await tx
+          .update(bookings)
+          .set({
+            startsAt: input.startsAt,
+            endsAt: new Date(input.startsAt.getTime() + durations[i]),
+            stationId: stationIds[i],
+            updatedAt: new Date(),
+          })
+          .where(eq(bookings.id, member.id));
+      }
+
+      return stationIds;
+    });
+
+    if (!moved) return { ok: false, error: "slot-taken" };
+    return { ok: true, startsAt: input.startsAt, stationIds: moved };
+  } catch (err) {
+    if (isSlotConflict(err)) return { ok: false, error: "slot-taken" };
+    console.error("[bookings] reschedule failed", err);
+    return { ok: false, error: "failed" };
+  }
 }
 
 /** What the booking page needs to render a refill: the service, locked, at its

@@ -6,7 +6,6 @@
 
 import { db } from "@/lib/db";
 import { auditLog } from "@/lib/db/schema";
-import type { SessionStaff } from "@/lib/auth/guard";
 
 export type AuditDiff = Record<string, { from: unknown; to: unknown }>;
 
@@ -17,7 +16,16 @@ export type AuditEntry = {
   diff?: AuditDiff;
 };
 
-export async function recordAudit(actor: SessionStaff, entry: AuditEntry): Promise<void> {
+/**
+ * Who did it. A `SessionStaff` in almost every case — but not all: a customer
+ * cancelling their own booking (brief §2.6) is a real, auditable mutation with
+ * no staff member behind it, and `audit_log.actor_id` was already nullable for
+ * exactly that shape. Narrower than SessionStaff on purpose, so callers can pass
+ * one without inventing an email and a role for someone who has neither.
+ */
+export type AuditActor = { id: string | null; name: string };
+
+export async function recordAudit(actor: AuditActor, entry: AuditEntry): Promise<void> {
   try {
     await db.insert(auditLog).values({
       actorId: actor.id,

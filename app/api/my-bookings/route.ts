@@ -23,37 +23,20 @@ import { bookings, services } from "@/lib/db/schema";
 import { claimedWindows } from "@/lib/bookings";
 import { halalasToSar } from "@/lib/money";
 import { refillDaysLeft } from "@/lib/refill";
+import { canCancel, cancelDeadline } from "@/lib/cancellation";
+import { getSettings } from "@/lib/settings";
+import { clientIp, throttled } from "@/lib/throttle";
 
 export const dynamic = "force-dynamic";
 
 const body = z.object({ code: z.string().trim().min(4).max(20) });
 
-// A reference is five characters of a 32-character alphabet. That is a large
-// space, but not so large that an unthrottled endpoint couldn't be walked, and
-// the prize is someone's appointment history.
-//
-// ponytail: an in-memory map, so it counts per serverless instance rather than
-// globally, and it resets on cold start. Enough to stop a script; move it to the
-// database or a shared counter if the logs ever show a real attempt.
-const ATTEMPTS = new Map<string, number[]>();
-const WINDOW_MS = 60_000;
-const MAX_ATTEMPTS = 10;
-
-function throttled(ip: string): boolean {
-  const now = Date.now();
-  const recent = (ATTEMPTS.get(ip) ?? []).filter((t) => now - t < WINDOW_MS);
-  recent.push(now);
-  ATTEMPTS.set(ip, recent);
-
-  // Stop the map growing without bound on a busy instance.
-  if (ATTEMPTS.size > 5_000) ATTEMPTS.clear();
-
-  return recent.length > MAX_ATTEMPTS;
-}
-
 export async function POST(request: Request) {
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-  if (throttled(ip)) return NextResponse.json({ error: "too-many" }, { status: 429 });
+  // A reference is five characters of a 32-character alphabet — a large space,
+  // but not one an unthrottled endpoint couldn't be walked. See lib/throttle.ts.
+  if (throttled(`my-bookings:${clientIp(request)}`, { max: 10 })) {
+    return NextResponse.json({ error: "too-many" }, { status: 429 });
+  }
 
   let payload: unknown;
   try {
@@ -71,7 +54,9 @@ export async function POST(request: Request) {
     .select({
       id: bookings.id,
       code: bookings.code,
+      branchId: bookings.branchId,
       startsAt: bookings.startsAt,
+      endsAt: bookings.endsAt,
       status: bookings.status,
       ticketNo: bookings.ticketNo,
       serviceName: bookings.serviceName,
@@ -93,6 +78,7 @@ export async function POST(request: Request) {
   if (rows.length === 0) return NextResponse.json({ error: "not-found" }, { status: 404 });
 
   const spentOn = await claimedWindows(rows.map((r) => r.id));
+  const { cancel_cutoff_hours: cutoff } = await getSettings(["cancel_cutoff_hours"]);
   const now = new Date();
 
   return NextResponse.json({
@@ -122,6 +108,17 @@ export async function POST(request: Request) {
         // POST /api/my-bookings/refill — otherwise holding a forwarded reference
         // would be enough to read them, and the code would be gating nothing.
         hasRefill: daysLeft > 0,
+
+        // The cancellation window (brief §2.6), decided here and not in the
+        // browser: the buttons must never offer what the API would refuse.
+        // `cancelBy` is sent even once the window has shut, so the screen can
+        // explain *why* the buttons are gone rather than silently omitting them.
+        canCancel: canCancel(r, cutoff, now),
+        cancelBy: cancelDeadline(r, cutoff).toISOString(),
+        // Only what the reschedule picker needs — which chair, and the customer's
+        // own price, stay unsaid.
+        branchId: r.branchId,
+        durationMin: Math.round((r.endsAt.getTime() - r.startsAt.getTime()) / 60_000),
       };
     }),
   });

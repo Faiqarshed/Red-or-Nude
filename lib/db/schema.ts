@@ -152,15 +152,31 @@ export const branchHours = pgTable(
 );
 
 /** Chairs. Capacity for a time slot = count of active stations at the branch. */
-export const stations = pgTable("stations", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  branchId: uuid("branch_id")
-    .notNull()
-    .references(() => branches.id, { onDelete: "cascade" }),
-  label: text("label").notNull(),
-  sort: integer("sort").notNull().default(0),
-  active: boolean("active").notNull().default(true),
-});
+export const stations = pgTable(
+  "stations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    sort: integer("sort").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    /**
+     * What the chair's QR sticker encodes: /station/<qr_token> (brief §2.7).
+     *
+     * Its own random value rather than the row id, because the sticker is
+     * public — it sits on a table in the salon and anyone can photograph it.
+     * Keeping the id out of it means a token cannot be used to address the
+     * station anywhere else, and a compromised sticker is replaced by writing
+     * one column.
+     */
+    qrToken: uuid("qr_token").notNull().defaultRandom(),
+  },
+  (t) => ({
+    qrTokenUnique: unique("stations_qr_token_unique").on(t.qrToken),
+  }),
+);
 
 /** Eid, Ramadan hours, maintenance. Null branch = all branches. */
 export const closures = pgTable("closures", {

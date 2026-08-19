@@ -27,9 +27,30 @@ export type ChargeResult = {
   raw?: unknown;
 };
 
+export type RefundInput = {
+  /** The provider's id for the original charge, from `ChargeResult`. */
+  providerRef: string;
+  /**
+   * How much to send back. Not necessarily the whole charge: a group is one
+   * gateway transaction covering several bookings, so cancelling part of a
+   * party is a partial refund of that one transaction.
+   */
+  amountHalalas: number;
+  reason?: string;
+};
+
+export type RefundResult = {
+  status: "refunded" | "failed";
+  /** The provider's id for the refund itself; the fake driver echoes the charge. */
+  providerRef: string;
+  raw?: unknown;
+};
+
 export type PaymentDriver = {
   name: string;
   charge(input: ChargeInput): Promise<ChargeResult>;
+  /** Send money back for a charge already made. See lib/payments/refund.ts. */
+  refund(input: RefundInput): Promise<RefundResult>;
 };
 
 /** Branch on `process.env.PAYMENT_DRIVER` here once there is a second driver. */

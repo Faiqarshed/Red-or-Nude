@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, QrCode, Trash2 } from "lucide-react";
 import { Badge, Button, Card, CardHeader, Field, Input, PageHeader } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
@@ -210,6 +211,17 @@ export default function AvailabilityView({
               <Plus className="h-4 w-4" strokeWidth={2} />
               {t.availability.addStation}
             </Button>
+          </div>
+          {/* The stickers that make §2.7 work. A plain link rather than a
+              dialog: the page is a print target, not a modal. */}
+          <div className="border-t border-black/[0.06] px-4 py-3">
+            <Link
+              href={`/admin/availability/qr?branch=${branchId}`}
+              className="inline-flex items-center gap-2 text-[13px] font-semibold text-ink/60 transition-colors hover:text-red"
+            >
+              <QrCode className="h-4 w-4" strokeWidth={1.75} />
+              {t.availability.qrCodes}
+            </Link>
           </div>
         </Card>
 

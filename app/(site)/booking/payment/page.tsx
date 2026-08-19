@@ -113,6 +113,7 @@ export default function PaymentPage() {
               lang,
             },
             refillOfCode: booking.refillOf ?? null,
+            stationToken: booking.stationToken ?? null,
           }),
         });
 

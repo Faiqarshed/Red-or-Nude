@@ -4,7 +4,13 @@
 // book for free — docs/DEPLOYMENT.md §0 says as much, and PAYMENT_DRIVER has to
 // point at a real provider before the site takes public traffic.
 
-import type { ChargeInput, ChargeResult, PaymentDriver } from "./index";
+import type {
+  ChargeInput,
+  ChargeResult,
+  PaymentDriver,
+  RefundInput,
+  RefundResult,
+} from "./index";
 
 export const fakeDriver: PaymentDriver = {
   name: "fake",
@@ -18,6 +24,22 @@ export const fakeDriver: PaymentDriver = {
         driver: "fake",
         amountHalalas: input.amountHalalas,
         method: input.method,
+        at: new Date().toISOString(),
+      },
+    };
+  },
+
+  // No decline path here on purpose. A real gateway can refuse a refund and
+  // lib/payments/refund.ts handles that, but the fake driver never took the
+  // money in the first place, so there is nothing it could plausibly fail on.
+  async refund(input: RefundInput): Promise<RefundResult> {
+    return {
+      status: "refunded",
+      providerRef: input.providerRef,
+      raw: {
+        driver: "fake",
+        refundedHalalas: input.amountHalalas,
+        reason: input.reason ?? null,
         at: new Date().toISOString(),
       },
     };

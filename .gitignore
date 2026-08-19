@@ -15,3 +15,6 @@ npm-debug.log*
 
 # Invoice email previews (scripts/preview-invoice.ts)
 .preview/
+
+# Client brief docs (local only)
+/brief/
