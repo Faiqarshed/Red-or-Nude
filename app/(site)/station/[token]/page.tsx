@@ -17,6 +17,7 @@
 
 import { notFound } from "next/navigation";
 import { and, asc, eq, gt, inArray, lte } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings, branches, customers, stations } from "@/lib/db/schema";
 import { getPublicCatalog } from "@/lib/catalog";
@@ -28,7 +29,7 @@ export const dynamic = "force-dynamic";
 export default async function StationPage({ params }: { params: { token: string } }) {
   // The token is a uuid column; anything else cannot match, and letting a
   // malformed one reach the query would be a 500 where a 404 is the truth.
-  if (!/^[0-9a-f-]{36}$/i.test(params.token)) notFound();
+  if (!z.string().uuid().safeParse(params.token).success) notFound();
 
   const [station] = await db
     .select({

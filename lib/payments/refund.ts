@@ -13,10 +13,13 @@ import { db } from "@/lib/db";
 import { payments, refunds } from "@/lib/db/schema";
 import { getDriver } from "./index";
 
-export type RefundOutcome =
-  | { ok: true; amountHalalas: number }
-  /** `nothing-to-refund` is a success in every way that matters to the caller. */
-  | { ok: false; reason: "nothing-to-refund" | "declined" | "failed" };
+/**
+ * `ok: false` covers three real cases — nothing was ever paid, the gateway
+ * refused, or the call blew up — but every caller so far only asks whether the
+ * money went back. They are separated in the log, not in the type; split them
+ * when something actually branches on which.
+ */
+export type RefundOutcome = { ok: true; amountHalalas: number } | { ok: false };
 
 /**
  * Refund every paid payment attached to these bookings.
@@ -31,7 +34,7 @@ export async function refundBookings(
   bookingIds: string[],
   reason: string,
 ): Promise<RefundOutcome> {
-  if (bookingIds.length === 0) return { ok: false, reason: "nothing-to-refund" };
+  if (bookingIds.length === 0) return { ok: false };
 
   try {
     const rows = await db
@@ -45,7 +48,7 @@ export async function refundBookings(
 
     // An unpaid hold being cancelled, or a booking already refunded. Both are
     // ordinary — the customer simply has no money with us.
-    if (rows.length === 0) return { ok: false, reason: "nothing-to-refund" };
+    if (rows.length === 0) return { ok: false };
 
     const total = rows.reduce((sum, r) => sum + r.amountHalalas, 0);
     // Every row of one bill shares a providerRef; taking the first is taking
@@ -53,14 +56,14 @@ export async function refundBookings(
     const providerRef = rows[0].providerRef;
     if (!providerRef) {
       console.error("[payments] refund: paid rows with no providerRef", bookingIds);
-      return { ok: false, reason: "failed" };
+      return { ok: false };
     }
 
     const result = await getDriver().refund({ providerRef, amountHalalas: total, reason });
 
     if (result.status !== "refunded") {
       console.error(`[payments] refund declined for ${providerRef}; settle by hand`);
-      return { ok: false, reason: "declined" };
+      return { ok: false };
     }
 
     await db.transaction(async (tx) => {
@@ -90,6 +93,6 @@ export async function refundBookings(
   } catch (err) {
     // Money may or may not have moved. Loud, because a human has to look.
     console.error(`[payments] refund failed for bookings ${bookingIds.join(", ")}`, err);
-    return { ok: false, reason: "failed" };
+    return { ok: false };
   }
 }

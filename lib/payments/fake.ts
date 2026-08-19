@@ -35,9 +35,9 @@ export const fakeDriver: PaymentDriver = {
   async refund(input: RefundInput): Promise<RefundResult> {
     return {
       status: "refunded",
-      providerRef: input.providerRef,
       raw: {
         driver: "fake",
+        providerRef: input.providerRef,
         refundedHalalas: input.amountHalalas,
         reason: input.reason ?? null,
         at: new Date().toISOString(),

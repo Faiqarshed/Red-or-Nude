@@ -13,13 +13,13 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookings, customers, stations } from "@/lib/db/schema";
+import { bookings } from "@/lib/db/schema";
 import { canCancel, cancelDeadline } from "@/lib/cancellation";
 import { rescheduleBooking } from "@/lib/bookings";
 import { getSettings } from "@/lib/settings";
 import { clientIp, throttled } from "@/lib/throttle";
 import { recordAudit } from "@/lib/audit";
-import { notify } from "@/lib/notify";
+import { notifyCustomer } from "@/lib/notify/customer";
 
 export const dynamic = "force-dynamic";
 
@@ -81,14 +81,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: moved.error }, { status });
   }
 
-  const [chair] = moved.stationIds.length
-    ? await db
-        .select({ label: stations.label })
-        .from(stations)
-        .where(eq(stations.id, moved.stationIds[0]))
-        .limit(1)
-    : [];
-
   await recordAudit(
     { id: null, name: "customer" },
     {
@@ -101,38 +93,12 @@ export async function POST(request: Request) {
     },
   );
 
-  await sendRescheduleNotice(before.customerId, startsAt, chair?.label ?? null);
-
-  return NextResponse.json({
-    ok: true,
+  await notifyCustomer(before.customerId, "booking-rescheduled", {
     startsAt: startsAt.toISOString(),
-    stationLabel: chair?.label ?? null,
   });
-}
 
-/** Awaited but never allowed to fail the move, as confirm.ts does. */
-async function sendRescheduleNotice(
-  customerId: string | null,
-  startsAt: Date,
-  stationLabel: string | null,
-): Promise<void> {
-  try {
-    if (!customerId) return;
-    const [customer] = await db
-      .select({ email: customers.email, lang: customers.lang })
-      .from(customers)
-      .where(eq(customers.id, customerId))
-      .limit(1);
-    if (!customer?.email) return;
-
-    await notify({
-      channel: "email",
-      to: customer.email,
-      template: "booking-rescheduled",
-      lang: customer.lang ?? "ar",
-      data: { startsAt: startsAt.toISOString(), station: stationLabel },
-    });
-  } catch (err) {
-    console.error("[bookings] reschedule notice failed", err);
-  }
+  // The new chair is deliberately not reported. The customer is told their time,
+  // and the table is on the ticket they already hold — resolving the label cost
+  // a query for something nothing displayed.
+  return NextResponse.json({ ok: true, startsAt: startsAt.toISOString() });
 }

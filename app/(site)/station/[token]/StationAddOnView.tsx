@@ -9,6 +9,7 @@ import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
 import { saveBooking, formatDateLabel, formatTime } from "@/lib/booking";
+import { UTC_OFFSET_HOURS } from "@/lib/time";
 import type { CatalogItem } from "@/lib/catalog";
 import type { Localized } from "@/lib/localized";
 
@@ -54,9 +55,11 @@ export default function StationAddOnView({
   const [selected, setSelected] = useState<number | null>(null);
 
   // Local wall-clock, formatted the way the rest of the site does. The customer
-  // is standing in the salon: they care about "3:40", not an ISO instant.
+  // is standing in the salon: they care about "3:40", not an ISO instant. The
+  // offset comes from lib/time.ts rather than a literal 3 — one place decides
+  // what local means, and it is the same place the availability engine asks.
   const when = new Date(startsAt);
-  const localDate = new Date(when.getTime() + 3 * 3_600_000).toISOString();
+  const localDate = new Date(when.getTime() + UTC_OFFSET_HOURS * 3_600_000).toISOString();
   const timeLabel = formatTime(localDate.slice(11, 16), c.date);
   const dateLabel = formatDateLabel(localDate.slice(0, 10), lang);
 

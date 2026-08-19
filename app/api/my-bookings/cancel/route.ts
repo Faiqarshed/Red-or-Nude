@@ -16,13 +16,13 @@ import { NextResponse } from "next/server";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookings, customers } from "@/lib/db/schema";
+import { bookings } from "@/lib/db/schema";
 import { canCancel, cancelDeadline } from "@/lib/cancellation";
 import { getSettings } from "@/lib/settings";
 import { clientIp, throttled } from "@/lib/throttle";
 import { refundBookings } from "@/lib/payments/refund";
 import { recordAudit } from "@/lib/audit";
-import { notify } from "@/lib/notify";
+import { notifyCustomer } from "@/lib/notify/customer";
 
 export const dynamic = "force-dynamic";
 
@@ -77,20 +77,24 @@ export async function POST(request: Request) {
         .orderBy(asc(bookings.createdAt), asc(bookings.id))
     : [anchor];
 
-  // Guarded on status as well as id: two taps on a slow connection must not
-  // produce two refunds. The second update matches nothing and returns nothing.
-  const cancelled = await db.transaction(async (tx) => {
-    const out: string[] = [];
-    for (const member of members) {
-      const rows = await tx
-        .update(bookings)
-        .set({ status: "cancelled", cancelReason: "customer", updatedAt: new Date() })
-        .where(and(eq(bookings.id, member.id), inArray(bookings.status, ["pending", "confirmed"])))
-        .returning({ id: bookings.id });
-      if (rows.length) out.push(rows[0].id);
-    }
-    return out;
-  });
+  // One statement, so it needs no transaction to be atomic. Guarded on status as
+  // well as id: two taps on a slow connection must not produce two refunds — the
+  // second matches nothing and returns nothing.
+  const cancelled = (
+    await db
+      .update(bookings)
+      .set({ status: "cancelled", cancelReason: "customer", updatedAt: new Date() })
+      .where(
+        and(
+          inArray(
+            bookings.id,
+            members.map((m) => m.id),
+          ),
+          inArray(bookings.status, ["pending", "confirmed"]),
+        ),
+      )
+      .returning({ id: bookings.id })
+  ).map((r) => r.id);
 
   if (cancelled.length === 0) {
     return NextResponse.json({ error: "already-cancelled" }, { status: 409 });
@@ -114,7 +118,7 @@ export async function POST(request: Request) {
     },
   );
 
-  await sendCancellationNotice(anchor.customerId, members.length);
+  await notifyCustomer(anchor.customerId, "booking-cancelled", { count: cancelled.length });
 
   return NextResponse.json({
     ok: true,
@@ -122,29 +126,5 @@ export async function POST(request: Request) {
     // `false` here is not a failed cancellation — the booking is gone either
     // way. It means the money needs a human, and the screen says so.
     refunded: refund.ok,
-    refundedSar: refund.ok ? refund.amountHalalas / 100 : null,
   });
-}
-
-/** Awaited but never allowed to fail the cancellation, as confirm.ts does. */
-async function sendCancellationNotice(customerId: string | null, count: number): Promise<void> {
-  try {
-    if (!customerId) return;
-    const [customer] = await db
-      .select({ email: customers.email, lang: customers.lang })
-      .from(customers)
-      .where(eq(customers.id, customerId))
-      .limit(1);
-    if (!customer?.email) return;
-
-    await notify({
-      channel: "email",
-      to: customer.email,
-      template: "booking-cancelled",
-      lang: customer.lang ?? "ar",
-      data: { count },
-    });
-  } catch (err) {
-    console.error("[bookings] cancellation notice failed", err);
-  }
 }

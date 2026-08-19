@@ -41,8 +41,7 @@ export type RefundInput = {
 
 export type RefundResult = {
   status: "refunded" | "failed";
-  /** The provider's id for the refund itself; the fake driver echoes the charge. */
-  providerRef: string;
+  /** The provider's own payload. Add a refund id here when there is a column for it. */
   raw?: unknown;
 };
 
