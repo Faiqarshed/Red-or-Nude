@@ -122,6 +122,9 @@ update bookings
    ```
    - **Expect:** `409` with
      `{"error":"window-closed","cancelBy":"…","cutoffHours":3}`.
+   - The three refusals are reported separately, so the message is never a lie:
+     `window-closed` (open, but too late), `already-cancelled` (nothing left to
+     release), `not-cancellable` (in progress or finished — the salon's to undo).
    - The booking is untouched — re-check its status is still `confirmed`.
 3. Same for `/api/my-bookings/reschedule` with any `startsAt`: `409
    window-closed`. The window is checked against the appointment you *have*, not
@@ -132,7 +135,7 @@ update bookings
 | What to do | Expect |
 |---|---|
 | Cancel with a made-up reference (`RON-ZZZZZ`) | `404 not-found` — the same shape of "no" an unknown reference gets from the lookup, so the code space tells an attacker nothing |
-| Cancel the same booking twice quickly | Second call `409 already-cancelled`, and **only one** `refunds` row. The update is guarded on status as well as id |
+| Cancel the same booking twice | Second call `409 already-cancelled`, and **only one** `refunds` row. Two guards: the status check up front, and the UPDATE itself filtering on status for the genuine-race case |
 | Reschedule onto a slot someone just took | `409 slot-taken` → the UI shows *"That time has just gone — please pick another."* The original booking is unchanged |
 | Reschedule to 10 minutes from now (hand-crafted request) | `409 too-soon` — the lead time applies to a move, not just a new booking |
 | Six cancel attempts in one minute from one IP | `429 too-many`. Cancel and reschedule get 5/min; the read endpoint keeps 10/min. Counted per serverless instance — see the note in `lib/throttle.ts` |

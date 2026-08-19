@@ -197,6 +197,29 @@ export default function MyBookingsView() {
   );
 }
 
+/**
+ * Turn an API refusal into something the customer can act on.
+ *
+ * The three reasons are kept apart on purpose: telling someone who already
+ * cancelled that their window has closed sends them looking for a deadline
+ * problem they do not have. See lib/cancellation.ts.
+ */
+function refusalMessage(
+  data: { error?: string; cutoffHours?: number },
+  h: { windowClosed: string; alreadyCancelled: string; notCancellable: string; failed: string },
+): string {
+  switch (data.error) {
+    case "window-closed":
+      return h.windowClosed.replace("{n}", String(data.cutoffHours ?? 3));
+    case "already-cancelled":
+      return h.alreadyCancelled;
+    case "not-cancellable":
+      return h.notCancellable;
+    default:
+      return h.failed;
+  }
+}
+
 function BookingCard({
   row,
   lang,
@@ -239,11 +262,7 @@ function BookingCard({
         onChanged();
         return;
       }
-      setProblem(
-        data.error === "window-closed"
-          ? h.windowClosed.replace("{n}", String(data.cutoffHours ?? 3))
-          : h.failed,
-      );
+      setProblem(refusalMessage(data, h));
     } catch {
       setProblem(h.failed);
     } finally {
@@ -269,11 +288,9 @@ function BookingCard({
         return;
       }
       setProblem(
-        data.error === "window-closed"
-          ? h.windowClosed.replace("{n}", String(data.cutoffHours ?? 3))
-          : data.error === "slot-taken" || data.error === "too-soon"
-            ? h.slotTaken
-            : h.failed,
+        data.error === "slot-taken" || data.error === "too-soon"
+          ? h.slotTaken
+          : refusalMessage(data, h),
       );
     } catch {
       setProblem(h.failed);

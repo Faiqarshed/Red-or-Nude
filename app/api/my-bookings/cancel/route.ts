@@ -17,7 +17,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings } from "@/lib/db/schema";
-import { canCancel, cancelDeadline } from "@/lib/cancellation";
+import { cancelDeadline, cancelRefusal } from "@/lib/cancellation";
 import { getSettings } from "@/lib/settings";
 import { clientIp, throttled } from "@/lib/throttle";
 import { refundBookings } from "@/lib/payments/refund";
@@ -53,10 +53,11 @@ export async function POST(request: Request) {
   if (!anchor) return NextResponse.json({ error: "not-found" }, { status: 404 });
 
   const { cancel_cutoff_hours: cutoff } = await getSettings(["cancel_cutoff_hours"]);
-  if (!canCancel(anchor, cutoff)) {
+  const refusal = cancelRefusal(anchor, cutoff);
+  if (refusal) {
     return NextResponse.json(
       {
-        error: "window-closed",
+        error: refusal,
         // The customer is being refused; telling them the deadline they missed
         // is more use than telling them "no".
         cancelBy: cancelDeadline(anchor, cutoff).toISOString(),

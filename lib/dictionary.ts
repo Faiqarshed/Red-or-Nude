@@ -206,6 +206,8 @@ const ar = {
     rescheduling: "جارٍ تغيير الموعد…",
     rescheduled: "تم تغيير موعدك.",
     windowClosed: "لا يمكن الإلغاء أو التغيير قبل أقل من {n} ساعات من الموعد.",
+    alreadyCancelled: "هذا الحجز ملغي بالفعل.",
+    notCancellable: "هذا الحجز قيد التنفيذ أو منتهٍ — تواصلي مع الفرع.",
     slotTaken: "هذا الموعد لم يعد متاحاً، اختاري موعداً آخر.",
     changeBy: "يمكنك الإلغاء أو التغيير حتى",
     statuses: {
@@ -527,6 +529,8 @@ const en: Content = {
     rescheduling: "Moving your appointment…",
     rescheduled: "Your appointment has been moved.",
     windowClosed: "Bookings can't be cancelled or moved within {n} hours of the appointment.",
+    alreadyCancelled: "This booking is already cancelled.",
+    notCancellable: "This booking is in progress or finished — please speak to the branch.",
     slotTaken: "That time has just gone — please pick another.",
     changeBy: "You can cancel or change until",
     statuses: {

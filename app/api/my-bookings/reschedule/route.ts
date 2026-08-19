@@ -14,7 +14,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings } from "@/lib/db/schema";
-import { canCancel, cancelDeadline } from "@/lib/cancellation";
+import { cancelDeadline, cancelRefusal } from "@/lib/cancellation";
 import { rescheduleBooking } from "@/lib/bookings";
 import { getSettings } from "@/lib/settings";
 import { clientIp, throttled } from "@/lib/throttle";
@@ -57,10 +57,11 @@ export async function POST(request: Request) {
   // The window is checked against the appointment they *have*, not the one they
   // want. Moving is a privilege of a booking still under the customer's control;
   // an appointment two hours away is the salon's to change, not theirs.
-  if (!canCancel(before, cutoff)) {
+  const refusal = cancelRefusal(before, cutoff);
+  if (refusal) {
     return NextResponse.json(
       {
-        error: "window-closed",
+        error: refusal,
         cancelBy: cancelDeadline(before, cutoff).toISOString(),
         cutoffHours: cutoff,
       },

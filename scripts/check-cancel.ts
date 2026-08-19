@@ -8,7 +8,7 @@
 // uses a fixed +3 offset, so there is no clock-change case to cover.
 
 import assert from "node:assert";
-import { canCancel, cancelDeadline } from "@/lib/cancellation";
+import { canCancel, cancelDeadline, cancelRefusal } from "@/lib/cancellation";
 
 const HOUR = 3_600_000;
 const CUTOFF = 3;
@@ -76,6 +76,38 @@ assert.ok(!canCancel({ startsAt: at(10), status: "confirmed" }, 24, now), "a 24h
 assert.ok(
   canCancel({ startsAt: at(10), status: "confirmed" }, 0, now),
   "a 0h cutoff allows anything not yet started",
+);
+
+// -- why it was refused ------------------------------------------------------
+
+// The API reports the reason, so the three must not collapse into one. Telling
+// someone who already cancelled that their window closed sends them hunting for
+// a deadline problem they do not have.
+assert.strictEqual(cancelRefusal({ startsAt: at(10), status: "confirmed" }, CUTOFF, now), null);
+assert.strictEqual(
+  cancelRefusal({ startsAt: at(1), status: "confirmed" }, CUTOFF, now),
+  "window-closed",
+);
+for (const status of ["cancelled", "no_show"]) {
+  assert.strictEqual(
+    cancelRefusal({ startsAt: at(10), status }, CUTOFF, now),
+    "already-cancelled",
+    `${status} reads as already cancelled`,
+  );
+}
+for (const status of ["in_progress", "completed"]) {
+  assert.strictEqual(
+    cancelRefusal({ startsAt: at(10), status }, CUTOFF, now),
+    "not-cancellable",
+    `${status} is the salon's to undo, not the customer's`,
+  );
+}
+
+// Status beats the clock: an already-cancelled booking far in the future must
+// not be reported as a missed deadline.
+assert.strictEqual(
+  cancelRefusal({ startsAt: at(1), status: "cancelled" }, CUTOFF, now),
+  "already-cancelled",
 );
 
 console.log("check:cancel — all assertions passed");
