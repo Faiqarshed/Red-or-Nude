@@ -18,20 +18,32 @@ npm run check:cancel  # the pure window rule, no database needed
 
 `0005` adds `qr_token uuid not null default gen_random_uuid()` plus a unique
 constraint. Postgres evaluates a **volatile** default per row on `ADD COLUMN`,
-so existing chairs each get their own token — there is no backfill step.
-Confirm:
+so existing chairs each get their own token — there is no backfill step, and
+nothing to verify by hand: `not null` and `unique` are applied in the same
+migration, so it could not have succeeded with blank or shared tokens.
 
-```sql
-select label, qr_token from stations order by sort;
--- every row a different uuid, no nulls
-```
-
-Two settings drive these flows, both editable in `/admin/settings`:
+Two settings drive these flows:
 
 | Key | Default | What it does |
 |---|---|---|
 | `cancel_cutoff_hours` | `3` | How close to the appointment a customer may still cancel or move it |
 | `booking_lead_time_min` | `60` | How far ahead a *new* slot must be — also enforced on reschedule |
+
+**There is no `/admin/settings` screen yet** — that route renders the "under
+construction" page. Nothing in the app writes to the `settings` table; values
+come from the seeded rows, and any key with no row falls back to
+`SETTING_DEFAULTS` in `lib/settings.ts`. `cancel_cutoff_hours` has no row, so it
+is running on the default 3.
+
+To change one for testing, write it by hand:
+
+```sql
+insert into settings (key, value) values ('cancel_cutoff_hours', '24'::jsonb)
+on conflict (key) do update set value = excluded.value, updated_at = now();
+```
+
+You do not need to touch it to test the window — §A3 below moves the *booking*
+instead, which is closer to what really happens.
 
 ---
 
