@@ -105,11 +105,7 @@ export default function GiftCardPaymentPage() {
       <SiteHeader />
 
       <div className="mx-auto grid max-w-page gap-8 px-6 pb-24 pt-[120px] md:px-12 lg:grid-cols-[1fr_540px] lg:px-16">
-        <PaymentMethods
-          onConfirm={confirm}
-          onMethodChange={setMethod}
-          onValidityChange={setCardValid}
-        />
+        <PaymentMethods onMethodChange={setMethod} onValidityChange={setCardValid} />
 
         {/* Summary */}
         <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)]">

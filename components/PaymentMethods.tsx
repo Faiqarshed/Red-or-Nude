@@ -22,8 +22,13 @@ import {
 // Card data still never leaves the browser. When a real gateway lands it will
 // collect the PAN in its own hosted iframe, which is what keeps this origin out
 // of PCI scope; these rules only catch typos before the customer is told
-// "declined". `onValidityChange` lets a page disable its own confirm button too,
-// since both this panel and the summary panel can start a payment.
+// "declined".
+//
+// This panel does not submit. There is exactly one confirm button per page and
+// it lives in the booking summary; `onValidityChange` is how that button learns
+// whether the card is usable. Field errors appear on blur, so they surface as
+// the customer tabs through rather than only on a submit that cannot happen
+// here.
 type MethodId = "card" | "mada" | "stc" | "apple";
 
 function Radio({ active }: { active: boolean }) {
@@ -101,11 +106,9 @@ function Field({
 }
 
 export default function PaymentMethods({
-  onConfirm,
   onMethodChange,
   onValidityChange,
 }: {
-  onConfirm: () => void;
   onMethodChange?: (label: string) => void;
   /** Fires whenever the panel becomes payable, so a page can gate its own button. */
   onValidityChange?: (valid: boolean) => void;
@@ -159,14 +162,6 @@ export default function PaymentMethods({
     setCard((prev) => ({ ...prev, [key]: value }));
   const blur = (key: string) => () => setTouched((prev) => ({ ...prev, [key]: true }));
 
-  /** Mark everything touched so a click on a disabled-looking form explains itself. */
-  const attemptConfirm = () => {
-    if (!payable) {
-      setTouched({ number: true, name: true, expiry: true, cvv: true });
-      return;
-    }
-    onConfirm();
-  };
 
   const labels: Record<MethodId, string> = {
     card: p.cardTitle,
@@ -268,18 +263,6 @@ export default function PaymentMethods({
                 autoComplete="cc-exp"
               />
             </div>
-            <button
-              type="button"
-              onClick={attemptConfirm}
-              aria-disabled={!payable}
-              className={`w-full rounded-[12px] py-4 text-center text-sm font-bold transition-opacity ${
-                payable
-                  ? "bg-red-grad text-white hover:opacity-90"
-                  : "cursor-not-allowed bg-black/[0.06] text-ink/40"
-              }`}
-            >
-              {p.confirm}
-            </button>
           </div>
         )}
       </div>
