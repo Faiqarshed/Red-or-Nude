@@ -41,6 +41,9 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "customers", href: "/admin/customers", icon: "Users", cap: "customers.manage" },
       { key: "staff", href: "/admin/staff", icon: "IdCard", cap: "staff.manage" },
+      // Ratings are read by whoever reads bookings — front desk included, and
+      // technicians deliberately not.
+      { key: "reviews", href: "/admin/reviews", icon: "Star", cap: "bookings.view" },
     ],
   },
   {
@@ -48,6 +51,9 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "branches", href: "/admin/branches", icon: "MapPin", cap: "branches.manage", soon: true },
       { key: "content", href: "/admin/content", icon: "FileText", cap: "content.manage", soon: true },
+      // The first piece of Marketing to actually land; the rest of that module
+      // (offers, carousel scheduling) is still the `soon` item below.
+      { key: "promoCodes", href: "/admin/promo-codes", icon: "Ticket", cap: "marketing.manage" },
       { key: "marketing", href: "/admin/marketing", icon: "Megaphone", cap: "marketing.manage", soon: true },
     ],
   },

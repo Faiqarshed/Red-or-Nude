@@ -19,6 +19,7 @@ import {
   branches,
   customers,
   payments,
+  promoCodes,
   stations,
   type Localized,
 } from "@/lib/db/schema";
@@ -60,6 +61,12 @@ export type InvoiceData = {
   method: PaymentMethod | null;
   providerRef: string | null;
   guests: InvoiceGuest[];
+  /**
+   * The discount code applied to this bill, if any. Names the discount line —
+   * "Discount (EID25)" rather than a deduction the customer has to take on
+   * trust. Null when the only reduction was the group discount.
+   */
+  promoCode: string | null;
   subtotalHalalas: number;
   vatHalalas: number;
   discountHalalas: number;
@@ -132,6 +139,17 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
     .where(and(inArray(payments.bookingId, bookingIds), eq(payments.status, "paid")))
     .limit(1);
 
+  // Read live rather than snapshotted: unlike a price, the code's *name* is not
+  // something an edit can falsify — and the amount it took off is already frozen
+  // in `discountHalalas`.
+  const [promo] = anchor.promoCodeId
+    ? await db
+        .select({ code: promoCodes.code })
+        .from(promoCodes)
+        .where(eq(promoCodes.id, anchor.promoCodeId))
+        .limit(1)
+    : [];
+
   const { vat_percent, business_legal_name, vat_number } = await getSettings([
     "vat_percent",
     "business_legal_name",
@@ -190,6 +208,7 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
     method: paid?.method ?? null,
     providerRef: paid?.providerRef ?? null,
     guests,
+    promoCode: promo?.code ?? null,
     subtotalHalalas: sum((g) => g.subtotalHalalas),
     vatHalalas: sum((g) => g.vatHalalas),
     discountHalalas: sum((g) => g.discountHalalas),

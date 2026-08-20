@@ -39,6 +39,7 @@ const T = {
     amount: "المبلغ (ر.س)",
     lineTotal: "الإجمالي",
     discount: "خصم الحجز الثنائي",
+    promoDiscount: (code: string) => `خصم (${code})`,
     subtotal: "المجموع قبل الضريبة",
     vat: (p: number) => `ضريبة القيمة المضافة ${p}٪`,
     total: "الإجمالي المدفوع",
@@ -65,6 +66,7 @@ const T = {
     amount: "Amount (SAR)",
     lineTotal: "Total",
     discount: "Group booking discount",
+    promoDiscount: (code: string) => `Discount (${code})`,
     subtotal: "Subtotal (excl. VAT)",
     vat: (p: number) => `VAT ${p}%`,
     total: "Total paid",
@@ -100,6 +102,12 @@ export function renderInvoiceEmail(data: InvoiceData): RenderedEmail {
   const methodLabel = data.method ? t.methods[data.method] : "—";
   const multi = data.guests.length > 1;
 
+  // One line for everything taken off, named after the code when there was one.
+  // A guest on a group booking with a promo has both inside this figure; the
+  // booking row stores them added together, so the invoice reports them that way
+  // rather than inventing a split it cannot substantiate.
+  const discountLabel = data.promoCode ? t.promoDiscount(data.promoCode) : t.discount;
+
   // ---- HTML ---------------------------------------------------------------
 
   const metaRow = (label: string, value: string) => `
@@ -124,7 +132,7 @@ export function renderInvoiceEmail(data: InvoiceData): RenderedEmail {
         g.discountHalalas > 0
           ? `
         <tr>
-          <td style="padding:9px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:14px;color:${RED};text-align:${start};">${esc(t.discount)}</td>
+          <td style="padding:9px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:14px;color:${RED};text-align:${start};">${esc(discountLabel)}</td>
           <td style="padding:9px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:14px;font-weight:600;color:${RED};text-align:${end};" dir="ltr">−${esc(money(g.discountHalalas))}</td>
         </tr>`
           : "";
@@ -254,7 +262,7 @@ export function renderInvoiceEmail(data: InvoiceData): RenderedEmail {
     if (g.stationLabel) textLines.push(`${t.station}: ${g.stationLabel}`);
     textLines.push(`${t.reference}: ${g.code}`);
     for (const l of g.lines) textLines.push(`  ${pick(l.label, lang)}  ${money(l.amountHalalas)}`);
-    if (g.discountHalalas > 0) textLines.push(`  ${t.discount}  −${money(g.discountHalalas)}`);
+    if (g.discountHalalas > 0) textLines.push(`  ${discountLabel}  −${money(g.discountHalalas)}`);
     textLines.push(`  ${t.lineTotal}: ${money(g.totalHalalas)}`, "");
   }
 
