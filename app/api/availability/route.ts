@@ -8,7 +8,6 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDayAvailability, getMonthAvailability } from "@/lib/availability";
 import { sweepNoShows } from "@/lib/bookings";
-import { getSettings } from "@/lib/settings";
 import { currentStaff } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
@@ -39,16 +38,21 @@ export async function GET(request: Request) {
   const { branchId, duration, date, month, guests, walkIn } = parsed.data;
 
   try {
-    // Chairs whose customer never checked in are free again, and this is the
-    // query the walk-in drawer runs to find them. Without it, a page left open
-    // since morning offers a stale grid.
-    const { no_show_grace_min: grace } = await getSettings(["no_show_grace_min"]);
-    await sweepNoShows(branchId, grace);
+    // `walkIn` is a request, not a permission: currentStaff() returns null for
+    // the public, so an ordinary visitor passing walkIn=1 is treated as one.
+    // Otherwise anyone could book a slot starting five minutes from now.
+    const staff = walkIn ? await currentStaff() : null;
 
-    // The flag is a request, not a permission. `currentStaff()` returns null for
-    // the public, so an ordinary visitor passing walkIn=1 gets the normal lead
-    // time — otherwise anyone could book a slot starting five minutes from now.
-    const leadTimeMin = walkIn && (await currentStaff()) ? 0 : undefined;
+    if (staff) {
+      // Chairs whose customer never checked in are free again, and this is the
+      // query the walk-in drawer runs to find them — a page left open since
+      // morning would otherwise offer a stale grid.
+      //
+      // Only on the staff path. The public cannot use a released chair anyway:
+      // the slot it frees is always in the past, and the lead time hides it. So
+      // sweeping for them would be a write on every calendar click for nothing.
+      await sweepNoShows(branchId);
+    }
 
     if (date) {
       const slots = await getDayAvailability(
@@ -57,7 +61,7 @@ export async function GET(request: Request) {
         duration,
         new Date(),
         guests,
-        leadTimeMin,
+        staff ? 0 : undefined,
       );
       // freeStationIds is internal scheduling detail — the browser doesn't need
       // to know which chair it would get.

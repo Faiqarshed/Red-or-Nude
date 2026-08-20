@@ -6,6 +6,7 @@ import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, List, Plus } fr
 import { Badge, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
+import { UTC_OFFSET_HOURS } from "@/lib/time";
 import { pick } from "@/lib/localized";
 import type { Localized } from "@/lib/db/schema";
 import { resolveNoShow } from "./actions";
@@ -76,9 +77,24 @@ const DAY_START_HOUR = 8;
 const DAY_END_HOUR = 24;
 const PX_PER_MIN = 1.1;
 
+/**
+ * A UTC timestamp as Riyadh wall clock, date and time from the *same* shift.
+ *
+ * Reading the date off the raw ISO string and the time off a shifted one is how
+ * they end up disagreeing: a booking at 22:00 UTC is 01:00 the next day in
+ * Riyadh, so the pair would read "the 19th, 01:00" for something on the 20th.
+ * Current opening hours mean that cannot happen today, which is exactly why it
+ * would have gone unnoticed until the hours changed.
+ */
+function riyadhParts(iso: string): { date: string; time: string } {
+  const shifted = new Date(
+    new Date(iso).getTime() + UTC_OFFSET_HOURS * 3600_000,
+  ).toISOString();
+  return { date: shifted.slice(0, 10), time: shifted.slice(11, 16) };
+}
+
 function localTime(iso: string): string {
-  // Timestamps arrive as UTC; the salon works in Riyadh (UTC+3, no DST).
-  return new Date(new Date(iso).getTime() + 3 * 3600_000).toISOString().slice(11, 16);
+  return riyadhParts(iso).time;
 }
 
 function minutesFromDayStart(iso: string): number {
@@ -110,7 +126,6 @@ function NoShowStrip({ rows }: { rows: NoShowRow[] }) {
   const [, startTransition] = useTransition();
 
   const resolve = (row: NoShowRow) => {
-    if (busy) return;
     // window.prompt, like the cancellation reason in BookingDrawer — the house
     // way to take one short string from staff. Dismissing it still resolves the
     // row, with no note: the note is optional and a cancelled prompt means
@@ -144,7 +159,7 @@ function NoShowStrip({ rows }: { rows: NoShowRow[] }) {
                 className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-white/70 px-3 py-2"
               >
                 <span className="text-xs tabular-nums text-ink/55" dir="ltr">
-                  {r.startsAt.slice(0, 10)} {localTime(r.startsAt)}
+                  {riyadhParts(r.startsAt).date} {riyadhParts(r.startsAt).time}
                 </span>
                 <span className="text-sm font-medium text-ink">
                   {r.customerName || t.common.none}
@@ -158,9 +173,9 @@ function NoShowStrip({ rows }: { rows: NoShowRow[] }) {
                     {r.customerPhone}
                   </a>
                 )}
-                <span className="text-xs text-ink/45">
-                  {r.serviceName ? pick(r.serviceName, lang) : ""}
-                </span>
+                {r.serviceName && (
+                  <span className="text-xs text-ink/45">{pick(r.serviceName, lang)}</span>
+                )}
                 <button
                   onClick={() => resolve(r)}
                   disabled={busy !== null}

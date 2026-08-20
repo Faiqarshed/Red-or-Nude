@@ -12,7 +12,6 @@ import {
 } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
 import { sweepNoShows } from "@/lib/bookings";
-import { getSettings } from "@/lib/settings";
 import { scopedBranchId } from "@/lib/auth/rbac";
 import { halalasToSar } from "@/lib/money";
 import { localToUtc, utcToLocalDate } from "@/lib/availability";
@@ -47,8 +46,7 @@ export default async function BookingsPage({
 
   // Release chairs nobody checked in to, before reading the day back — otherwise
   // the receptionist is looking at a grid that still shows them as occupied.
-  const { no_show_grace_min: grace } = await getSettings(["no_show_grace_min"]);
-  await sweepNoShows(branchId, grace);
+  await sweepNoShows(branchId);
 
   const dayStart = localToUtc(date, "00:00");
   const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);

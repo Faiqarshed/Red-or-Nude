@@ -330,7 +330,8 @@ async function main() {
   // from under a customer who is sitting in it.
   await cleanup(branch.id);
 
-  const GRACE = 20;
+  // The grace comes from settings (no_show_grace_min, default 20). The 5 / 30 /
+  // 300 minute cases below straddle that default deliberately.
   const minsAgo = (n: number) => new Date(Date.now() - n * 60_000);
 
   /** Seat a confirmed booking whose slot started `n` minutes ago. */
@@ -352,7 +353,7 @@ async function main() {
 
   // Past the grace: released.
   const missed = await seatedAt(30);
-  await sweepNoShows(branch.id, GRACE);
+  await sweepNoShows(branch.id);
   let noShowRow = await rowOf(missed);
   assert.equal(noShowRow.status, "no_show", "30 min in with no check-in must release the chair");
   assert.ok(noShowRow.noShowAt, "a released chair must be flagged for staff");
@@ -362,7 +363,7 @@ async function main() {
   // Idempotent. The sweep runs on every page load and must not keep moving the
   // timestamp, or a flag would never look old.
   const firstFlag = noShowRow.noShowAt!.getTime();
-  await sweepNoShows(branch.id, GRACE);
+  await sweepNoShows(branch.id);
   noShowRow = await rowOf(missed);
   assert.equal(noShowRow.noShowAt!.getTime(), firstFlag, "re-sweeping must not re-flag");
   console.log("  no-show: sweeping twice keeps the original flag ✓");
@@ -370,7 +371,7 @@ async function main() {
   // Inside the grace: left alone. Five minutes late is late, not absent.
   await cleanup(branch.id);
   const justLate = await seatedAt(5);
-  await sweepNoShows(branch.id, GRACE);
+  await sweepNoShows(branch.id);
   assert.equal((await rowOf(justLate)).status, "confirmed", "5 min late is not a no-show");
   console.log("  no-show: 5 min late is left alone ✓");
 
@@ -379,7 +380,7 @@ async function main() {
   await cleanup(branch.id);
   const arrived = await seatedAt(90);
   await db.update(bookings).set({ status: "in_progress" }).where(eq(bookings.id, arrived));
-  await sweepNoShows(branch.id, GRACE);
+  await sweepNoShows(branch.id);
   const arrivedRow = await rowOf(arrived);
   assert.equal(arrivedRow.status, "in_progress", "a checked-in customer must never be released");
   assert.equal(arrivedRow.noShowAt, null, "a checked-in customer must never be flagged");
@@ -389,7 +390,7 @@ async function main() {
   // feature on from flagging every untouched booking in the table.
   await cleanup(branch.id);
   const ancient = await seatedAt(5 * 60);
-  await sweepNoShows(branch.id, GRACE);
+  await sweepNoShows(branch.id);
   assert.equal((await rowOf(ancient)).status, "confirmed", "5 hours ago is outside the window");
   console.log("  no-show: outside the 4-hour window is left alone ✓");
 
@@ -397,7 +398,7 @@ async function main() {
   await cleanup(branch.id);
   const released = await seatedAt(30);
   const releasedRow = await rowOf(released);
-  await sweepNoShows(branch.id, GRACE);
+  await sweepNoShows(branch.id);
   const retaken = await createBookings({
     branchId: branch.id,
     startsAt: releasedRow.startsAt.toISOString(),

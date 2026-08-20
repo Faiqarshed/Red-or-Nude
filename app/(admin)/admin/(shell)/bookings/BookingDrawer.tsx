@@ -7,6 +7,7 @@ import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
+import { UTC_OFFSET_HOURS } from "@/lib/time";
 import { grantRefill, setBookingStatus } from "./actions";
 import { STATUS_TONE, type BookingRow, type BookingStatus } from "./BookingsView";
 
@@ -22,7 +23,7 @@ const NEXT: Record<BookingStatus, BookingStatus[]> = {
 };
 
 function localTime(iso: string): string {
-  return new Date(new Date(iso).getTime() + 3 * 3600_000).toISOString().slice(11, 16);
+  return new Date(new Date(iso).getTime() + UTC_OFFSET_HOURS * 3600_000).toISOString().slice(11, 16);
 }
 
 export default function BookingDrawer({

@@ -331,6 +331,9 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
   // that ever becomes visible to staff.
 }
 
+/** How far back the sweep reaches. See sweepNoShows below for why it is bounded. */
+const LOOKBACK_HOURS = 4;
+
 /**
  * Release chairs whose customer never checked in.
  *
@@ -357,9 +360,9 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
  * `no_show_at is null` makes it idempotent: a booking already flagged keeps its
  * original timestamp however many times this runs.
  */
-const LOOKBACK_HOURS = 4;
+export async function sweepNoShows(branchId: string): Promise<void> {
+  const { no_show_grace_min: graceMin } = await getSettings(["no_show_grace_min"]);
 
-export async function sweepNoShows(branchId: string, graceMin: number): Promise<void> {
   // Bound as an ISO string with an explicit cast: the postgres driver takes
   // numbers in a raw template but not Date objects, which is why the sibling
   // sweepExpiredHolds never hit this.
@@ -405,7 +408,6 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     "booking_hold_min",
     "group_discount_percent",
     "refill_discount_percent",
-    "no_show_grace_min",
   ]);
 
   // Give back chairs whose customer never checked in, before we go looking for a
@@ -413,7 +415,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   // someone who did not turn up. Outside the transaction on purpose: it is an
   // independent state change, and it must not be rolled back if this particular
   // booking then fails to find a chair.
-  await sweepNoShows(input.branchId, settings.no_show_grace_min);
+  await sweepNoShows(input.branchId);
 
   // A refill is checked before anything is priced: the window has to be open,
   // and it has to be the same service the customer originally had. The button
