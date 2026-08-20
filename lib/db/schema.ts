@@ -356,6 +356,26 @@ export const bookings = pgTable(
     promoCodeId: uuid("promo_code_id"),
     notes: text("notes"),
     cancelReason: text("cancel_reason"),
+
+    /**
+     * When the sweep released this chair because nobody checked the customer in.
+     *
+     * Null means it was never auto-flagged — including a `no_show` a receptionist
+     * set by hand, which needs no follow-up because someone was already dealing
+     * with it. See sweepNoShows() in lib/bookings.ts.
+     */
+    noShowAt: timestamp("no_show_at", { withTimezone: true }),
+    /** When staff cleared the flag. Null while it still needs someone. */
+    noShowResolvedAt: timestamp("no_show_resolved_at", { withTimezone: true }),
+    /**
+     * Optional — whatever staff typed about what they did.
+     *
+     * Free text rather than a fixed list of outcomes on purpose: nobody knows yet
+     * how a missed customer actually gets settled, and a dropdown guessed now is
+     * a dropdown everyone sets to "Other". Once there are real notes to read, the
+     * common answers become buttons and this column still holds them.
+     */
+    noShowNote: text("no_show_note"),
     ...stamps,
   },
   (t) => ({
@@ -377,6 +397,12 @@ export const bookings = pgTable(
     refillOnce: uniqueIndex("bookings_refill_of_unique")
       .on(t.refillOfBookingId)
       .where(sql`${t.status} not in ('cancelled', 'no_show')`),
+    // The flag strip queries this on every admin bookings page load, and it is
+    // looking for a handful of rows in a table of every booking ever made.
+    // Partial, so the index only carries the ones still needing attention.
+    unresolvedNoShow: index("bookings_unresolved_no_show_idx")
+      .on(t.branchId, t.noShowAt)
+      .where(sql`${t.noShowResolvedAt} is null`),
     byBranchTime: index("bookings_branch_time_idx").on(t.branchId, t.startsAt),
     byStatus: index("bookings_status_idx").on(t.status),
     byGroup: index("bookings_group_idx").on(t.groupId),

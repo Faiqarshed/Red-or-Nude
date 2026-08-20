@@ -23,6 +23,7 @@ import {
 import { reserveStations, utcToLocalDate } from "@/lib/availability";
 import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
+import { riyadhDayRange } from "@/lib/time";
 import { halalasToSar, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { formatTicketNo } from "@/lib/tickets";
 
@@ -331,6 +332,55 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
 }
 
 /**
+ * Release chairs whose customer never checked in.
+ *
+ * A booking is paid for and holds a chair for its whole duration. If nobody
+ * turns up, that chair sits empty while walk-ins are turned away — the salon
+ * loses the slot twice, having already been paid for it once. After the grace
+ * period the chair goes back into the pool.
+ *
+ * `status = 'no_show'` is the entire mechanism: both `bookings_station_slot_unique`
+ * and `reserveStations` already exclude it, as does the availability engine's
+ * conflict scan. Releasing a chair *is* setting the status.
+ *
+ * **`in_progress` is the check-in.** A booking still `confirmed` past its grace
+ * is one nobody marked as arrived. That is a weaker signal than it sounds —
+ * today staff rarely press anything — which is why:
+ *
+ *   - the window only reaches back `LOOKBACK_HOURS`, so switching this on cannot
+ *     flag months of history, and a morning booking is not flagged at closing;
+ *   - `no_show_at` marks it for a human rather than closing the matter, and a
+ *     wrongly flagged booking is cleared with one button;
+ *   - the booking itself is untouched — the customer has lost nothing until a
+ *     walk-in actually claims the chair.
+ *
+ * `no_show_at is null` makes it idempotent: a booking already flagged keeps its
+ * original timestamp however many times this runs.
+ */
+const LOOKBACK_HOURS = 4;
+
+export async function sweepNoShows(branchId: string, graceMin: number): Promise<void> {
+  // Bound as an ISO string with an explicit cast: the postgres driver takes
+  // numbers in a raw template but not Date objects, which is why the sibling
+  // sweepExpiredHolds never hit this.
+  const { start: dayStart } = riyadhDayRange();
+
+  await db.execute(sql`
+    update ${bookings}
+       set status = 'no_show', no_show_at = now(), updated_at = now()
+     where branch_id = ${branchId}
+       and status = 'confirmed'
+       and no_show_at is null
+       and starts_at >= ${dayStart.toISOString()}::timestamptz
+       and starts_at <  now() - make_interval(mins => ${graceMin})
+       and starts_at >  now() - make_interval(hours => ${LOOKBACK_HOURS})
+  `);
+  // ponytail: like sweepExpiredHolds above, this only runs when someone looks —
+  // a booking page nobody opens keeps its chair held. Good enough while a
+  // receptionist is at the screen all day; a cron replaces it if that changes.
+}
+
+/**
  * The single write path. One guest or two, identically.
  *
  * Everything happens in one transaction: the chairs are locked, the customer is
@@ -355,7 +405,15 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     "booking_hold_min",
     "group_discount_percent",
     "refill_discount_percent",
+    "no_show_grace_min",
   ]);
+
+  // Give back chairs whose customer never checked in, before we go looking for a
+  // free one. This is what lets a receptionist seat a walk-in in the chair of
+  // someone who did not turn up. Outside the transaction on purpose: it is an
+  // independent state change, and it must not be rolled back if this particular
+  // booking then fails to find a chair.
+  await sweepNoShows(input.branchId, settings.no_show_grace_min);
 
   // A refill is checked before anything is priced: the window has to be open,
   // and it has to be the same service the customer originally had. The button

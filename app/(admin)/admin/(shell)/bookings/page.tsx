@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   addons,
@@ -11,6 +11,8 @@ import {
   stations,
 } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
+import { sweepNoShows } from "@/lib/bookings";
+import { getSettings } from "@/lib/settings";
 import { scopedBranchId } from "@/lib/auth/rbac";
 import { halalasToSar } from "@/lib/money";
 import { localToUtc, utcToLocalDate } from "@/lib/availability";
@@ -40,13 +42,18 @@ export default async function BookingsPage({
     : utcToLocalDate(riyadhDayRange().start);
 
   if (!branchId) {
-    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} catalog={{ services: [], addons: [], removals: [] }} canManage={false} branchId="" />;
+    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShows={[]} catalog={{ services: [], addons: [], removals: [] }} canManage={false} branchId="" />;
   }
+
+  // Release chairs nobody checked in to, before reading the day back — otherwise
+  // the receptionist is looking at a grid that still shows them as occupied.
+  const { no_show_grace_min: grace } = await getSettings(["no_show_grace_min"]);
+  await sweepNoShows(branchId, grace);
 
   const dayStart = localToUtc(date, "00:00");
   const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
 
-  const [stationRows, rows, addonLinks, serviceRows, addonRows, removalRows] = await Promise.all([
+  const [stationRows, rows, noShowRows, addonLinks, serviceRows, addonRows, removalRows] = await Promise.all([
     db
       .select()
       .from(stations)
@@ -69,11 +76,33 @@ export default async function BookingsPage({
         // Why this booking is cheaper than the price list says.
         refillOfBookingId: bookings.refillOfBookingId,
         refillExpiresAt: bookings.refillExpiresAt,
+        noShowNote: bookings.noShowNote,
       })
       .from(bookings)
       .leftJoin(customers, eq(bookings.customerId, customers.id))
       .where(
         and(eq(bookings.branchId, branchId), gte(bookings.startsAt, dayStart), lt(bookings.startsAt, dayEnd)),
+      )
+      .orderBy(asc(bookings.startsAt)),
+    // Every unresolved flag for this branch, on any date — the strip is not
+    // scoped to the day being viewed, or a Friday no-show would vanish the
+    // moment someone clicked to Monday.
+    db
+      .select({
+        id: bookings.id,
+        startsAt: bookings.startsAt,
+        serviceName: bookings.serviceName,
+        customerName: customers.name,
+        customerPhone: customers.phone,
+      })
+      .from(bookings)
+      .leftJoin(customers, eq(bookings.customerId, customers.id))
+      .where(
+        and(
+          eq(bookings.branchId, branchId),
+          isNotNull(bookings.noShowAt),
+          isNull(bookings.noShowResolvedAt),
+        ),
       )
       .orderBy(asc(bookings.startsAt)),
     db
@@ -134,6 +163,13 @@ export default async function BookingsPage({
           durationMin: r.durationMin,
         })),
       }}
+      noShows={noShowRows.map((r) => ({
+        id: r.id,
+        startsAt: r.startsAt.toISOString(),
+        serviceName: r.serviceName,
+        customerName: r.customerName,
+        customerPhone: r.customerPhone,
+      }))}
       bookings={rows.map(
         (r): BookingRow => ({
           id: r.id,
@@ -151,6 +187,7 @@ export default async function BookingsPage({
           customerPhone: r.customerPhone,
           refillOfCode: r.refillOfBookingId ? (parentCodes.get(r.refillOfBookingId) ?? null) : null,
           refillExpiresAt: r.refillExpiresAt?.toISOString() ?? null,
+          noShowNote: r.noShowNote,
         }),
       )}
     />

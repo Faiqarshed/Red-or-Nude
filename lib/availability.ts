@@ -184,11 +184,24 @@ export async function getDayAvailability(
   durationMin: number,
   now: Date = new Date(),
   guests = 1,
+  /**
+   * Override the branch's booking lead time, in minutes.
+   *
+   * Pass `0` for a walk-in. The lead time exists to stop a web customer booking
+   * something starting in five minutes that nobody is ready for — but a walk-in
+   * is a person standing at the desk right now, so the rule is exactly backwards
+   * at the counter. It is also what would otherwise make a chair freed by a
+   * no-show unusable: the slot it frees is always in the past.
+   *
+   * Only honoured for signed-in staff — see app/api/availability/route.ts.
+   */
+  leadTimeMin?: number,
 ): Promise<Slot[]> {
   const from = localToUtc(dateStr, "00:00");
   const to = new Date(from.getTime() + DAY_MS);
   const ctx = await loadContext(branchId, from, to);
-  return computeDay(ctx, dateStr, durationMin, now, guests);
+  const effective = leadTimeMin === undefined ? ctx : { ...ctx, leadTimeMin };
+  return computeDay(effective, dateStr, durationMin, now, guests);
 }
 
 /**

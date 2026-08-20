@@ -60,7 +60,7 @@ export default function WalkInDrawer({
     let cancelled = false;
     setSlots(null);
     setStartsAt(null);
-    fetch(`/api/availability?branchId=${branchId}&date=${date}&duration=${durationMin}`)
+    fetch(`/api/availability?branchId=${branchId}&date=${date}&duration=${durationMin}&walkIn=1`)
       .then((r) => r.json())
       .then((d) => !cancelled && setSlots(d.slots ?? []))
       .catch(() => !cancelled && setSlots([]));

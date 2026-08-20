@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings } from "@/lib/db/schema";
@@ -89,6 +89,55 @@ export async function rescheduleBooking(input: {
     entity: "bookings",
     entityId: before.id,
     diff: { startsAt: { from: before.startsAt.toISOString(), to: startsAt.toISOString() } },
+  });
+
+  revalidate();
+  return { ok: true };
+}
+
+const resolveSchema = z.object({
+  id: z.string().uuid(),
+  note: z.string().trim().max(500).optional(),
+});
+
+/**
+ * Clear a no-show flag once staff have dealt with the customer.
+ *
+ * Two states and an optional note, rather than a fixed list of outcomes. Nobody
+ * knows yet how a missed customer actually gets settled — refunded, squeezed in
+ * later, rebooked, or nothing at all — and a dropdown guessed now is a dropdown
+ * everybody sets to "Other". Once there are real notes to read, the common
+ * answers become buttons and this same column holds them.
+ *
+ * Touches nothing else: the status is already `no_show`, no money moves, and the
+ * booking row is otherwise exactly as the sweep left it. The audit entry is the
+ * record of who decided it was handled.
+ */
+export async function resolveNoShow(input: {
+  id: string;
+  note?: string;
+}): Promise<Result> {
+  const actor = await requireCan("bookings.manage");
+  const parsed = resolveSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "invalid" };
+
+  const note = parsed.data.note?.trim() || null;
+
+  // Guarded on "still unresolved" as well as the id, so two receptionists
+  // clearing the same row do not overwrite each other's note.
+  const [row] = await db
+    .update(bookings)
+    .set({ noShowResolvedAt: new Date(), noShowNote: note, updatedAt: new Date() })
+    .where(and(eq(bookings.id, parsed.data.id), isNull(bookings.noShowResolvedAt)))
+    .returning({ id: bookings.id });
+
+  if (!row) return { ok: false, error: "already-resolved" };
+
+  await recordAudit(actor, {
+    action: "resolve-no-show",
+    entity: "bookings",
+    entityId: parsed.data.id,
+    diff: { noShowNote: { from: null, to: note } },
   });
 
   revalidate();

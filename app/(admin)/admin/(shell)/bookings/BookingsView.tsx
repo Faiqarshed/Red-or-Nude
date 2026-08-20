@@ -2,12 +2,13 @@
 
 import { useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CalendarDays, ChevronLeft, ChevronRight, List, Plus } from "lucide-react";
+import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, List, Plus } from "lucide-react";
 import { Badge, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
 import { pick } from "@/lib/localized";
 import type { Localized } from "@/lib/db/schema";
+import { resolveNoShow } from "./actions";
 import BookingDrawer from "./BookingDrawer";
 import WalkInDrawer from "./WalkInDrawer";
 
@@ -37,6 +38,21 @@ export type BookingRow = {
   refillOfCode?: string | null;
   /** An admin-granted refill deadline, if one was set by hand. */
   refillExpiresAt?: string | null;
+  /** What staff wrote when they cleared a no-show flag, if they wrote anything. */
+  noShowNote?: string | null;
+};
+
+/**
+ * A booking whose chair was released because nobody checked the customer in, and
+ * which nobody has dealt with yet. Not date-scoped: a Friday no-show is still
+ * waiting on Monday, which is the whole point of calling it unresolved.
+ */
+export type NoShowRow = {
+  id: string;
+  startsAt: string;
+  serviceName: Localized | null;
+  customerName: string | null;
+  customerPhone: string | null;
 };
 
 export type CatalogOption = {
@@ -76,12 +92,98 @@ function shiftDate(date: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * The chairs we gave away, and the customers still owed an answer.
+ *
+ * Amber rather than red, and styled after the `?denied=` banner on the dashboard
+ * — the only other "pay attention" surface in the admin. It is information, not
+ * a failure: the chair is already back in use by the time anyone reads this.
+ *
+ * Deliberately above the date toolbar and outside the day being viewed, because
+ * an unresolved flag that disappears when the receptionist changes the date is
+ * not a flag, it is a rumour.
+ */
+function NoShowStrip({ rows }: { rows: NoShowRow[] }) {
+  const { t, lang } = useAdminI18n();
+  const router = useRouter();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
+
+  const resolve = (row: NoShowRow) => {
+    if (busy) return;
+    // window.prompt, like the cancellation reason in BookingDrawer — the house
+    // way to take one short string from staff. Dismissing it still resolves the
+    // row, with no note: the note is optional and a cancelled prompt means
+    // "nothing to add", not "changed my mind".
+    const note = window.prompt(t.bookings.noShowResolvePrompt) ?? undefined;
+    setBusy(row.id);
+    startTransition(async () => {
+      const res = await resolveNoShow({ id: row.id, note });
+      setBusy(null);
+      if (res.ok) router.refresh();
+    });
+  };
+
+  return (
+    <div
+      role="status"
+      className="mb-4 rounded-2xl border border-[#e8c98a] bg-[#fdf6e7] p-4"
+    >
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#b7791f]" strokeWidth={2} />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-[#8a5a09]">
+            {t.bookings.noShowTitle} ({rows.length})
+          </p>
+          <p className="mt-0.5 text-xs text-[#8a5a09]/75">{t.bookings.noShowHint}</p>
+
+          <ul className="mt-3 space-y-2">
+            {rows.map((r) => (
+              <li
+                key={r.id}
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-white/70 px-3 py-2"
+              >
+                <span className="text-xs tabular-nums text-ink/55" dir="ltr">
+                  {r.startsAt.slice(0, 10)} {localTime(r.startsAt)}
+                </span>
+                <span className="text-sm font-medium text-ink">
+                  {r.customerName || t.common.none}
+                </span>
+                {r.customerPhone && (
+                  <a
+                    href={`tel:${r.customerPhone}`}
+                    dir="ltr"
+                    className="text-xs text-ink/55 underline underline-offset-2 hover:text-red"
+                  >
+                    {r.customerPhone}
+                  </a>
+                )}
+                <span className="text-xs text-ink/45">
+                  {r.serviceName ? pick(r.serviceName, lang) : ""}
+                </span>
+                <button
+                  onClick={() => resolve(r)}
+                  disabled={busy !== null}
+                  className="ms-auto rounded-lg bg-[#b7791f] px-3 py-1.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                >
+                  {busy === r.id ? t.common.saving : t.bookings.noShowResolve}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function BookingsView({
   date,
   branchId,
   branches,
   stations,
   bookings,
+  noShows,
   catalog,
   canManage,
 }: {
@@ -90,6 +192,8 @@ export default function BookingsView({
   branches: { id: string; name: Localized }[];
   stations: { id: string; label: string }[];
   bookings: BookingRow[];
+  /** Unresolved no-shows across every date, not just the one being viewed. */
+  noShows: NoShowRow[];
   catalog: { services: CatalogOption[]; addons: CatalogOption[]; removals: CatalogOption[] };
   canManage: boolean;
 }) {
@@ -126,6 +230,8 @@ export default function BookingsView({
           ) : null
         }
       />
+
+      {canManage && noShows.length > 0 && <NoShowStrip rows={noShows} />}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1 rounded-xl border border-black/[0.06] bg-white p-1">

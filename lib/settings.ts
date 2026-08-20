@@ -13,6 +13,8 @@ export const SETTING_DEFAULTS = {
   booking_hold_min: 15,
   /** How close to the appointment a customer may still cancel or move it. */
   cancel_cutoff_hours: 3,
+  /** How long a paid booking waits to be checked in before its chair is released. */
+  no_show_grace_min: 20,
   /** Discount for booking two guests together, off the combined bill. */
   group_discount_percent: 10,
   /** A refill costs the service price minus this much. */
