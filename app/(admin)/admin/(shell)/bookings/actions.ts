@@ -8,6 +8,7 @@ import { bookings } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
 import { createBooking, rescheduleBooking as moveBooking } from "@/lib/bookings";
+import { inviteReview } from "@/lib/reviews/invite";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
@@ -51,6 +52,18 @@ export async function setBookingStatus(
     entityId: id,
     diff: { status: { from: before.status, to: status } },
   });
+
+  // "End" is this, and nothing else (brief §2.9). Guarded on the *transition*
+  // rather than the destination so re-saving a completed booking asks nobody
+  // twice — though inviteReview would refuse anyway, since one invitation per
+  // booking is a database constraint, not a check here.
+  //
+  // Awaited rather than fired and forgotten: on a serverless host the function
+  // is frozen the moment this action returns, so a detached promise would never
+  // finish. It never throws — the appointment is closed either way.
+  if (status === "completed" && before.status !== "completed") {
+    await inviteReview(id);
+  }
 
   revalidate();
   return { ok: true };

@@ -66,6 +66,7 @@ function sample(lang: "ar" | "en"): InvoiceData {
     method: "mada",
     providerRef: "pay_9f3a1c",
     guests,
+    promoCode: null,
     subtotalHalalas: sum((g) => g.subtotalHalalas),
     vatHalalas: sum((g) => g.vatHalalas),
     discountHalalas: sum((g) => g.discountHalalas),

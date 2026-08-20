@@ -42,6 +42,8 @@ const body = z.object({
   }),
   /** Set by the refill button in the customer's booking history. */
   refillOfCode: z.string().trim().max(20).nullable().optional(),
+  /** An occasion discount code typed at checkout (brief §2.10). */
+  promoCode: z.string().trim().max(40).nullable().optional(),
   /**
    * Set only by the station QR flow (brief §2.7), pinning the booking to the
    * chair the customer is already sitting in.
@@ -113,14 +115,23 @@ export async function POST(request: Request) {
     // offer — so it gets 409 too.
     //
     // `refill-window` is different: the offer stands, the date is simply outside
-    // it. That is a 400 — the request was wrong, not the world.
+    // it. That is a 400 — the request was wrong, not the world. A refused promo
+    // code is the same shape of problem, and carries the reason so the checkout
+    // can say which of the six it was rather than "invalid code".
     const status =
       result.error === "slot-taken" || result.error === "refill-expired"
         ? 409
         : result.error === "blocked"
           ? 403
           : 400;
-    return NextResponse.json({ error: result.error }, { status });
+    return NextResponse.json(
+      {
+        error: result.error,
+        promoReason: result.promoReason,
+        minTotalHalalas: result.minTotalHalalas,
+      },
+      { status },
+    );
   }
 
   return NextResponse.json(

@@ -18,7 +18,9 @@
     "check:fields": "tsx scripts/check-fields.ts",
     "check:cancel": "tsx scripts/check-cancel.ts",
     "check:mail": "tsx --conditions=react-server scripts/check-mail.ts",
-    "preview:giftcard": "tsx --conditions=react-server scripts/preview-giftcard.ts"
+    "preview:giftcard": "tsx --conditions=react-server scripts/preview-giftcard.ts",
+    "check:promo": "tsx --conditions=react-server scripts/check-promo.ts",
+    "check:reviews": "tsx --conditions=react-server scripts/check-reviews.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.8",

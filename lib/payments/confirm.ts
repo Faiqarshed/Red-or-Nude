@@ -19,6 +19,7 @@ import { allocateTickets } from "@/lib/bookings";
 import { utcToLocalDate } from "@/lib/availability";
 import { notify } from "@/lib/notify";
 import { sendBookingInvoice } from "@/lib/invoice/send";
+import { countPromoUse } from "@/lib/promo";
 import { getDriver, type PaymentMethod } from "./index";
 
 export type ConfirmedTicket = {
@@ -160,6 +161,10 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     // function is frozen the moment this response is returned, so a detached
     // promise would simply never finish. Neither can fail the payment — each
     // swallows its own errors and logs.
+    // Now, and not at hold time: an abandoned checkout must not spend a use of
+    // a limited code. Once per bill — a group is one redemption, not two.
+    if (anchor.promoCodeId) await countPromoUse(anchor.promoCodeId);
+
     await sendConfirmations(members, tickets, labelOf);
     await sendBookingInvoice(members.map((m) => m.id));
 

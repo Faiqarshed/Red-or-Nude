@@ -55,6 +55,16 @@ export default function PaymentPage() {
   /** Card fields live inside PaymentMethods; this mirrors their validity up. */
   const [cardValid, setCardValid] = useState(false);
   const [phoneTouched, setPhoneTouched] = useState(false);
+  /**
+   * The discount code (brief §2.10). `promoApplied` is the code the server
+   * accepted, not what is being typed — only an accepted one is sent on, and
+   * only an accepted one shows a discount row.
+   */
+  const [promoInput, setPromoInput] = useState("");
+  const [promoApplied, setPromoApplied] = useState<string | null>(null);
+  const [promoDiscountSar, setPromoDiscountSar] = useState(0);
+  const [promoError, setPromoError] = useState<string | null>(null);
+  const [promoChecking, setPromoChecking] = useState(false);
 
   useEffect(() => {
     const saved = loadBooking();
@@ -77,6 +87,71 @@ export default function PaymentPage() {
   const methodCode = (): "card" | "mada" | "stc" | "apple" => {
     const i = METHOD_KEYS.findIndex((k) => p[k] === method);
     return (["card", "mada", "stc", "apple"] as const)[i === -1 ? 0 : i];
+  };
+
+  /** What the customer actually pays: the quoted bill, less any code. */
+  const payableTotal = booking.total - promoDiscountSar;
+
+  const promoReasonText = (reason: string, minTotalHalalas?: number): string => {
+    const e = p.promoErrors;
+    switch (reason) {
+      case "min-total":
+        return e.minTotal.replace("{n}", String(Math.ceil((minTotalHalalas ?? 0) / 100)));
+      case "expired":
+        return e.expired;
+      case "not-started":
+        return e.notStarted;
+      case "used-up":
+        return e.usedUp;
+      // "inactive" is a code the salon switched off. To the customer that is
+      // indistinguishable from one that never existed, and saying so would tell
+      // a stranger which of their guesses are real codes.
+      default:
+        return e.unknown;
+    }
+  };
+
+  const applyPromo = async () => {
+    const code = promoInput.trim();
+    if (!code || promoChecking) return;
+    setPromoChecking(true);
+    setPromoError(null);
+
+    try {
+      const res = await fetch("/api/promo/quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Display only — /api/bookings re-prices the code against totals it
+        // works out from the catalogue itself, and that is what gets charged.
+        body: JSON.stringify({ code, totalHalalas: Math.round(booking.total * 100) }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 429) {
+        setPromoError(p.promoErrors.tooMany);
+        return;
+      }
+      if (!res.ok || !data.ok) {
+        setPromoApplied(null);
+        setPromoDiscountSar(0);
+        setPromoError(promoReasonText(data.reason ?? "unknown", data.minTotalHalalas));
+        return;
+      }
+
+      setPromoApplied(data.code);
+      setPromoDiscountSar(data.discountHalalas / 100);
+    } catch {
+      setPromoError(p.promoErrors.unknown);
+    } finally {
+      setPromoChecking(false);
+    }
+  };
+
+  const clearPromo = () => {
+    setPromoApplied(null);
+    setPromoDiscountSar(0);
+    setPromoError(null);
+    setPromoInput("");
   };
 
   const confirm = async () => {
@@ -114,6 +189,7 @@ export default function PaymentPage() {
             },
             refillOfCode: booking.refillOf ?? null,
             stationToken: booking.stationToken ?? null,
+            promoCode: promoApplied,
           }),
         });
 
@@ -123,6 +199,15 @@ export default function PaymentPage() {
           // took the chair while they typed, or the refill window just lapsed.
           if (data.error === "refill-expired") setError(p.refillExpired);
           else if (data.error === "refill-window") setError(p.refillWindow);
+          // The code was fine when it was previewed and is not any more, or the
+          // preview was lying. Either way the hold was refused rather than
+          // charged at full price — clear it and say why.
+          else if (data.error === "promo-invalid") {
+            setPromoApplied(null);
+            setPromoDiscountSar(0);
+            setPromoError(promoReasonText(data.promoReason ?? "unknown", data.minTotalHalalas));
+            setError(p.promoRejected);
+          }
           else if (res.status === 409) setError(p.slotTaken);
           else if (data.error === "invalid" && data.issues?.includes("customer.phone")) {
             setError(p.invalidPhone);
@@ -261,7 +346,58 @@ export default function PaymentPage() {
                 </label>
               </div>
 
-              {booking.total < booking.grossTotal && (
+              {/* Occasion discount codes (brief §2.10). Applied before the hold
+                  exists, so a code typed after a declined card still counts —
+                  the retry re-uses the hold and never re-prices it. */}
+              <div className="mt-4">
+                <span className="mb-1.5 block text-[12px] text-ink/55">{p.promoLabel}</span>
+                {promoApplied ? (
+                  <div className="flex items-center justify-between rounded-[12px] border border-red/20 bg-red/[0.04] px-4 py-3">
+                    <span className="text-sm font-semibold text-red" dir="ltr">
+                      {promoApplied}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={clearPromo}
+                      className="text-[12px] font-semibold text-ink/50 underline underline-offset-4 hover:text-ink"
+                    >
+                      {p.promoRemove}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      value={promoInput}
+                      onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void applyPromo();
+                        }
+                      }}
+                      dir="ltr"
+                      maxLength={40}
+                      placeholder={p.promoPlaceholder}
+                      className="min-w-0 flex-1 rounded-[12px] border border-black/[0.08] px-4 py-3 text-left text-sm uppercase text-ink outline-none placeholder:normal-case placeholder:text-ink/30 focus:border-red/40"
+                    />
+                    <button
+                      type="button"
+                      onClick={applyPromo}
+                      disabled={!promoInput.trim() || promoChecking}
+                      className="shrink-0 rounded-[12px] bg-black/[0.06] px-5 text-sm font-bold text-ink transition-colors hover:bg-black/[0.1] disabled:cursor-not-allowed disabled:text-ink/40"
+                    >
+                      {promoChecking ? p.promoApplying : p.promoApply}
+                    </button>
+                  </div>
+                )}
+                {promoError && (
+                  <p role="alert" className="mt-1.5 text-[11px] text-red">
+                    {promoError}
+                  </p>
+                )}
+              </div>
+
+              {(booking.total < booking.grossTotal || promoDiscountSar > 0) && (
                 <div className="mt-4 space-y-1.5 rounded-[14px] bg-cream/60 p-4 text-[13px]">
                   <div className="flex items-center justify-between text-ink/55">
                     <span className="flex items-center gap-1">
@@ -270,20 +406,31 @@ export default function PaymentPage() {
                     </span>
                     <span>{p.subtotal}</span>
                   </div>
-                  <div className="flex items-center justify-between font-semibold text-red">
-                    <span className="flex items-center gap-1">
-                      −<Riyal className="h-3 w-3" />
-                      {booking.grossTotal - booking.total}
-                    </span>
-                    <span>{p.groupDiscount}</span>
-                  </div>
+                  {booking.total < booking.grossTotal && (
+                    <div className="flex items-center justify-between font-semibold text-red">
+                      <span className="flex items-center gap-1">
+                        −<Riyal className="h-3 w-3" />
+                        {booking.grossTotal - booking.total}
+                      </span>
+                      <span>{p.groupDiscount}</span>
+                    </div>
+                  )}
+                  {promoDiscountSar > 0 && (
+                    <div className="flex items-center justify-between font-semibold text-red">
+                      <span className="flex items-center gap-1">
+                        −<Riyal className="h-3 w-3" />
+                        {promoDiscountSar}
+                      </span>
+                      <span dir="ltr">{promoApplied}</span>
+                    </div>
+                  )}
                 </div>
               )}
 
               <div className="mt-4 flex items-center justify-between rounded-[14px] bg-[#fbeaea] p-4">
                 <div className="flex items-center gap-1 font-display text-2xl font-extrabold text-red">
                   <Riyal className="h-5 w-5" />
-                  {booking.total}
+                  {payableTotal}
                 </div>
                 <p className="text-xs text-ink/45">{p.total}</p>
               </div>
@@ -405,7 +552,9 @@ function SuccessModal({
               <span className="text-[13px] text-ink/50">{p.rowTotal}</span>
               <span className="flex items-center gap-1 font-display text-base font-extrabold text-red">
                 <Riyal className="h-4 w-4" />
-                {booking.total}
+                {/* Summed from the tickets, not from the selection: this is what
+                    the card was actually charged, discounts and all. */}
+                {tickets.reduce((sum, t) => sum + t.totalHalalas, 0) / 100}
               </span>
             </div>
           </div>

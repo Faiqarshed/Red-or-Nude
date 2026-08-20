@@ -341,6 +341,15 @@ export const bookings = pgTable(
     servicePriceHalalas: integer("service_price_halalas").notNull().default(0),
     removalPriceHalalas: integer("removal_price_halalas").notNull().default(0),
     subtotalHalalas: integer("subtotal_halalas").notNull().default(0),
+    /**
+     * Everything taken off this guest's line: their share of the group discount
+     * plus their share of any promo code, as one number.
+     *
+     * ponytail: the two are not stored separately, so "how much did promos cost
+     * us" cannot be answered from this column alone — `promo_code_id` says only
+     * that one was used. Split it into two columns when someone actually wants
+     * that report.
+     */
     discountHalalas: integer("discount_halalas").notNull().default(0),
     vatHalalas: integer("vat_halalas").notNull().default(0),
     totalHalalas: integer("total_halalas").notNull().default(0),
@@ -353,7 +362,16 @@ export const bookings = pgTable(
       onDelete: "set null",
     }),
 
-    promoCodeId: uuid("promo_code_id"),
+    /**
+     * The discount code applied at checkout, if any (brief §2.10).
+     *
+     * `set null` rather than `restrict`: deleting a spent promo code must not be
+     * blocked by the bookings that used it, and the amount is already recorded
+     * in `discount_halalas` either way — which is the number that has to survive.
+     */
+    promoCodeId: uuid("promo_code_id").references((): AnyPgColumn => promoCodes.id, {
+      onDelete: "set null",
+    }),
     notes: text("notes"),
     cancelReason: text("cancel_reason"),
 
@@ -479,6 +497,51 @@ export const bookingAddons = pgTable(
     priceHalalas: integer("price_halalas").notNull().default(0),
   },
   (t) => ({ pk: primaryKey({ columns: [t.bookingId, t.addonId] }) }),
+);
+
+/**
+ * One row per finished appointment: the invitation, and the answer if it came
+ * (brief §2.9). Written when a receptionist presses End on the ticket.
+ *
+ * The row exists from the moment the customer is *asked*, not from when they
+ * reply — which is what makes `reviews_booking_unique` the thing that stops a
+ * second email, and what makes a response rate computable at all.
+ *
+ * There is no `technician_id` here on purpose. Who served the appointment is
+ * `bookings.technician_id`, resolved by a join when the reviews are read, so it
+ * stays correct if the assignment is set or corrected after the fact. A snapshot
+ * would freeze whatever was true the moment the customer happened to click.
+ */
+export const reviews = pgTable(
+  "reviews",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bookingId: uuid("booking_id")
+      .notNull()
+      .references(() => bookings.id, { onDelete: "cascade" }),
+    /**
+     * What the emailed link carries.
+     *
+     * Its own random value rather than the booking code: that code travels in
+     * forwarded email and is printed on the ticket, and this one opens a write.
+     * Same reasoning as `stations.qr_token`.
+     */
+    token: uuid("token").notNull().defaultRandom(),
+    /** 1–5. Null until the customer actually answers. */
+    serviceRating: integer("service_rating"),
+    /** 1–5, and skippable — some customers rate the service and not the person. */
+    techRating: integer("tech_rating"),
+    comment: text("comment"),
+    invitedAt: timestamp("invited_at", { withTimezone: true }).defaultNow().notNull(),
+    /** Null while unanswered; set once, and the form is read-only afterwards. */
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+  },
+  (t) => ({
+    // One invitation per booking, decided by the database rather than by a read
+    // that two concurrent End presses could both pass.
+    oncePerBooking: unique("reviews_booking_unique").on(t.bookingId),
+    tokenUnique: unique("reviews_token_unique").on(t.token),
+  }),
 );
 
 // ------------------------------------------------------------ commerce ------
