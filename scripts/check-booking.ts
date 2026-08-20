@@ -386,13 +386,30 @@ async function main() {
   assert.equal(arrivedRow.noShowAt, null, "a checked-in customer must never be flagged");
   console.log("  no-show: checked in -> never released ✓");
 
-  // Older than the lookback: out of scope. This is what stops switching the
-  // feature on from flagging every untouched booking in the table.
+  // Hours later, still flagged. The flag is about the customer who paid and was
+  // not served, not about the chair — she is owed an answer whether staff open
+  // the screen at 11am or at closing, so there is no "too late to notice".
   await cleanup(branch.id);
-  const ancient = await seatedAt(5 * 60);
+  const longAgo = await seatedAt(5 * 60);
   await sweepNoShows(branch.id);
-  assert.equal((await rowOf(ancient)).status, "confirmed", "5 hours ago is outside the window");
-  console.log("  no-show: outside the 4-hour window is left alone ✓");
+  assert.equal(
+    (await rowOf(longAgo)).status,
+    "no_show",
+    "a morning no-show must still be flagged in the afternoon",
+  );
+  console.log("  no-show: still flagged hours later ✓");
+
+  // But only today. This is what stops switching the feature on from flagging
+  // every untouched booking in the table's history.
+  await cleanup(branch.id);
+  const yesterday = await seatedAt(26 * 60);
+  await sweepNoShows(branch.id);
+  assert.equal(
+    (await rowOf(yesterday)).status,
+    "confirmed",
+    "yesterday is history, not something to release a chair for",
+  );
+  console.log("  no-show: yesterday is left alone ✓");
 
   // And the point of all of it: the chair is genuinely bookable again.
   await cleanup(branch.id);

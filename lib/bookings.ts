@@ -331,9 +331,6 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
   // that ever becomes visible to staff.
 }
 
-/** How far back the sweep reaches. See sweepNoShows below for why it is bounded. */
-const LOOKBACK_HOURS = 4;
-
 /**
  * Release chairs whose customer never checked in.
  *
@@ -350,12 +347,21 @@ const LOOKBACK_HOURS = 4;
  * is one nobody marked as arrived. That is a weaker signal than it sounds —
  * today staff rarely press anything — which is why:
  *
- *   - the window only reaches back `LOOKBACK_HOURS`, so switching this on cannot
- *     flag months of history, and a morning booking is not flagged at closing;
  *   - `no_show_at` marks it for a human rather than closing the matter, and a
  *     wrongly flagged booking is cleared with one button;
  *   - the booking itself is untouched — the customer has lost nothing until a
  *     walk-in actually claims the chair.
+ *
+ * Bounded to **today** and nothing narrower. There was a four-hour lookback here
+ * on the grounds that a released chair stops mattering by the evening — which is
+ * true of the chair and wrong about the point. The flag is not about the chair,
+ * it is about a customer who paid and was not served, and she is owed an answer
+ * whether staff open this screen at 11am or at closing. A narrower window did
+ * not protect anyone; it dropped people silently.
+ *
+ * The day bound stays, and does the job the lookback was wrongly credited with:
+ * turning this on cannot flag months of untouched history, because history is
+ * not today.
  *
  * `no_show_at is null` makes it idempotent: a booking already flagged keeps its
  * original timestamp however many times this runs.
@@ -376,7 +382,6 @@ export async function sweepNoShows(branchId: string): Promise<void> {
        and no_show_at is null
        and starts_at >= ${dayStart.toISOString()}::timestamptz
        and starts_at <  now() - make_interval(mins => ${graceMin})
-       and starts_at >  now() - make_interval(hours => ${LOOKBACK_HOURS})
   `);
   // ponytail: like sweepExpiredHolds above, this only runs when someone looks —
   // a booking page nobody opens keeps its chair held. Good enough while a

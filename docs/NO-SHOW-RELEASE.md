@@ -19,7 +19,7 @@ loses the slot twice, having already been paid for it once.
 
 ## How a chair gets released
 
-`sweepNoShows(branchId, graceMin)` in [lib/bookings.ts](lib/bookings.ts), one
+`sweepNoShows(branchId)` in [lib/bookings.ts](lib/bookings.ts), one
 statement:
 
 ```sql
@@ -30,7 +30,6 @@ update bookings
    and no_show_at is null
    and starts_at >= $dayStart
    and starts_at <  now() - make_interval(mins => $grace)
-   and starts_at >  now() - make_interval(hours => 4)
 ```
 
 Setting the status **is** the release. `bookings_station_slot_unique`,
@@ -43,9 +42,8 @@ Each clause earns its place:
 |---|---|
 | `status = 'confirmed'` | `in_progress` and `completed` mean the customer arrived |
 | `no_show_at is null` | Idempotent — the sweep runs on every page load and must not keep moving the timestamp |
-| `starts_at >= dayStart` | Today only |
+| `starts_at >= dayStart` | Today only — history is not something to release a chair for |
 | `< now() - grace` | The 20 minutes |
-| `> now() - 4 hours` | The safety bound — see below |
 
 Modelled on `sweepExpiredHolds` right above it, which does the same job for
 unpaid holds: no cron, run lazily by the things that care. Three call sites, each
@@ -72,8 +70,8 @@ clicked".** The codebase says so itself, in
 So on day one this will flag people who were served. Three things make that
 survivable, and they are why the design looks the way it does:
 
-1. **The four-hour lookback.** Switching this on cannot flag months of history,
-   and a 10am booking is not suddenly flagged at closing time.
+1. **Today only.** Switching this on cannot flag months of untouched history,
+   because history is not today.
 2. **Releasing is not taking.** The booking row is untouched — same ticket, same
    price, same customer. The chair only actually changes hands if a walk-in
    claims it, and until then the customer can still sit down.
@@ -151,6 +149,29 @@ for a cancellation reason. Dismissing the prompt still resolves the row with no
 note: the note is optional, and cancelling means "nothing to add", not "changed
 my mind". Resolved notes show in the booking drawer afterwards.
 
+## The bound that was removed
+
+An earlier version also refused to flag anything that started more than four
+hours ago, reasoning that a released chair stops mattering by evening. That is
+true of the chair and wrong about the point.
+
+**The flag is not about the chair. It is about a customer who paid and was not
+served.** She is owed an answer whether staff open this screen at 11am or at
+closing. The narrow window protected nobody — it silently dropped anyone whose
+no-show happened during a stretch when nobody looked at the page, and they never
+appeared in the strip at all.
+
+It was also redundant against the one thing it was credited with. `starts_at >=
+dayStart` was already there, so turning the feature on could never have flagged
+old records regardless. Do not add it back.
+
+**One hole that remains:** the sweep is lazy — it runs when someone opens the
+page or makes a booking. A booking whose grace passes late in the evening, with
+nobody opening the admin again before midnight, is never flagged: the next day it
+falls outside the day bound. Narrow, but real. The fix is the cron the
+`ponytail:` note already points at, which would run the sweep on a schedule and
+close it.
+
 ## What was deliberately not built
 
 - **No dashboard card.** A second surface to keep in sync for a number the
@@ -183,7 +204,8 @@ no-show: 30 min past start, not checked in -> chair released ✓
 no-show: sweeping twice keeps the original flag ✓
 no-show: 5 min late is left alone ✓
 no-show: checked in -> never released ✓
-no-show: outside the 4-hour window is left alone ✓
+no-show: still flagged hours later ✓
+no-show: yesterday is left alone ✓
 no-show: freed chair is immediately rebookable ✓
 ```
 
@@ -254,7 +276,8 @@ This is the one that protects real customers.
 | Set up | Expect |
 |---|---|
 | `starts_at = now() - interval '5 minutes'` | Untouched. Five minutes late is late, not absent |
-| `starts_at = now() - interval '5 hours'` | Untouched — outside the four-hour lookback |
+| `starts_at = now() - interval '5 hours'` | **Flagged.** A morning no-show is still owed an answer in the afternoon |
+| `starts_at = now() - interval '26 hours'` | Untouched — yesterday is history |
 | `starts_at = now() - interval '25 minutes'`, status `completed` | Untouched. They came and were served |
 | Reload the page repeatedly on a flagged booking | `no_show_at` never changes. The sweep is idempotent |
 | A booking marked `no_show` by hand from the drawer | Never appears in the strip — `no_show_at` stays null |
