@@ -152,15 +152,31 @@ export const branchHours = pgTable(
 );
 
 /** Chairs. Capacity for a time slot = count of active stations at the branch. */
-export const stations = pgTable("stations", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  branchId: uuid("branch_id")
-    .notNull()
-    .references(() => branches.id, { onDelete: "cascade" }),
-  label: text("label").notNull(),
-  sort: integer("sort").notNull().default(0),
-  active: boolean("active").notNull().default(true),
-});
+export const stations = pgTable(
+  "stations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    sort: integer("sort").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    /**
+     * What the chair's QR sticker encodes: /station/<qr_token> (brief §2.7).
+     *
+     * Its own random value rather than the row id, because the sticker is
+     * public — it sits on a table in the salon and anyone can photograph it.
+     * Keeping the id out of it means a token cannot be used to address the
+     * station anywhere else, and a compromised sticker is replaced by writing
+     * one column.
+     */
+    qrToken: uuid("qr_token").notNull().defaultRandom(),
+  },
+  (t) => ({
+    qrTokenUnique: unique("stations_qr_token_unique").on(t.qrToken),
+  }),
+);
 
 /** Eid, Ramadan hours, maintenance. Null branch = all branches. */
 export const closures = pgTable("closures", {
@@ -340,6 +356,26 @@ export const bookings = pgTable(
     promoCodeId: uuid("promo_code_id"),
     notes: text("notes"),
     cancelReason: text("cancel_reason"),
+
+    /**
+     * When the sweep released this chair because nobody checked the customer in.
+     *
+     * Null means it was never auto-flagged — including a `no_show` a receptionist
+     * set by hand, which needs no follow-up because someone was already dealing
+     * with it. See sweepNoShows() in lib/bookings.ts.
+     */
+    noShowAt: timestamp("no_show_at", { withTimezone: true }),
+    /** When staff cleared the flag. Null while it still needs someone. */
+    noShowResolvedAt: timestamp("no_show_resolved_at", { withTimezone: true }),
+    /**
+     * Optional — whatever staff typed about what they did.
+     *
+     * Free text rather than a fixed list of outcomes on purpose: nobody knows yet
+     * how a missed customer actually gets settled, and a dropdown guessed now is
+     * a dropdown everyone sets to "Other". Once there are real notes to read, the
+     * common answers become buttons and this column still holds them.
+     */
+    noShowNote: text("no_show_note"),
     ...stamps,
   },
   (t) => ({
@@ -361,6 +397,12 @@ export const bookings = pgTable(
     refillOnce: uniqueIndex("bookings_refill_of_unique")
       .on(t.refillOfBookingId)
       .where(sql`${t.status} not in ('cancelled', 'no_show')`),
+    // The flag strip queries this on every admin bookings page load, and it is
+    // looking for a handful of rows in a table of every booking ever made.
+    // Partial, so the index only carries the ones still needing attention.
+    unresolvedNoShow: index("bookings_unresolved_no_show_idx")
+      .on(t.branchId, t.noShowAt)
+      .where(sql`${t.noShowResolvedAt} is null`),
     byBranchTime: index("bookings_branch_time_idx").on(t.branchId, t.startsAt),
     byStatus: index("bookings_status_idx").on(t.status),
     byGroup: index("bookings_group_idx").on(t.groupId),

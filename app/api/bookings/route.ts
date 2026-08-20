@@ -8,7 +8,10 @@
 // a group is simply two members with one start time.
 
 import { NextResponse } from "next/server";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
+import { db } from "@/lib/db";
+import { stations } from "@/lib/db/schema";
 import { createBookings } from "@/lib/bookings";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +42,17 @@ const body = z.object({
   }),
   /** Set by the refill button in the customer's booking history. */
   refillOfCode: z.string().trim().max(20).nullable().optional(),
+  /**
+   * Set only by the station QR flow (brief §2.7), pinning the booking to the
+   * chair the customer is already sitting in.
+   *
+   * A token, never a raw station id: the id is guessable-adjacent and appears in
+   * other responses, so accepting one here would let anyone pin any chair — and
+   * pinning is how you deny a chair to the customers who would otherwise be
+   * offered it. The token is resolved server-side below and only ever from an
+   * active station.
+   */
+  stationToken: z.string().uuid().nullable().optional(),
   notes: z.string().max(500).optional(),
 });
 
@@ -58,8 +72,34 @@ export async function POST(request: Request) {
     );
   }
 
+  const { stationToken, ...data } = parsed.data;
+
+  let stationId: string | null = null;
+  if (stationToken) {
+    const [station] = await db
+      .select({ id: stations.id })
+      .from(stations)
+      .where(
+        and(
+          eq(stations.qrToken, stationToken),
+          eq(stations.branchId, data.branchId),
+          // A retired chair's sticker stops working the moment it is retired,
+          // rather than quietly booking a table nobody is standing at.
+          eq(stations.active, true),
+        ),
+      )
+      .limit(1);
+
+    // An unknown or retired token is not a reason to silently fall back to any
+    // free chair: the customer asked for *this* one because they are sitting in
+    // it, and a booking at a different table is not what they agreed to.
+    if (!station) return NextResponse.json({ error: "unknown-station" }, { status: 404 });
+    stationId = station.id;
+  }
+
   const result = await createBookings({
-    ...parsed.data,
+    ...data,
+    stationId,
     source: "web",
     // The whole point: a web booking holds the chair but is not a booking until
     // it has been paid for.

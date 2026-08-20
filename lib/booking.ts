@@ -53,6 +53,12 @@ export type BookingSelection = {
    * matters: the server re-checks the window and re-prices from the catalogue.
    */
   refillOf?: string | null;
+  /**
+   * The chair this booking must land on, when it came from a station QR
+   * (brief §2.7). Carried through checkout unchanged; the API resolves the
+   * token and re-checks the chair is still free under a lock.
+   */
+  stationToken?: string | null;
 };
 
 export const emptySelection: BookingSelection = {
@@ -65,6 +71,7 @@ export const emptySelection: BookingSelection = {
   grossTotal: 0,
   total: 0,
   refillOf: null,
+  stationToken: null,
 };
 
 const KEY = "ron-booking";

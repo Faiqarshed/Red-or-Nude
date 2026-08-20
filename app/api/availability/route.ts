@@ -2,10 +2,13 @@
 //
 // ?branchId=…&month=2026-07&duration=90  → which days have any free slot
 // ?branchId=…&date=2026-07-24&duration=90 → the slots for one day
+// ?…&walkIn=1                             → staff only; ignores the lead time
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDayAvailability, getMonthAvailability } from "@/lib/availability";
+import { sweepNoShows } from "@/lib/bookings";
+import { currentStaff } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +19,14 @@ const query = z.object({
   month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
   // How many chairs must be free at once — 2 when booking for a pair.
   guests: z.coerce.number().int().min(1).max(2).default(1),
+  /**
+   * The receptionist is seating someone who is already here, so the booking lead
+   * time does not apply. Requested by the walk-in drawer only.
+   *
+   * An exact "1", not z.coerce.boolean() — that treats every non-empty string as
+   * true, so `walkIn=0` and `walkIn=false` would both switch it on.
+   */
+  walkIn: z.literal("1").optional(),
 });
 
 export async function GET(request: Request) {
@@ -24,11 +35,34 @@ export async function GET(request: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid-query" }, { status: 400 });
   }
-  const { branchId, duration, date, month, guests } = parsed.data;
+  const { branchId, duration, date, month, guests, walkIn } = parsed.data;
 
   try {
+    // `walkIn` is a request, not a permission: currentStaff() returns null for
+    // the public, so an ordinary visitor passing walkIn=1 is treated as one.
+    // Otherwise anyone could book a slot starting five minutes from now.
+    const staff = walkIn ? await currentStaff() : null;
+
+    if (staff) {
+      // Chairs whose customer never checked in are free again, and this is the
+      // query the walk-in drawer runs to find them — a page left open since
+      // morning would otherwise offer a stale grid.
+      //
+      // Only on the staff path. The public cannot use a released chair anyway:
+      // the slot it frees is always in the past, and the lead time hides it. So
+      // sweeping for them would be a write on every calendar click for nothing.
+      await sweepNoShows(branchId);
+    }
+
     if (date) {
-      const slots = await getDayAvailability(branchId, date, duration, new Date(), guests);
+      const slots = await getDayAvailability(
+        branchId,
+        date,
+        duration,
+        new Date(),
+        guests,
+        staff ? 0 : undefined,
+      );
       // freeStationIds is internal scheduling detail — the browser doesn't need
       // to know which chair it would get.
       return NextResponse.json({

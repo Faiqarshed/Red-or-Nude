@@ -19,7 +19,11 @@ export type NotifyTemplate =
   /** The card code and occasion message, to the recipient. */
   | "gift-card"
   /** A nudge a few days before a refill window closes. */
-  | "refill-reminder";
+  | "refill-reminder"
+  /** Confirmation that a cancellation went through, and the refund with it. */
+  | "booking-cancelled"
+  /** The new date and chair, after the customer moved an appointment. */
+  | "booking-rescheduled";
 
 export type NotifyMessage = {
   channel: NotifyChannel;

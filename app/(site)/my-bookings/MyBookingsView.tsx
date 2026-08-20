@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
+import ScheduleModal from "@/components/booking/ScheduleModal";
 import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
@@ -26,6 +27,17 @@ type HistoryRow = {
   isRefill: boolean;
   /** Whether a refill is on offer. The details are behind an emailed code. */
   hasRefill: boolean;
+  /**
+   * Whether the 3-hour window is still open (brief §2.6). Decided by the server
+   * from lib/cancellation.ts, never re-derived here — a button that offers what
+   * the API refuses is worse than no button.
+   */
+  canCancel: boolean;
+  /** ISO UTC deadline, shown so a closed window explains itself. */
+  cancelBy: string;
+  /** What the reschedule picker needs, and nothing more. */
+  branchId: string;
+  durationMin: number;
 };
 
 type RefillDetails = {
@@ -159,6 +171,11 @@ export default function MyBookingsView() {
                 row={r}
                 lang={lang}
                 onOpenRefill={() => setVerifying(r.code)}
+                // Re-runs the same lookup rather than patching the row in place:
+                // a cancellation or a move changes the status, the time and the
+                // chair at once, and the server is the only thing that knows all
+                // three. One extra request beats three fields drifting.
+                onChanged={() => void lookup(code)}
               />
             ))}
 
@@ -180,17 +197,107 @@ export default function MyBookingsView() {
   );
 }
 
+/**
+ * Turn an API refusal into something the customer can act on.
+ *
+ * The three reasons are kept apart on purpose: telling someone who already
+ * cancelled that their window has closed sends them looking for a deadline
+ * problem they do not have. See lib/cancellation.ts.
+ */
+function refusalMessage(
+  data: { error?: string; cutoffHours?: number },
+  h: { windowClosed: string; alreadyCancelled: string; notCancellable: string; failed: string },
+): string {
+  switch (data.error) {
+    case "window-closed":
+      return h.windowClosed.replace("{n}", String(data.cutoffHours ?? 3));
+    case "already-cancelled":
+      return h.alreadyCancelled;
+    case "not-cancellable":
+      return h.notCancellable;
+    default:
+      return h.failed;
+  }
+}
+
 function BookingCard({
   row,
   lang,
   onOpenRefill,
+  onChanged,
 }: {
   row: HistoryRow;
   lang: "ar" | "en";
   onOpenRefill: () => void;
+  onChanged: () => void;
 }) {
   const { c } = useI18n();
   const h = c.history;
+
+  const [busy, setBusy] = useState<"cancel" | "reschedule" | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+
+  const cancel = async () => {
+    // The one destructive thing a customer can do to their own booking, and it
+    // takes their money with it — so it asks first. `confirm` is the browser's,
+    // deliberately: a bespoke modal here would be a second dialog to maintain
+    // for a question with two answers.
+    if (busy || !window.confirm(h.cancelConfirm)) return;
+    setBusy("cancel");
+    setProblem(null);
+    try {
+      const res = await fetch("/api/my-bookings/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: row.code }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        // The booking is gone either way; `refunded: false` only means the money
+        // needs a human, and saying so beats a silent "cancelled".
+        setNote(data.refunded ? h.cancelled : h.cancelledNoRefund);
+        onChanged();
+        return;
+      }
+      setProblem(refusalMessage(data, h));
+    } catch {
+      setProblem(h.failed);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reschedule = async (startsAt: string) => {
+    setPicking(false);
+    setBusy("reschedule");
+    setProblem(null);
+    try {
+      const res = await fetch("/api/my-bookings/reschedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: row.code, startsAt }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        setNote(h.rescheduled);
+        onChanged();
+        return;
+      }
+      setProblem(
+        data.error === "slot-taken" || data.error === "too-soon"
+          ? h.slotTaken
+          : refusalMessage(data, h),
+      );
+    } catch {
+      setProblem(h.failed);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
     <article className="rounded-[20px] bg-white p-5 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
@@ -251,6 +358,57 @@ function BookingCard({
           <span>{h.refillAvailable}</span>
           <span className="text-[12px] font-semibold opacity-90">{h.refillTapToView}</span>
         </button>
+      )}
+
+      {/* Absent rather than disabled once the window shuts, like the refill
+          button above — but the deadline stays on screen either way, so a
+          customer who lost the option can see what they missed instead of
+          wondering where the buttons went. */}
+      {row.canCancel && (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setPicking(true)}
+            disabled={busy !== null}
+            className="rounded-[12px] border border-black/[0.08] px-4 py-2 text-[13px] font-semibold text-ink transition-colors hover:border-red/40 disabled:opacity-40"
+          >
+            {busy === "reschedule" ? h.rescheduling : h.reschedule}
+          </button>
+          <button
+            type="button"
+            onClick={() => void cancel()}
+            disabled={busy !== null}
+            className="rounded-[12px] px-4 py-2 text-[13px] font-semibold text-red transition-colors hover:bg-red/[0.06] disabled:opacity-40"
+          >
+            {busy === "cancel" ? h.cancelling : h.cancel}
+          </button>
+        </div>
+      )}
+
+      {row.canCancel && (
+        <p className="mt-2 text-[11px] text-ink/40">
+          {h.changeBy} {formatDateLabel(row.cancelBy.slice(0, 10), lang)}
+        </p>
+      )}
+
+      {note && <p className="mt-3 text-[12px] font-semibold text-[#2f7a4d]">{note}</p>}
+      {problem && (
+        <p role="alert" className="mt-3 text-[12px] text-red">
+          {problem}
+        </p>
+      )}
+
+      {/* The same picker the booking flow uses, so a moved appointment obeys
+          exactly the rules a new one does — opening hours, lead time, chairs. */}
+      {picking && (
+        <ScheduleModal
+          branchId={row.branchId}
+          durationMin={row.durationMin}
+          initialDate={row.startsAt.slice(0, 10)}
+          initialTime={null}
+          onConfirm={(_date, _time, startsAt) => void reschedule(startsAt)}
+          onClose={() => setPicking(false)}
+        />
       )}
     </article>
   );
