@@ -12,47 +12,79 @@ import { saveBooking, formatDateLabel, formatTime } from "@/lib/booking";
 import { UTC_OFFSET_HOURS } from "@/lib/time";
 import type { CatalogItem } from "@/lib/catalog";
 import type { Localized } from "@/lib/localized";
+// Type-only, so it is erased before bundling and the `server-only` guard in
+// lib/availability.ts is never actually imported into this client component.
+import type { StationChoice } from "@/lib/availability";
 
-// The scan-to-add screen (brief §2.7). One decision — which service — because
-// the chair and the time are already settled by where the customer is sitting.
+// The scan-to-add screen (brief §2.7).
 //
-// There is deliberately no ScheduleModal here. The whole point of the QR is that
-// the appointment is "this table, the moment I finish", so offering a date
-// picker would be offering the customer a choice they did not come to make.
+// The customer scanned the sticker on their own table to ask one question, so
+// the page answers that question first and sells second: can I stay in this
+// chair? Only once that is answered does it show anything to buy.
+//
+// Two shapes, decided by the server:
+//   • the scanned chair is free after them — stay put, pick a service
+//   • it is not — the chairs that *are* free at that moment, pick one, then a
+//     service that fits it
+// The second is the case the old screen dead-ended on, sending the customer off
+// to /booking to start from nothing while they were still sitting in the salon.
+//
+// There is deliberately no ScheduleModal. The whole point of the QR is that the
+// appointment is "the moment I finish", so offering a date picker would be
+// offering a choice they did not come to make.
 //
 // Checkout is the ordinary one: this writes the same BookingSelection the
-// booking page writes and hands off to /booking/payment, which holds the chair,
-// charges, and issues the ticket. The only extra is `stationToken`, which pins
-// the booking to this chair server-side.
+// booking page writes and hands off to /booking/payment. The only extra is
+// `stationToken` — the *chosen* chair's, not necessarily the scanned one —
+// which pins the booking to that chair server-side.
 
 type Props = {
-  station: { label: string; branchId: string; token: string };
+  branchId: string;
   branchName: Localized | null;
+  /** The chair whose sticker was scanned, free or not. */
+  scannedLabel: string;
   /** ISO UTC — the current appointment's finish, or now for an empty chair. */
   startsAt: string;
-  freeMin: number;
   inService: boolean;
   currentServiceName: Localized | null;
   customerName: string | null;
-  /** Already filtered server-side to what fits in `freeMin`. */
+  /** Chairs free at `startsAt` for long enough to fit something. May be empty. */
+  options: StationChoice[];
   services: (CatalogItem & { description: Localized | null })[];
 };
 
 export default function StationAddOnView({
-  station,
+  branchId,
   branchName,
+  scannedLabel,
   startsAt,
-  freeMin,
   inService,
   currentServiceName,
   customerName,
+  options,
   services,
 }: Props) {
   const router = useRouter();
   const { c, lang } = useI18n();
   const s = c.station;
 
-  const [selected, setSelected] = useState<number | null>(null);
+  // The scanned chair is always first when it is on offer at all, so this is
+  // "can they stay put?" without needing a second flag from the server.
+  const stay = options[0]?.isCurrent ? options[0] : null;
+  const alternatives = options.filter((o) => !o.isCurrent);
+
+  const [token, setToken] = useState<string | null>(stay?.token ?? null);
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const station = options.find((o) => o.token === token) ?? null;
+  // Labels are what the salon writes on the sticker — usually bare numbers
+  // ("2"), so every mention has to carry the noun or the page reads "2 is free
+  // after you".
+  const named = (label: string) => `${s.at} ${label}`;
+  // Filtered here rather than on the server because the answer depends on which
+  // chair is picked, and the customer can change that without a round trip.
+  const fitting = station ? services.filter((x) => x.durationMin <= station.freeMin) : [];
+  const service = fitting.find((x) => x.id === selected) ?? null;
 
   // Local wall-clock, formatted the way the rest of the site does. The customer
   // is standing in the salon: they care about "3:40", not an ISO instant. The
@@ -63,17 +95,11 @@ export default function StationAddOnView({
   const timeLabel = formatTime(localDate.slice(11, 16), c.date);
   const dateLabel = formatDateLabel(localDate.slice(0, 10), lang);
 
-  // Nothing fits — either the chair is taken straight after, or the gap is too
-  // short for anything on the menu. Both are the brief's "if not free" branch,
-  // and both have the same answer: book it elsewhere through the normal flow.
-  const busy = freeMin <= 0 || services.length === 0;
-
   const proceed = () => {
-    if (selected === null) return;
-    const service = services[selected];
+    if (!service || !station) return;
 
     saveBooking({
-      branchId: station.branchId,
+      branchId,
       startsAt,
       members: [
         {
@@ -94,7 +120,8 @@ export default function StationAddOnView({
       grossTotal: service.price,
       total: service.price,
       refillOf: null,
-      // The chair. Resolved and re-checked under a lock by POST /api/bookings.
+      // The chosen chair — this table, or the one they moved to. Resolved and
+      // re-checked under a lock by POST /api/bookings.
       stationToken: station.token,
     });
     router.push("/booking/payment");
@@ -106,92 +133,149 @@ export default function StationAddOnView({
 
       <div className="mx-auto max-w-[560px] px-6 pb-20 pt-[120px]">
         <p className="text-[11px] uppercase tracking-wider text-ink/40">
-          {s.at} {station.label}
+          {s.at} {scannedLabel}
           {branchName ? ` · ${pick(branchName, lang)}` : ""}
         </p>
         <h1 className="mt-1 font-display text-2xl font-extrabold text-red">{s.title}</h1>
 
-        {/* What the salon already knows, played back — so the customer can see
-            at a glance that they scanned their own table and not the next one. */}
-        <div className="mt-6 rounded-[20px] bg-white p-5 ring-1 ring-black/[0.04]">
-          {inService ? (
-            <>
-              <p className="font-display text-base font-extrabold text-ink">
-                {customerName ? `${s.inService} — ${customerName}` : s.inService}
-              </p>
-              {currentServiceName && (
-                <p className="mt-1 text-[13px] text-ink/65">{pick(currentServiceName, lang)}</p>
-              )}
-              <p className="mt-3 text-[13px] text-ink/65">
-                {s.afterCurrent} <span className="font-semibold text-ink">{timeLabel}</span>
-              </p>
-            </>
-          ) : (
-            <p className="text-[13px] text-ink/65">
-              {s.startsAt} <span className="font-semibold text-ink">{timeLabel}</span>
-            </p>
-          )}
+        {/* The answer, before anything is offered for sale. Green when they can
+            stay where they are, red when the chair goes to someone else — the
+            one fact they scanned the sticker to find out. */}
+        <div
+          className={`mt-6 rounded-[20px] p-5 ${
+            stay ? "bg-[#eaf5ee] ring-1 ring-[#2f7d4f]/15" : "bg-[#fbeaea]"
+          }`}
+        >
+          <p
+            className={`font-display text-lg font-extrabold ${
+              stay ? "text-[#2f7d4f]" : "text-red"
+            }`}
+          >
+            {stay
+              ? s.stayTitle.replace("{table}", named(scannedLabel))
+              : alternatives.length > 0
+                ? s.takenTitle.replace("{table}", named(scannedLabel))
+                : s.noneTitle}
+          </p>
 
-          {!busy && (
-            <p className="mt-1 text-[13px] text-ink/65">
-              {s.freeFor.replace("{n}", String(freeMin))}
-            </p>
-          )}
+          <p className="mt-1 text-[13px] text-ink/70">
+            {stay
+              ? s.stayNote.replace("{n}", String(stay.freeMin))
+              : alternatives.length > 0
+                ? s.takenNote
+                : s.noneNote}
+          </p>
+
+          {/* Why that time: their own appointment, played back so they can see
+              the page is talking about their table and not the next one. */}
+          <p className="mt-3 border-t border-black/[0.06] pt-3 text-[13px] text-ink/55">
+            {inService ? (
+              <>
+                {customerName ? `${customerName} · ` : ""}
+                {currentServiceName ? `${pick(currentServiceName, lang)} · ` : ""}
+                {s.afterCurrent} <span className="font-semibold text-ink">{timeLabel}</span>
+              </>
+            ) : (
+              <>
+                {s.startsAt} <span className="font-semibold text-ink">{timeLabel}</span>
+              </>
+            )}
+          </p>
         </div>
 
-        {busy ? (
-          <div className="mt-6 rounded-[20px] bg-[#fbeaea] p-5">
-            <p className="font-display text-base font-extrabold text-red">{s.busyTitle}</p>
-            <p className="mt-1 text-[13px] text-ink/65">{s.busyNote}</p>
-            <Link
-              href="/booking"
-              className="mt-4 inline-flex rounded-full bg-red px-6 py-3 text-sm font-semibold text-white"
-            >
-              {s.bookElsewhere}
-            </Link>
-          </div>
+        {options.length === 0 ? (
+          <Link
+            href="/booking"
+            className="mt-6 inline-flex rounded-full bg-red px-6 py-3 text-sm font-semibold text-white"
+          >
+            {s.bookElsewhere}
+          </Link>
         ) : (
           <>
-            <p className="mt-8 font-display text-base font-extrabold text-ink">{s.pickService}</p>
-            <p className="mt-1 text-[12px] text-ink/45">{s.onlyFitting}</p>
+            {/* Only when they cannot stay put. Someone sitting in a chair that is
+                free after them has no reason to be asked to choose one. */}
+            {!stay && (
+              <>
+                <p className="mt-8 font-display text-base font-extrabold text-ink">{s.pickTable}</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {alternatives.map((o) => (
+                    <button
+                      key={o.token}
+                      type="button"
+                      onClick={() => {
+                        setToken(o.token);
+                        // A service that fitted the last chair may not fit this
+                        // one — clearing is safer than silently re-pricing.
+                        setSelected(null);
+                      }}
+                      aria-pressed={token === o.token}
+                      className={`rounded-full px-4 py-2.5 text-sm ring-1 transition-all ${
+                        token === o.token
+                          ? "bg-red text-white ring-red"
+                          : "bg-white text-ink ring-black/[0.06] hover:ring-red/40"
+                      }`}
+                    >
+                      <span className="font-semibold">{named(o.label)}</span>
+                      <span className={token === o.token ? "text-white/70" : "text-ink/45"}>
+                        {" · "}
+                        {s.freeForShort.replace("{n}", String(o.freeMin))}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
 
-            <div className="mt-4 space-y-3">
-              {services.map((service, i) => (
+            {station && (
+              <>
+                <p className="mt-8 font-display text-base font-extrabold text-ink">
+                  {s.pickService}
+                </p>
+                <p className="mt-1 text-[12px] text-ink/45">{s.onlyFitting}</p>
+
+                <div className="mt-4 space-y-3">
+                  {fitting.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setSelected(item.id)}
+                      aria-pressed={selected === item.id}
+                      className={`flex w-full items-center justify-between rounded-[20px] bg-white p-5 text-start ring-1 transition-all ${
+                        selected === item.id
+                          ? "ring-2 ring-red"
+                          : "ring-black/[0.04] hover:ring-red/40"
+                      }`}
+                    >
+                      <span>
+                        <span className="block font-display text-base font-extrabold text-ink">
+                          {pick(item.name, lang)}
+                        </span>
+                        <span className="mt-0.5 block text-[12px] text-ink/45">
+                          {item.durationMin} {s.minutes}
+                        </span>
+                      </span>
+                      <span className="flex items-center gap-1 font-display text-base font-extrabold text-red">
+                        {item.price}
+                        <Riyal className="h-3.5 w-3.5" />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <p className="mt-6 text-[12px] text-ink/45">
+                  {stay ? s.confirmWithTech : s.confirmAtTable.replace("{table}", named(station.label))}
+                </p>
+
                 <button
-                  key={service.id}
                   type="button"
-                  onClick={() => setSelected(i)}
-                  aria-pressed={selected === i}
-                  className={`flex w-full items-center justify-between rounded-[20px] bg-white p-5 text-start ring-1 transition-all ${
-                    selected === i ? "ring-2 ring-red" : "ring-black/[0.04] hover:ring-red/40"
-                  }`}
+                  onClick={proceed}
+                  disabled={!service}
+                  className="mt-4 w-full rounded-full bg-red px-6 py-4 text-sm font-semibold text-white disabled:opacity-40"
                 >
-                  <span>
-                    <span className="block font-display text-base font-extrabold text-ink">
-                      {pick(service.name, lang)}
-                    </span>
-                    <span className="mt-0.5 block text-[12px] text-ink/45">
-                      {service.durationMin} {s.minutes}
-                    </span>
-                  </span>
-                  <span className="flex items-center gap-1 font-display text-base font-extrabold text-red">
-                    {service.price}
-                    <Riyal className="h-3.5 w-3.5" />
-                  </span>
+                  {s.proceed}
                 </button>
-              ))}
-            </div>
-
-            <p className="mt-6 text-[12px] text-ink/45">{s.confirmWithTech}</p>
-
-            <button
-              type="button"
-              onClick={proceed}
-              disabled={selected === null}
-              className="mt-4 w-full rounded-full bg-red px-6 py-4 text-sm font-semibold text-white disabled:opacity-40"
-            >
-              {s.proceed}
-            </button>
+              </>
+            )}
           </>
         )}
       </div>

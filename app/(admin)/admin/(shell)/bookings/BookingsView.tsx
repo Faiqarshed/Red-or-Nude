@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, List, Plus } from "lucide-react";
-import { Badge, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import { Badge, Button, Card, EmptyState, PageHeader, scoreTone } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
 import { UTC_OFFSET_HOURS } from "@/lib/time";
@@ -20,6 +20,16 @@ export type BookingStatus =
   | "completed"
   | "cancelled"
   | "no_show";
+
+/** A rating invitation and, once the customer answers, what they said. */
+export type BookingReview = {
+  serviceRating: number | null;
+  techRating: number | null;
+  comment: string | null;
+  invitedAt: string;
+  /** Null while the invitation is still unanswered. */
+  submittedAt: string | null;
+};
 
 export type BookingRow = {
   id: string;
@@ -41,6 +51,8 @@ export type BookingRow = {
   refillExpiresAt?: string | null;
   /** What staff wrote when they cleared a no-show flag, if they wrote anything. */
   noShowNote?: string | null;
+  /** Null when no invitation was ever created for this booking. */
+  review?: BookingReview | null;
 };
 
 /**
@@ -106,6 +118,32 @@ function shiftDate(date: string, days: number): string {
   const d = new Date(`${date}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * The score a customer left, on the block itself so the grid can be read without
+ * hovering anything.
+ *
+ * Only once they have actually answered. An invitation that is still unanswered
+ * is not a rating, and a grid full of empty stars would say "everyone was
+ * silent" in a place where the honest answer is "we have not heard yet" — the
+ * drawer is where that distinction is spelled out.
+ *
+ * A Badge, shrunk to fit a block that can be 22px tall. Colour alone never
+ * carries it — the digit is right there, which is what makes it legible to
+ * anyone who cannot tell the two backgrounds apart.
+ */
+function GridScore({ review }: { review: BookingReview | null }) {
+  if (!review?.submittedAt || review.serviceRating === null) return null;
+
+  return (
+    <Badge
+      tone={scoreTone(review.serviceRating)}
+      className="shrink-0 rounded px-1 text-[10px] font-bold tabular-nums"
+    >
+      <span dir="ltr">{review.serviceRating}★</span>
+    </Badge>
+  );
 }
 
 /**
@@ -230,6 +268,32 @@ export default function BookingsView({
 
   const hours = Array.from({ length: DAY_END_HOUR - DAY_START_HOUR }, (_, i) => DAY_START_HOUR + i);
   const active = bookings.filter((b) => b.status !== "cancelled" && b.status !== "no_show");
+
+  /**
+   * What a block says on hover, in the one place the grid has no room to print.
+   *
+   * A plain `title` attribute rather than a tooltip component: the browser
+   * already positions, delays and dismisses these, and gets it right on a
+   * trackpad, a touch device and a screen reader without a line of our code.
+   *
+   * The status line is the point. Pending and confirmed both occupy a chair and
+   * both used to render identically, so "is this actually booked, or is someone
+   * holding it without paying?" could only be answered by opening the drawer.
+   */
+  const tooltip = (b: BookingRow) =>
+    [
+      `${localTime(b.startsAt)} – ${localTime(b.endsAt)}`,
+      b.customerName || b.customerPhone || b.code,
+      pick(b.serviceName, lang),
+      `${t.bookings.status}: ${t.bookings.statuses[b.status]}`,
+      b.status === "pending" ? t.bookings.pendingHint : null,
+      `${t.bookings.total}: ${b.totalSar.toLocaleString("en-US")} ${t.common.riyal}`,
+      b.review?.submittedAt && b.review.serviceRating !== null
+        ? `${t.bookings.reviewTitle}: ${b.review.serviceRating} / 5`
+        : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
 
   return (
     <>
@@ -356,11 +420,25 @@ export default function BookingsView({
                                 ? "border-[#1f7a4d]/30 bg-[#1f7a4d]/10"
                                 : b.status === "in_progress"
                                   ? "border-sky/40 bg-sky/15"
-                                  : "border-red/25 bg-red/[0.07]",
+                                  // A pending booking is a chair held for someone
+                                  // who has not paid. It occupies the grid exactly
+                                  // like a confirmed one, so until now the only way
+                                  // to tell them apart was to open the drawer.
+                                  : b.status === "pending"
+                                    ? "border-dashed border-[#b7791f]/50 bg-[#fdf6e7]"
+                                    : "border-red/25 bg-red/[0.07]",
                             )}
+                            title={tooltip(b)}
                           >
-                            <span className="block truncate text-[11px] font-semibold text-ink">
-                              {b.customerName || b.customerPhone || b.code}
+                            {/* The score sits on the name's line rather than in a
+                                corner: a block can be as short as 22px, and the
+                                name truncates around it instead of running
+                                underneath it. */}
+                            <span className="flex items-center gap-1">
+                              <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-ink">
+                                {b.customerName || b.customerPhone || b.code}
+                              </span>
+                              <GridScore review={b.review ?? null} />
                             </span>
                             <span className="block truncate text-[10px] text-ink/55">
                               {pick(b.serviceName, lang)}

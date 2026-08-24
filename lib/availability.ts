@@ -378,3 +378,44 @@ export async function stationFreeWindow(
   // the desk, not a case worth a second query on every scan.
   return Math.max(0, Math.floor((until.getTime() - from.getTime()) / MINUTE_MS));
 }
+
+export type StationChoice = {
+  label: string;
+  token: string;
+  freeMin: number;
+  /** True for the chair whose sticker was actually scanned. */
+  isCurrent: boolean;
+};
+
+/**
+ * Which chairs a QR scan may offer, best-placed first (brief §2.7).
+ *
+ * `windows[i]` is `stationFreeWindow()` for `room[i]`, all measured from the
+ * same instant — the scanner's projected finish time.
+ *
+ * Two rules, and both matter to what the customer is told:
+ *
+ *  1. A chair is only offered when *something on the menu* fits in it. Without
+ *     `shortestServiceMin` a chair with four free minutes counts as "free", and
+ *     the page cheerfully announces a table that can sell nothing.
+ *  2. The scanned chair sorts first when it qualifies, so "can I stay put?" is
+ *     always the first answer rather than depending on the caller's ordering.
+ *     The page's whole shape keys off `options[0].isCurrent`, so this is an
+ *     invariant of the returned list, not of the query that fed it.
+ */
+export function offerableStations(
+  room: { id: string; label: string; token: string }[],
+  windows: number[],
+  scannedId: string,
+  shortestServiceMin: number,
+): StationChoice[] {
+  return room
+    .map((s, i) => ({
+      label: s.label,
+      token: s.token,
+      freeMin: windows[i] ?? 0,
+      isCurrent: s.id === scannedId,
+    }))
+    .filter((s) => s.freeMin >= shortestServiceMin)
+    .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent));
+}

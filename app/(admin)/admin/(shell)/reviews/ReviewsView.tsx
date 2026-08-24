@@ -1,7 +1,7 @@
 "use client";
 
 import { Star } from "lucide-react";
-import { Badge, Card, EmptyState, PageHeader, StatCard } from "@/components/admin/ui";
+import { Badge, Card, EmptyState, PageHeader, StatCard, scoreTone } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { formatDateTime } from "@/lib/time";
@@ -124,13 +124,12 @@ export default function ReviewsView({
   );
 }
 
-/** A score out of five, or why there isn't one. Tone follows the number: a 2 is
- *  a complaint and should not read the same as a 5. */
+/** A score out of five, or why there isn't one. */
 function Score({ value, pending }: { value: number | null; pending: string }) {
   if (value === null) return <span className="text-[11px] text-ink/30">{pending}</span>;
 
   return (
-    <Badge tone={value >= 4 ? "success" : value === 3 ? "warning" : "danger"}>
+    <Badge tone={scoreTone(value)}>
       <span dir="ltr" className="tabular-nums">
         {value} ★
       </span>

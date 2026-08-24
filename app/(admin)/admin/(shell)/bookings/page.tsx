@@ -7,6 +7,7 @@ import {
   branches,
   customers,
   removalTypes,
+  reviews,
   services,
   stations,
 } from "@/lib/db/schema";
@@ -75,9 +76,18 @@ export default async function BookingsPage({
         refillOfBookingId: bookings.refillOfBookingId,
         refillExpiresAt: bookings.refillExpiresAt,
         noShowNote: bookings.noShowNote,
+        // How the appointment actually went. `reviews_booking_unique` means this
+        // join can never fan a booking out into two rows, so it costs one join
+        // rather than the extra round trip a separate lookup would.
+        reviewServiceRating: reviews.serviceRating,
+        reviewTechRating: reviews.techRating,
+        reviewComment: reviews.comment,
+        reviewSubmittedAt: reviews.submittedAt,
+        reviewInvitedAt: reviews.invitedAt,
       })
       .from(bookings)
       .leftJoin(customers, eq(bookings.customerId, customers.id))
+      .leftJoin(reviews, eq(reviews.bookingId, bookings.id))
       .where(
         and(eq(bookings.branchId, branchId), gte(bookings.startsAt, dayStart), lt(bookings.startsAt, dayEnd)),
       )
@@ -186,6 +196,17 @@ export default async function BookingsPage({
           refillOfCode: r.refillOfBookingId ? (parentCodes.get(r.refillOfBookingId) ?? null) : null,
           refillExpiresAt: r.refillExpiresAt?.toISOString() ?? null,
           noShowNote: r.noShowNote,
+          // Null means no invitation exists at all — which for a completed
+          // booking is worth saying out loud, since one should have been sent.
+          review: r.reviewInvitedAt
+            ? {
+                serviceRating: r.reviewServiceRating,
+                techRating: r.reviewTechRating,
+                comment: r.reviewComment,
+                invitedAt: r.reviewInvitedAt.toISOString(),
+                submittedAt: r.reviewSubmittedAt?.toISOString() ?? null,
+              }
+            : null,
         }),
       )}
     />

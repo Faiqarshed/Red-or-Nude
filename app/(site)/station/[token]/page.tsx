@@ -1,27 +1,27 @@
 // The in-service add-on page (brief §2.7) — what a station's QR sticker opens.
 //
-// A customer already in the chair scans the code on their table and is asked one
-// question: is this same chair still free when I finish? Everything needed to
-// answer it is here, on the server:
+// A customer already in the chair scans the code on their table and is asking
+// one thing: can I have another service when this one ends? The page answers it
+// in that order — this chair first, then the rest of the room:
 //
 //   1. the token identifies the chair (never the row id — see lib/db/schema.ts)
 //   2. the booking currently running on it gives the projected finish time
-//   3. stationFreeWindow() gives how long the chair stays free after that
+//   3. stationFreeWindow() gives how long each chair stays free after that
 //
-// If there is a gap, the services that fit inside it are offered and checkout is
-// the ordinary one: /booking/payment → POST /api/bookings → POST
-// /api/payments/confirm, which issues a second ticket number on the same chair.
-// If there is no gap, the page says so and sends them to /booking, where the
-// engine will find them a different free station — exactly the fallback the
-// brief describes.
+// Every active chair in the branch is measured, not just the scanned one, so a
+// chair that is booked straight after does not dead-end the customer: the same
+// page offers the tables that *are* free at that moment and books one of them.
+// Checkout is the ordinary one either way — /booking/payment → POST
+// /api/bookings → POST /api/payments/confirm — with the chosen chair's own qr
+// token pinning the booking to it.
 
 import { notFound } from "next/navigation";
-import { and, asc, eq, gt, inArray, lte } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lte, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings, branches, customers, stations } from "@/lib/db/schema";
 import { getPublicCatalog } from "@/lib/catalog";
-import { stationFreeWindow } from "@/lib/availability";
+import { offerableStations, stationFreeWindow } from "@/lib/availability";
 import StationAddOnView from "./StationAddOnView";
 
 export const dynamic = "force-dynamic";
@@ -76,24 +76,54 @@ export default async function StationPage({ params }: { params: { token: string 
   // scanner is standing at an empty table, and "now" is the honest answer —
   // the same page then works as a walk-up rather than erroring.
   const startsAt = current?.endsAt ?? now;
-  const [freeMin, catalog] = await Promise.all([
-    stationFreeWindow(station.branchId, station.id, startsAt),
+
+  // Every active chair here, the scanned one first so it is always the option
+  // the customer is offered before any alternative.
+  const [siblings, catalog] = await Promise.all([
+    db
+      .select({ id: stations.id, label: stations.label, token: stations.qrToken })
+      .from(stations)
+      .where(
+        and(
+          eq(stations.branchId, station.branchId),
+          eq(stations.active, true),
+          ne(stations.id, station.id),
+        ),
+      )
+      .orderBy(asc(stations.sort), asc(stations.label)),
     getPublicCatalog(),
   ]);
 
+  const room = [{ id: station.id, label: station.label, token: params.token }, ...siblings];
+
+  // ponytail: one stationFreeWindow() per chair rather than one query over all
+  // of them — a branch is a handful of chairs and these run in parallel, so it
+  // is a single round trip's latency. Fold it into one query if a branch ever
+  // grows past a few dozen stations.
+  const windows = await Promise.all(
+    room.map((s) => stationFreeWindow(station.branchId, s.id, startsAt)),
+  );
+
+  // Which chairs are worth offering, scanned one first. Decided on the server so
+  // the page cannot offer a chair reserveStations would then refuse to hold.
+  const options = offerableStations(
+    room,
+    windows,
+    station.id,
+    Math.min(...catalog.services.map((s) => s.durationMin)),
+  );
+
   return (
     <StationAddOnView
-      station={{ label: station.label, branchId: station.branchId, token: params.token }}
+      branchId={station.branchId}
       branchName={station.branchName}
+      scannedLabel={station.label}
       startsAt={startsAt.toISOString()}
-      freeMin={freeMin}
       inService={Boolean(current)}
       currentServiceName={current?.serviceName ?? null}
       customerName={current?.customerName ?? null}
-      // Only the services fit in the gap. Filtered on the server so the page
-      // cannot offer a 90-minute set into a 40-minute window and take payment
-      // for something reserveStations would then refuse.
-      services={catalog.services.filter((s) => s.durationMin <= freeMin)}
+      options={options}
+      services={catalog.services}
     />
   );
 }
