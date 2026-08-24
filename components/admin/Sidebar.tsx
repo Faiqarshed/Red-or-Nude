@@ -18,6 +18,8 @@ import {
   ScrollText,
   Settings,
   Sparkles,
+  Star,
+  Ticket,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -42,6 +44,8 @@ const ICONS: Record<string, LucideIcon> = {
   Megaphone,
   Settings,
   ScrollText,
+  Star,
+  Ticket,
 };
 
 export default function Sidebar({

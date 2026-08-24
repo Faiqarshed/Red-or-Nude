@@ -24,7 +24,8 @@ import { reserveStations, utcToLocalDate } from "@/lib/availability";
 import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 import { riyadhDayRange } from "@/lib/time";
-import { halalasToSar, splitGroupPrice, vatIncludedIn } from "@/lib/money";
+import { halalasToSar, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
+import { quotePromo, type PromoRefusal } from "@/lib/promo";
 import { formatTicketNo } from "@/lib/tickets";
 
 /** What one guest is booking. */
@@ -56,6 +57,12 @@ export type CreateBookingsInput = {
    * are all re-checked here rather than trusted from the client.
    */
   refillOfCode?: string | null;
+  /**
+   * A discount code typed at checkout (brief §2.10). Re-looked-up and re-priced
+   * here rather than trusted from the client, for the same reason the refill
+   * window is: the quote the browser showed is a preview, this is the charge.
+   */
+  promoCode?: string | null;
   notes?: string | null;
   technicianId?: string | null;
   /**
@@ -84,11 +91,19 @@ export type CreateBookingError =
   | "refill-expired"
   /** The offer is open, but the appointment chosen falls outside its window. */
   | "refill-window"
+  /** A discount code was given and does not apply. `promoReason` says why. */
+  | "promo-invalid"
   | "failed";
 
 export type CreateBookingsResult =
   | { ok: true; groupId: string | null; totalHalalas: number; bookings: CreatedBooking[] }
-  | { ok: false; error: CreateBookingError };
+  | {
+      ok: false;
+      error: CreateBookingError;
+      /** Set only with `promo-invalid` — the checkout repeats it to the customer. */
+      promoReason?: PromoRefusal;
+      minTotalHalalas?: number;
+    };
 
 // ---- the original one-guest API, unchanged for existing callers -------------
 
@@ -470,9 +485,39 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   const endsAtPer = guests.map((g) => new Date(startsAt.getTime() + g.durationMin * 60_000));
   const latestEndsAt = new Date(Math.max(...endsAtPer.map((d) => d.getTime())));
 
+  // The promo comes off last, on top of whatever the group or refill discount
+  // already took — the codes are occasion offers, not alternatives to the other
+  // two, and a customer who qualifies for both should get both.
+  //
+  // Quoted against the *combined* discounted bill, then shared back out by the
+  // same largest-remainder split the group discount uses, so the guests' totals
+  // still add up to the bill to the halala.
+  const groupTotals = split.map((s) => s.totalHalalas);
+  let promoCodeId: string | null = null;
+  let promoShares = guests.map(() => 0);
+
+  if (input.promoCode?.trim()) {
+    const quote = await quotePromo(
+      input.promoCode,
+      groupTotals.reduce((sum, t) => sum + t, 0),
+    );
+    // Refused rather than ignored: silently charging full price to someone who
+    // typed a code is the one outcome nobody would accept.
+    if (!quote.ok) {
+      return {
+        ok: false,
+        error: "promo-invalid",
+        promoReason: quote.reason,
+        minTotalHalalas: quote.minTotalHalalas,
+      };
+    }
+    promoCodeId = quote.id;
+    promoShares = shareAmount(groupTotals, quote.discountHalalas);
+  }
+
   const status = input.status ?? "confirmed";
   const groupId = isGroup ? randomUUID() : null;
-  const billTotal = split.reduce((sum, s) => sum + s.totalHalalas, 0);
+  const billTotal = groupTotals.reduce((sum, t, i) => sum + t - promoShares[i], 0);
 
   try {
     const created = await db.transaction(async (tx) => {
@@ -524,7 +569,11 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
       const out: CreatedBooking[] = [];
 
       for (const [i, guest] of guests.entries()) {
-        const { discountHalalas, totalHalalas } = split[i];
+        const promoShare = promoShares[i];
+        // Both discounts land in one column: what this guest was let off, in
+        // total. `promo_code_id` records which code produced part of it.
+        const discountHalalas = split[i].discountHalalas + promoShare;
+        const totalHalalas = split[i].totalHalalas - promoShare;
         // Prices are VAT-inclusive, so VAT comes back out of the discounted total
         // rather than being added on. The customer pays exactly what was shown.
         const vat = vatIncludedIn(totalHalalas, settings.vat_percent);
@@ -553,6 +602,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
             refillOfBookingId: refillParent?.id ?? null,
             removalPriceHalalas: guest.removal?.priceHalalas ?? 0,
             discountHalalas,
+            promoCodeId,
             subtotalHalalas: totalHalalas - vat,
             vatHalalas: vat,
             totalHalalas,
