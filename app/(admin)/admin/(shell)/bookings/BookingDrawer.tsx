@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Phone } from "lucide-react";
-import { Badge, Button } from "@/components/admin/ui";
+import { Badge, Button, scoreTone } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
@@ -38,15 +38,13 @@ function ReviewPanel({ review }: { review: BookingReview | null }) {
   const { t } = useAdminI18n();
   const b = t.bookings;
 
-  const answered = review?.submittedAt != null;
-
   return (
     <div className="rounded-xl border border-black/[0.06] bg-white p-4">
       <p className="mb-3 text-start text-xs font-medium text-ink/60">{b.reviewTitle}</p>
 
       {!review ? (
         <p className="text-start text-xs text-ink/40">{b.reviewNotInvited}</p>
-      ) : !answered ? (
+      ) : review.submittedAt == null ? (
         <p className="text-start text-xs text-ink/40">
           {b.reviewWaiting}
           <span className="ms-1 text-ink/30" dir="ltr">
@@ -56,8 +54,8 @@ function ReviewPanel({ review }: { review: BookingReview | null }) {
       ) : (
         <div className="space-y-3">
           <div className="flex items-center gap-4">
-            <ScorePill label={b.reviewService} value={review.serviceRating} skipped={b.reviewSkipped} />
-            <ScorePill label={b.reviewTech} value={review.techRating} skipped={b.reviewSkipped} />
+            <ScorePill label={b.reviewService} value={review.serviceRating} />
+            <ScorePill label={b.reviewTech} value={review.techRating} />
           </div>
           {review.comment ? (
             <p className="rounded-lg bg-black/[0.03] px-3 py-2 text-start text-xs leading-relaxed text-ink/70">
@@ -72,24 +70,17 @@ function ReviewPanel({ review }: { review: BookingReview | null }) {
   );
 }
 
-/** A score out of five. Tone follows the number — a 2 is a complaint, and must
- *  not read the same as a 5. Same thresholds as the reviews screen. */
-function ScorePill({
-  label,
-  value,
-  skipped,
-}: {
-  label: string;
-  value: number | null;
-  skipped: string;
-}) {
+/** A score out of five, or the note that this half was skipped. */
+function ScorePill({ label, value }: { label: string; value: number | null }) {
+  const { t } = useAdminI18n();
+
   return (
     <div>
       <p className="mb-1 text-[11px] text-ink/45">{label}</p>
       {value === null ? (
-        <span className="text-[11px] text-ink/30">{skipped}</span>
+        <span className="text-[11px] text-ink/30">{t.bookings.reviewSkipped}</span>
       ) : (
-        <Badge tone={value >= 4 ? "success" : value === 3 ? "warning" : "danger"}>
+        <Badge tone={scoreTone(value)}>
           <span dir="ltr" className="tabular-nums">
             {value} ★
           </span>

@@ -12,6 +12,9 @@ import { saveBooking, formatDateLabel, formatTime } from "@/lib/booking";
 import { UTC_OFFSET_HOURS } from "@/lib/time";
 import type { CatalogItem } from "@/lib/catalog";
 import type { Localized } from "@/lib/localized";
+// Type-only, so it is erased before bundling and the `server-only` guard in
+// lib/availability.ts is never actually imported into this client component.
+import type { StationChoice } from "@/lib/availability";
 
 // The scan-to-add screen (brief §2.7).
 //
@@ -35,13 +38,6 @@ import type { Localized } from "@/lib/localized";
 // `stationToken` — the *chosen* chair's, not necessarily the scanned one —
 // which pins the booking to that chair server-side.
 
-type StationOption = {
-  label: string;
-  token: string;
-  freeMin: number;
-  isCurrent: boolean;
-};
-
 type Props = {
   branchId: string;
   branchName: Localized | null;
@@ -53,7 +49,7 @@ type Props = {
   currentServiceName: Localized | null;
   customerName: string | null;
   /** Chairs free at `startsAt` for long enough to fit something. May be empty. */
-  options: StationOption[];
+  options: StationChoice[];
   services: (CatalogItem & { description: Localized | null })[];
 };
 

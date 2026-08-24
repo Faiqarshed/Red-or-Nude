@@ -167,6 +167,17 @@ const badgeTones = {
   danger: "bg-red/10 text-red",
 } as const;
 
+/**
+ * The tone a 1–5 rating is shown in, wherever one is shown.
+ *
+ * A 2 is a complaint and must never read the same as a 5, so the thresholds
+ * belong in one place: the bookings grid, the booking drawer and the reviews
+ * table all render the same number and have to agree about what it means.
+ */
+export function scoreTone(value: number): keyof typeof badgeTones {
+  return value >= 4 ? "success" : value === 3 ? "warning" : "danger";
+}
+
 export function Badge({
   tone = "neutral",
   className,
