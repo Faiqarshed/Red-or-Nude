@@ -114,6 +114,15 @@ const ar = {
     changeStatus: "تغيير الحالة",
     cancelReason: "سبب الإلغاء (اختياري)",
     optional: "اختياري",
+    // The action that marks arrival. The *badge* still reads "جارٍ التنفيذ" —
+    // only the button is renamed, because pressing it is now what the 20-minute
+    // no-show rule measures, and "تسجيل الحضور" says that and "بدء" does not.
+    checkIn: "تسجيل الحضور",
+    noShowTitle: "حجوزات لم يحضر أصحابها",
+    noShowHint: "تم تحرير الكرسي تلقائياً. تواصلي مع العميلة ثم أغلقي التنبيه.",
+    noShowResolve: "تمت المعالجة",
+    noShowResolvePrompt: "ماذا حدث؟ (اختياري)",
+    noShowNote: "ملاحظة المعالجة",
     statuses: {
       pending: "بانتظار التأكيد",
       confirmed: "مؤكد",
@@ -137,6 +146,7 @@ const ar = {
     closed: "مغلق",
     addStation: "إضافة كرسي",
     stationLabel: "الاسم",
+    qrCodes: "رموز QR للكراسي",
     addClosure: "إضافة إغلاق",
     from: "من تاريخ",
     to: "إلى تاريخ",
@@ -410,6 +420,12 @@ const en: AdminStrings = {
     changeStatus: "Change status",
     cancelReason: "Reason for cancelling (optional)",
     optional: "Optional",
+    checkIn: "Check in",
+    noShowTitle: "Nobody checked in",
+    noShowHint: "The chair was released automatically. Sort the customer out, then close this.",
+    noShowResolve: "Resolve",
+    noShowResolvePrompt: "What happened? (optional)",
+    noShowNote: "Resolution note",
     statuses: {
       pending: "Pending",
       confirmed: "Confirmed",
@@ -433,6 +449,7 @@ const en: AdminStrings = {
     closed: "Closed",
     addStation: "Add chair",
     stationLabel: "Label",
+    qrCodes: "Chair QR codes",
     addClosure: "Add closure",
     from: "From",
     to: "To",

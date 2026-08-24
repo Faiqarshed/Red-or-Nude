@@ -7,7 +7,7 @@
 
 import "server-only";
 import { randomInt, randomUUID } from "node:crypto";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
 import {
   addons,
@@ -23,6 +23,7 @@ import {
 import { reserveStations, utcToLocalDate } from "@/lib/availability";
 import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
+import { riyadhDayRange } from "@/lib/time";
 import { halalasToSar, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { formatTicketNo } from "@/lib/tickets";
 
@@ -57,6 +58,14 @@ export type CreateBookingsInput = {
   refillOfCode?: string | null;
   notes?: string | null;
   technicianId?: string | null;
+  /**
+   * Pin the booking to one specific chair instead of letting the engine choose.
+   *
+   * Set only by the station QR add-on (brief §2.7), where the customer is
+   * already sitting somewhere and is asking about *that* chair. Everywhere else
+   * this stays unset and the lowest free station wins, as before.
+   */
+  stationId?: string | null;
 };
 
 export type CreatedBooking = {
@@ -323,6 +332,63 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
 }
 
 /**
+ * Release chairs whose customer never checked in.
+ *
+ * A booking is paid for and holds a chair for its whole duration. If nobody
+ * turns up, that chair sits empty while walk-ins are turned away — the salon
+ * loses the slot twice, having already been paid for it once. After the grace
+ * period the chair goes back into the pool.
+ *
+ * `status = 'no_show'` is the entire mechanism: both `bookings_station_slot_unique`
+ * and `reserveStations` already exclude it, as does the availability engine's
+ * conflict scan. Releasing a chair *is* setting the status.
+ *
+ * **`in_progress` is the check-in.** A booking still `confirmed` past its grace
+ * is one nobody marked as arrived. That is a weaker signal than it sounds —
+ * today staff rarely press anything — which is why:
+ *
+ *   - `no_show_at` marks it for a human rather than closing the matter, and a
+ *     wrongly flagged booking is cleared with one button;
+ *   - the booking itself is untouched — the customer has lost nothing until a
+ *     walk-in actually claims the chair.
+ *
+ * Bounded to **today** and nothing narrower. There was a four-hour lookback here
+ * on the grounds that a released chair stops mattering by the evening — which is
+ * true of the chair and wrong about the point. The flag is not about the chair,
+ * it is about a customer who paid and was not served, and she is owed an answer
+ * whether staff open this screen at 11am or at closing. A narrower window did
+ * not protect anyone; it dropped people silently.
+ *
+ * The day bound stays, and does the job the lookback was wrongly credited with:
+ * turning this on cannot flag months of untouched history, because history is
+ * not today.
+ *
+ * `no_show_at is null` makes it idempotent: a booking already flagged keeps its
+ * original timestamp however many times this runs.
+ */
+export async function sweepNoShows(branchId: string): Promise<void> {
+  const { no_show_grace_min: graceMin } = await getSettings(["no_show_grace_min"]);
+
+  // Bound as an ISO string with an explicit cast: the postgres driver takes
+  // numbers in a raw template but not Date objects, which is why the sibling
+  // sweepExpiredHolds never hit this.
+  const { start: dayStart } = riyadhDayRange();
+
+  await db.execute(sql`
+    update ${bookings}
+       set status = 'no_show', no_show_at = now(), updated_at = now()
+     where branch_id = ${branchId}
+       and status = 'confirmed'
+       and no_show_at is null
+       and starts_at >= ${dayStart.toISOString()}::timestamptz
+       and starts_at <  now() - make_interval(mins => ${graceMin})
+  `);
+  // ponytail: like sweepExpiredHolds above, this only runs when someone looks —
+  // a booking page nobody opens keeps its chair held. Good enough while a
+  // receptionist is at the screen all day; a cron replaces it if that changes.
+}
+
+/**
  * The single write path. One guest or two, identically.
  *
  * Everything happens in one transaction: the chairs are locked, the customer is
@@ -348,6 +414,13 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     "group_discount_percent",
     "refill_discount_percent",
   ]);
+
+  // Give back chairs whose customer never checked in, before we go looking for a
+  // free one. This is what lets a receptionist seat a walk-in in the chair of
+  // someone who did not turn up. Outside the transaction on purpose: it is an
+  // independent state change, and it must not be rolled back if this particular
+  // booking then fails to find a chair.
+  await sweepNoShows(input.branchId);
 
   // A refill is checked before anything is priced: the window has to be open,
   // and it has to be the same service the customer originally had. The button
@@ -411,6 +484,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
         startsAt,
         latestEndsAt,
         guests.length,
+        { onlyStationId: input.stationId ?? undefined },
       );
       if (!stationIds) throw new BookingAbort("slot-taken");
 
@@ -550,6 +624,87 @@ export async function createBooking(input: CreateBookingInput): Promise<CreateBo
     ticketNo: only.ticketNo,
     totalHalalas: only.totalHalalas,
   };
+}
+
+export type RescheduleResult =
+  | { ok: true; startsAt: Date; stationIds: string[] }
+  | { ok: false; error: "not-found" | "slot-taken" | "failed" };
+
+/**
+ * Move a booking to a new start time, keeping its duration and price.
+ *
+ * One implementation, two callers — the admin's booking drawer and the
+ * customer's own history (brief §2.6) — for the same reason `createBookings`
+ * has one: the two must not drift on what counts as a free chair.
+ *
+ * It deliberately does **not** enforce the 3-hour customer window or any
+ * permission: this is the mechanics of moving a booking. Who is allowed to move
+ * it, and how late, belongs to the caller — the admin can move an appointment
+ * ten minutes before it starts, and should be able to.
+ *
+ * A group moves as a unit. Every guest starting at the same moment is a §2.4
+ * invariant, so moving one member and not the others would produce a booking
+ * that could never have been made in the first place.
+ */
+export async function rescheduleBooking(input: {
+  id: string;
+  startsAt: Date;
+}): Promise<RescheduleResult> {
+  if (Number.isNaN(input.startsAt.getTime())) return { ok: false, error: "failed" };
+
+  const [anchor] = await db.select().from(bookings).where(eq(bookings.id, input.id)).limit(1);
+  if (!anchor) return { ok: false, error: "not-found" };
+
+  const members = anchor.groupId
+    ? await db
+        .select()
+        .from(bookings)
+        .where(eq(bookings.groupId, anchor.groupId))
+        .orderBy(asc(bookings.createdAt), asc(bookings.id))
+    : [anchor];
+
+  // Each guest keeps their own duration — moving an appointment must not
+  // silently shorten or lengthen it, and in a group the two may differ.
+  const durations = members.map((m) => m.endsAt.getTime() - m.startsAt.getTime());
+  const latestEndsAt = new Date(input.startsAt.getTime() + Math.max(...durations));
+
+  try {
+    const moved = await db.transaction(async (tx) => {
+      // Claim and move in one transaction, so nobody can take the target chair
+      // between the check and the update. Their own chairs are fair game —
+      // hence the ignore ids, or a booking would see itself as the conflict.
+      const stationIds = await reserveStations(
+        tx,
+        anchor.branchId,
+        input.startsAt,
+        latestEndsAt,
+        members.length,
+        { ignoreBookingIds: members.map((m) => m.id) },
+      );
+      if (!stationIds) return null;
+
+      for (const [i, member] of members.entries()) {
+        await tx
+          .update(bookings)
+          .set({
+            startsAt: input.startsAt,
+            endsAt: new Date(input.startsAt.getTime() + durations[i]),
+            stationId: stationIds[i],
+            updatedAt: new Date(),
+          })
+          .where(eq(bookings.id, member.id));
+      }
+
+      return stationIds;
+    });
+
+    if (!moved) return { ok: false, error: "slot-taken" };
+    return { ok: true, startsAt: input.startsAt, stationIds: moved };
+  } catch (err) {
+    if (isSlotConflict(err)) return { ok: false, error: "slot-taken" };
+    console.error("[bookings] reschedule failed", err);
+    return { ok: false, error: "failed" };
+  }
 }
 
 /** What the booking page needs to render a refill: the service, locked, at its

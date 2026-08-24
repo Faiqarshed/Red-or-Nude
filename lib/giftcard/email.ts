@@ -15,6 +15,7 @@
 
 import "server-only";
 import { sendMail } from "@/lib/email";
+import { siteOrigin } from "@/lib/site";
 
 const RED = "#b80007";
 const INK = "#1a1a1a";
@@ -71,16 +72,6 @@ const T = {
     footer: "This is an automated message — please don't reply.",
   },
 } satisfies Record<Lang, Record<string, unknown>>;
-
-/**
- * Emails are read outside our origin, so every URL in one must be absolute.
- * Falls back to AUTH_URL and then localhost — a broken image in a dev inbox is
- * a better failure than a crash in the payment path.
- */
-function siteOrigin(): string {
-  const raw = process.env.SITE_URL?.trim() || process.env.AUTH_URL?.trim() || "http://localhost:3000";
-  return raw.replace(/\/+$/, "");
-}
 
 function esc(value: string): string {
   return value

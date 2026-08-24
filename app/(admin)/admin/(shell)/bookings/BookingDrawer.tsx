@@ -7,6 +7,7 @@ import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
+import { UTC_OFFSET_HOURS } from "@/lib/time";
 import { grantRefill, setBookingStatus } from "./actions";
 import { STATUS_TONE, type BookingRow, type BookingStatus } from "./BookingsView";
 
@@ -22,7 +23,7 @@ const NEXT: Record<BookingStatus, BookingStatus[]> = {
 };
 
 function localTime(iso: string): string {
-  return new Date(new Date(iso).getTime() + 3 * 3600_000).toISOString().slice(11, 16);
+  return new Date(new Date(iso).getTime() + UTC_OFFSET_HOURS * 3600_000).toISOString().slice(11, 16);
 }
 
 export default function BookingDrawer({
@@ -76,6 +77,11 @@ export default function BookingDrawer({
       booking.addons.length ? booking.addons.map((a) => pick(a, lang)).join("، ") : t.common.none,
     ],
     [t.bookings.source, t.bookings.sources[booking.source]],
+    // Only once someone has dealt with it — an open flag lives in the strip on
+    // the bookings screen, not buried in a drawer nobody has opened.
+    ...(booking.noShowNote
+      ? ([[t.bookings.noShowNote, booking.noShowNote]] as [string, string][])
+      : []),
   ];
 
   return (
@@ -196,7 +202,11 @@ export default function BookingDrawer({
                       : "border-black/10 text-ink hover:bg-black/[0.03]",
                   )}
                 >
-                  {t.bookings.statuses[status]}
+                  {/* The one button whose label is not just its status name.
+                      Pressing it is the arrival record the 20-minute no-show
+                      rule measures, so it says so; the badge above still reads
+                      "In progress". */}
+                  {status === "in_progress" ? t.bookings.checkIn : t.bookings.statuses[status]}
                 </button>
               ))}
             </div>

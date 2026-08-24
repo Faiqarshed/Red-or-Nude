@@ -14,7 +14,7 @@ import assert from "node:assert";
 import { and, eq, like } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, branches, customers, services, stations } from "@/lib/db/schema";
-import { createBooking, createBookings } from "@/lib/bookings";
+import { createBooking, createBookings, sweepNoShows } from "@/lib/bookings";
 import { splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { refillDaysLeft, refillPriceHalalas } from "@/lib/refill";
 import { formatTicketNo } from "@/lib/tickets";
@@ -321,6 +321,117 @@ async function main() {
   assert.ok(held.ok, "a pending hold should still be created");
   assert.equal(held.bookings[0].ticketNo, null, "an unpaid hold must not get a ticket number");
   console.log("  pending hold carries no ticket ✓");
+
+  await cleanup(branch.id);
+  // -- No-show release: chairs given back when nobody checks in ------------
+  //
+  // The rule is "confirmed, past its grace, today, recent". Each assertion below
+  // is one clause of it, because getting any of them wrong releases a chair out
+  // from under a customer who is sitting in it.
+  await cleanup(branch.id);
+
+  // The grace comes from settings (no_show_grace_min, default 20). The 5 / 30 /
+  // 300 minute cases below straddle that default deliberately.
+  const minsAgo = (n: number) => new Date(Date.now() - n * 60_000);
+
+  /** Seat a confirmed booking whose slot started `n` minutes ago. */
+  async function seatedAt(n: number, phone = TEST_PHONE) {
+    const made = await createBookings({
+      branchId: branch.id,
+      startsAt: minsAgo(n).toISOString(),
+      customer: { phone },
+      source: "walk_in",
+      status: "confirmed",
+      members: [{ serviceId: svcA.id, addonIds: [] }],
+    });
+    assert.ok(made.ok, `setup booking failed: ${made.ok ? "" : made.error}`);
+    return made.bookings[0].id;
+  }
+
+  const rowOf = async (id: string) =>
+    (await db.select().from(bookings).where(eq(bookings.id, id)))[0];
+
+  // Past the grace: released.
+  const missed = await seatedAt(30);
+  await sweepNoShows(branch.id);
+  let noShowRow = await rowOf(missed);
+  assert.equal(noShowRow.status, "no_show", "30 min in with no check-in must release the chair");
+  assert.ok(noShowRow.noShowAt, "a released chair must be flagged for staff");
+  assert.equal(noShowRow.noShowResolvedAt, null, "a fresh flag is unresolved");
+  console.log("  no-show: 30 min past start, not checked in -> chair released ✓");
+
+  // Idempotent. The sweep runs on every page load and must not keep moving the
+  // timestamp, or a flag would never look old.
+  const firstFlag = noShowRow.noShowAt!.getTime();
+  await sweepNoShows(branch.id);
+  noShowRow = await rowOf(missed);
+  assert.equal(noShowRow.noShowAt!.getTime(), firstFlag, "re-sweeping must not re-flag");
+  console.log("  no-show: sweeping twice keeps the original flag ✓");
+
+  // Inside the grace: left alone. Five minutes late is late, not absent.
+  await cleanup(branch.id);
+  const justLate = await seatedAt(5);
+  await sweepNoShows(branch.id);
+  assert.equal((await rowOf(justLate)).status, "confirmed", "5 min late is not a no-show");
+  console.log("  no-show: 5 min late is left alone ✓");
+
+  // Checked in: never flagged, however long ago it started. The one that matters
+  // most - in_progress is the arrival record the whole rule rests on.
+  await cleanup(branch.id);
+  const arrived = await seatedAt(90);
+  await db.update(bookings).set({ status: "in_progress" }).where(eq(bookings.id, arrived));
+  await sweepNoShows(branch.id);
+  const arrivedRow = await rowOf(arrived);
+  assert.equal(arrivedRow.status, "in_progress", "a checked-in customer must never be released");
+  assert.equal(arrivedRow.noShowAt, null, "a checked-in customer must never be flagged");
+  console.log("  no-show: checked in -> never released ✓");
+
+  // Hours later, still flagged. The flag is about the customer who paid and was
+  // not served, not about the chair — she is owed an answer whether staff open
+  // the screen at 11am or at closing, so there is no "too late to notice".
+  await cleanup(branch.id);
+  const longAgo = await seatedAt(5 * 60);
+  await sweepNoShows(branch.id);
+  assert.equal(
+    (await rowOf(longAgo)).status,
+    "no_show",
+    "a morning no-show must still be flagged in the afternoon",
+  );
+  console.log("  no-show: still flagged hours later ✓");
+
+  // But only today. This is what stops switching the feature on from flagging
+  // every untouched booking in the table's history.
+  await cleanup(branch.id);
+  const yesterday = await seatedAt(26 * 60);
+  await sweepNoShows(branch.id);
+  assert.equal(
+    (await rowOf(yesterday)).status,
+    "confirmed",
+    "yesterday is history, not something to release a chair for",
+  );
+  console.log("  no-show: yesterday is left alone ✓");
+
+  // And the point of all of it: the chair is genuinely bookable again.
+  await cleanup(branch.id);
+  const released = await seatedAt(30);
+  const releasedRow = await rowOf(released);
+  await sweepNoShows(branch.id);
+  const retaken = await createBookings({
+    branchId: branch.id,
+    startsAt: releasedRow.startsAt.toISOString(),
+    stationId: releasedRow.stationId,
+    customer: { phone: "0500000003" },
+    source: "walk_in",
+    status: "confirmed",
+    members: [{ serviceId: svcA.id, addonIds: [] }],
+  });
+  assert.ok(retaken.ok, `released chair must be rebookable: ${retaken.ok ? "" : retaken.error}`);
+  assert.equal(
+    retaken.bookings[0].stationId,
+    releasedRow.stationId,
+    "the walk-in must land on the exact chair that was freed",
+  );
+  console.log("  no-show: freed chair is immediately rebookable ✓");
 
   await cleanup(branch.id);
   console.log("\nall booking checks passed");

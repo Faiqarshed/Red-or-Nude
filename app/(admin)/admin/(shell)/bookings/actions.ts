@@ -1,14 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
-import { createBooking, isSlotConflict } from "@/lib/bookings";
-import { reserveStations } from "@/lib/availability";
+import { createBooking, rescheduleBooking as moveBooking } from "@/lib/bookings";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
@@ -62,6 +61,14 @@ const rescheduleSchema = z.object({
   startsAt: z.string().datetime(),
 });
 
+/**
+ * Staff-side reschedule. The move itself lives in lib/bookings.ts, shared with
+ * the customer's own reschedule; this wrapper is the part that is specific to
+ * staff — the permission, the audit trail, and refreshing the calendar.
+ *
+ * Note there is no 3-hour window here. That limit is the customer's
+ * (lib/cancellation.ts); the salon can move an appointment whenever it needs to.
+ */
 export async function rescheduleBooking(input: {
   id: string;
   startsAt: string;
@@ -73,40 +80,64 @@ export async function rescheduleBooking(input: {
   const [before] = await db.select().from(bookings).where(eq(bookings.id, parsed.data.id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
 
-  // Keep the original duration — moving an appointment must not silently
-  // shorten or lengthen it.
-  const durationMs = before.endsAt.getTime() - before.startsAt.getTime();
   const startsAt = new Date(parsed.data.startsAt);
-  const endsAt = new Date(startsAt.getTime() + durationMs);
-
-  // Claim and move in one transaction, so nobody can take the target chair
-  // between the check and the update. Its own chair is fair game — hence the
-  // ignore id, or the booking would see itself as the conflict.
-  try {
-    const moved = await db.transaction(async (tx) => {
-      const [stationId] =
-        (await reserveStations(tx, before.branchId, startsAt, endsAt, 1, before.id)) ?? [];
-      if (!stationId) return false;
-
-      await tx
-        .update(bookings)
-        .set({ startsAt, endsAt, stationId, updatedAt: new Date() })
-        .where(eq(bookings.id, before.id));
-      return true;
-    });
-
-    if (!moved) return { ok: false, error: "slot-taken" };
-  } catch (err) {
-    if (isSlotConflict(err)) return { ok: false, error: "slot-taken" };
-    console.error("[bookings] reschedule failed", err);
-    return { ok: false, error: "failed" };
-  }
+  const moved = await moveBooking({ id: before.id, startsAt });
+  if (!moved.ok) return { ok: false, error: moved.error };
 
   await recordAudit(actor, {
     action: "reschedule",
     entity: "bookings",
     entityId: before.id,
     diff: { startsAt: { from: before.startsAt.toISOString(), to: startsAt.toISOString() } },
+  });
+
+  revalidate();
+  return { ok: true };
+}
+
+const resolveSchema = z.object({
+  id: z.string().uuid(),
+  note: z.string().trim().max(500).optional(),
+});
+
+/**
+ * Clear a no-show flag once staff have dealt with the customer.
+ *
+ * Two states and an optional note, rather than a fixed list of outcomes. Nobody
+ * knows yet how a missed customer actually gets settled — refunded, squeezed in
+ * later, rebooked, or nothing at all — and a dropdown guessed now is a dropdown
+ * everybody sets to "Other". Once there are real notes to read, the common
+ * answers become buttons and this same column holds them.
+ *
+ * Touches nothing else: the status is already `no_show`, no money moves, and the
+ * booking row is otherwise exactly as the sweep left it. The audit entry is the
+ * record of who decided it was handled.
+ */
+export async function resolveNoShow(input: {
+  id: string;
+  note?: string;
+}): Promise<Result> {
+  const actor = await requireCan("bookings.manage");
+  const parsed = resolveSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "invalid" };
+
+  const note = parsed.data.note?.trim() || null;
+
+  // Guarded on "still unresolved" as well as the id, so two receptionists
+  // clearing the same row do not overwrite each other's note.
+  const [row] = await db
+    .update(bookings)
+    .set({ noShowResolvedAt: new Date(), noShowNote: note, updatedAt: new Date() })
+    .where(and(eq(bookings.id, parsed.data.id), isNull(bookings.noShowResolvedAt)))
+    .returning({ id: bookings.id });
+
+  if (!row) return { ok: false, error: "already-resolved" };
+
+  await recordAudit(actor, {
+    action: "resolve-no-show",
+    entity: "bookings",
+    entityId: parsed.data.id,
+    diff: { noShowNote: { from: null, to: note } },
   });
 
   revalidate();

@@ -184,11 +184,24 @@ export async function getDayAvailability(
   durationMin: number,
   now: Date = new Date(),
   guests = 1,
+  /**
+   * Override the branch's booking lead time, in minutes.
+   *
+   * Pass `0` for a walk-in. The lead time exists to stop a web customer booking
+   * something starting in five minutes that nobody is ready for — but a walk-in
+   * is a person standing at the desk right now, so the rule is exactly backwards
+   * at the counter. It is also what would otherwise make a chair freed by a
+   * no-show unusable: the slot it frees is always in the past.
+   *
+   * Only honoured for signed-in staff — see app/api/availability/route.ts.
+   */
+  leadTimeMin?: number,
 ): Promise<Slot[]> {
   const from = localToUtc(dateStr, "00:00");
   const to = new Date(from.getTime() + DAY_MS);
   const ctx = await loadContext(branchId, from, to);
-  return computeDay(ctx, dateStr, durationMin, now, guests);
+  const effective = leadTimeMin === undefined ? ctx : { ...ctx, leadTimeMin };
+  return computeDay(effective, dateStr, durationMin, now, guests);
 }
 
 /**
@@ -231,21 +244,39 @@ export async function getMonthAvailability(
  * Ordered by `sort` so concurrent transactions always take the rows in the same
  * order, which is what keeps this deadlock-free.
  *
- * `ignoreBookingId` excludes one booking from the conflict scan — a booking being
- * rescheduled must not see itself as the thing blocking its own move.
+ * `ignoreBookingIds` excludes bookings from the conflict scan — a booking being
+ * rescheduled must not see itself as the thing blocking its own move, and a
+ * group being moved must not see its other half either.
+ *
+ * `onlyStationId` narrows the search to one chair, for the station QR add-on
+ * (brief §2.7): that flow is not asking for *a* chair, it is asking whether
+ * *this* chair — the one the customer is already sitting in — is still free.
+ * The lock, the conflict rule and the atomicity are identical, which is the
+ * point of putting it here rather than writing a second check.
  */
+export type ReserveOptions = {
+  ignoreBookingIds?: string[];
+  onlyStationId?: string;
+};
+
 export async function reserveStations(
   tx: Tx,
   branchId: string,
   startsAt: Date,
   endsAt: Date,
   count: number,
-  ignoreBookingId?: string,
+  { ignoreBookingIds, onlyStationId }: ReserveOptions = {},
 ): Promise<string[] | null> {
   const stationRows = await tx
     .select({ id: stations.id })
     .from(stations)
-    .where(and(eq(stations.branchId, branchId), eq(stations.active, true)))
+    .where(
+      and(
+        eq(stations.branchId, branchId),
+        eq(stations.active, true),
+        ...(onlyStationId ? [eq(stations.id, onlyStationId)] : []),
+      ),
+    )
     .orderBy(asc(stations.sort))
     .for("update");
 
@@ -265,13 +296,85 @@ export async function reserveStations(
       ),
     );
 
+  const ignored = new Set(ignoreBookingIds ?? []);
   const taken = new Set(
     conflicting
-      .filter((b) => b.id !== ignoreBookingId)
+      .filter((b) => !ignored.has(b.id))
       .map((b) => b.stationId)
       .filter(Boolean) as string[],
   );
 
   const free = stationRows.filter((s) => !taken.has(s.id)).map((s) => s.id);
   return free.length >= count ? free.slice(0, count) : null;
+}
+
+/**
+ * How many minutes one chair stays free from `from` — the gap before whatever
+ * is booked on it next, or before the branch closes, whichever comes first.
+ *
+ * This is the question the station QR page asks (brief §2.7: "scanning checks
+ * whether that same station is free at the projected finish time"), and the
+ * answer is more useful as a length than a yes/no: it lets the page offer only
+ * the services that actually fit in the gap, instead of taking payment for a
+ * 90-minute service into a 40-minute window.
+ *
+ * `0` means the chair is not free at all — the page's "rebook on the site"
+ * branch. Read-only and outside any transaction: it decides what to *show*.
+ * `reserveStations(..., { onlyStationId })` is what decides what to *keep*, and
+ * it runs again under a lock when the booking is actually written.
+ */
+export async function stationFreeWindow(
+  branchId: string,
+  stationId: string,
+  from: Date,
+): Promise<number> {
+  const [hourRows, nextRows] = await Promise.all([
+    db
+      .select({ opens: branchHours.opens, closes: branchHours.closes, closed: branchHours.closed })
+      .from(branchHours)
+      .where(
+        and(
+          eq(branchHours.branchId, branchId),
+          eq(branchHours.weekday, riyadhWeekday(from)),
+        ),
+      ),
+    db
+      .select({ startsAt: bookings.startsAt })
+      .from(bookings)
+      .where(
+        and(
+          eq(bookings.stationId, stationId),
+          // Anything already finished is irrelevant; `gt` on endsAt rather than
+          // startsAt so a booking straddling `from` still counts as blocking.
+          gt(bookings.endsAt, from),
+          ne(bookings.status, "cancelled"),
+          ne(bookings.status, "no_show"),
+        ),
+      )
+      .orderBy(asc(bookings.startsAt))
+      .limit(1),
+  ]);
+
+  const hours = hourRows[0];
+  if (!hours || hours.closed) return 0;
+
+  const localDay = utcToLocalDate(from);
+  const open = localToUtc(localDay, hours.opens.slice(0, 5));
+  const close = localToUtc(localDay, hours.closes.slice(0, 5));
+
+  // Outside opening hours there is no window at all. Without this the free time
+  // is measured to the *end* of the day `from` falls in, so an appointment
+  // running past midnight reports the whole of the next trading day as free —
+  // twenty hours of availability at two in the morning.
+  if (from < open || from >= close) return 0;
+
+  // A booking already running at `from` starts before it — the gap is negative
+  // and clamps to zero below, which is the correct "chair is occupied".
+  const nextStart = nextRows[0]?.startsAt;
+  const until = nextStart && nextStart < close ? nextStart : close;
+
+  // Closures are deliberately not consulted: this window is minutes from now,
+  // and a closure starting mid-appointment is the salon's problem to handle at
+  // the desk, not a case worth a second query on every scan.
+  return Math.max(0, Math.floor((until.getTime() - from.getTime()) / MINUTE_MS));
 }
