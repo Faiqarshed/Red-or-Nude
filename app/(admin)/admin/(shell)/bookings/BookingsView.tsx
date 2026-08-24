@@ -121,6 +121,41 @@ function shiftDate(date: string, days: number): string {
 }
 
 /**
+ * The score a customer left, on the block itself so the grid can be read without
+ * hovering anything.
+ *
+ * Only once they have actually answered. An invitation that is still unanswered
+ * is not a rating, and a grid full of empty stars would say "everyone was
+ * silent" in a place where the honest answer is "we have not heard yet" — the
+ * drawer is where that distinction is spelled out.
+ *
+ * Tone follows the number, matching the drawer and the reviews screen: a 2 must
+ * never read the same as a 5. Colour alone never carries it — the digit is right
+ * there, which is also what makes it legible to anyone who cannot tell the two
+ * backgrounds apart.
+ */
+function GridScore({ review }: { review: BookingReview | null }) {
+  if (!review?.submittedAt || review.serviceRating === null) return null;
+
+  const score = review.serviceRating;
+  return (
+    <span
+      dir="ltr"
+      className={cn(
+        "shrink-0 rounded px-1 text-[10px] font-bold tabular-nums leading-[14px]",
+        score >= 4
+          ? "bg-[#1f7a4d]/15 text-[#1f7a4d]"
+          : score === 3
+            ? "bg-[#b7791f]/15 text-[#8a5a09]"
+            : "bg-red/15 text-red",
+      )}
+    >
+      {score}★
+    </span>
+  );
+}
+
+/**
  * The chairs we gave away, and the customers still owed an answer.
  *
  * Amber rather than red, and styled after the `?denied=` banner on the dashboard
@@ -404,8 +439,15 @@ export default function BookingsView({
                             )}
                             title={tooltip(b)}
                           >
-                            <span className="block truncate text-[11px] font-semibold text-ink">
-                              {b.customerName || b.customerPhone || b.code}
+                            {/* The score sits on the name's line rather than in a
+                                corner: a block can be as short as 22px, and the
+                                name truncates around it instead of running
+                                underneath it. */}
+                            <span className="flex items-center gap-1">
+                              <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-ink">
+                                {b.customerName || b.customerPhone || b.code}
+                              </span>
+                              <GridScore review={b.review ?? null} />
                             </span>
                             <span className="block truncate text-[10px] text-ink/55">
                               {pick(b.serviceName, lang)}
