@@ -22,9 +22,9 @@ export default function Topbar({
   const { t, lang, toggle } = useAdminI18n();
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // Owners can switch context across branches; everyone else is pinned to theirs
-  // by scopedBranchId() on the server — the selector is read-only for them.
-  const isOwner = user.role === "owner";
+  // The CEO can switch context across branches; everyone else is pinned to
+  // theirs by scopedBranchId() on the server — the selector is read-only.
+  const isOwner = user.role === "ceo";
   const ownBranch = branches.find((b) => b.id === user.branchId);
 
   return (

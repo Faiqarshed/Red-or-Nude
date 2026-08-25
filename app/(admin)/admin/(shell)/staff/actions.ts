@@ -9,16 +9,17 @@ import { staff } from "@/lib/db/schema";
 import { requireCan, type SessionStaff } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
 import type { StaffRole } from "@/lib/db/schema";
+import { issueMonthlyCode } from "@/lib/staff-codes";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
 // Higher number = more authority. Used to stop anyone granting or editing a role
-// above their own — without this, a manager could simply make themselves owner.
+// above their own — without this, an admin could simply make themselves CEO.
 const RANK: Record<StaffRole, number> = {
   technician: 1,
   receptionist: 2,
-  manager: 3,
-  owner: 4,
+  admin: 3,
+  ceo: 4,
 };
 
 const saveSchema = z.object({
@@ -26,7 +27,7 @@ const saveSchema = z.object({
   name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(200),
   phone: z.string().trim().max(20).optional(),
-  role: z.enum(["owner", "manager", "receptionist", "technician"]),
+  role: z.enum(["ceo", "admin", "receptionist", "technician"]),
   branchId: z.string().uuid().nullable().optional(),
   password: z.string().min(8).max(200).optional().or(z.literal("")),
   active: z.boolean(),
@@ -46,12 +47,12 @@ async function assertMayEdit(
   return null;
 }
 
-/** True when deactivating/removing this account would leave no active owner. */
-async function wouldOrphanOwners(targetId: string): Promise<boolean> {
+/** True when deactivating/removing this account would leave no active CEO. */
+async function wouldOrphanCeos(targetId: string): Promise<boolean> {
   const [row] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(staff)
-    .where(and(eq(staff.role, "owner"), eq(staff.active, true), ne(staff.id, targetId)));
+    .where(and(eq(staff.role, "ceo"), eq(staff.active, true), ne(staff.id, targetId)));
   return (row?.n ?? 0) === 0;
 }
 
@@ -72,8 +73,8 @@ export async function saveStaff(input: StaffInput): Promise<Result> {
   // A new account with no password could never sign in.
   if (!d.id && !d.password) return { ok: false, error: "password-required" };
 
-  if (existing?.role === "owner" && (!d.active || d.role !== "owner")) {
-    if (await wouldOrphanOwners(existing.id)) return { ok: false, error: "last-owner" };
+  if (existing?.role === "ceo" && (!d.active || d.role !== "ceo")) {
+    if (await wouldOrphanCeos(existing.id)) return { ok: false, error: "last-ceo" };
   }
 
   const values: Record<string, unknown> = {
@@ -108,6 +109,17 @@ export async function saveStaff(input: StaffInput): Promise<Result> {
         entityId: row.id,
         diff: { role: { from: null, to: d.role } },
       });
+
+      // Their code for the month they were hired in (brief §3.3). Every
+      // following month comes from the cron, and issueMonthlyCode is idempotent
+      // inside a window, so the two never collide. Deliberately not allowed to
+      // fail the hire: a missing discount code is a nuisance, an account that
+      // didn't save is a problem.
+      try {
+        await issueMonthlyCode(row.id);
+      } catch (codeErr) {
+        console.error("[staff] could not issue monthly code", codeErr);
+      }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -131,8 +143,8 @@ export async function setStaffActive(id: string, active: boolean): Promise<Resul
 
   // Locking yourself out of the panel you administer.
   if (!active && id === actor.id) return { ok: false, error: "self" };
-  if (!active && target.role === "owner" && (await wouldOrphanOwners(id))) {
-    return { ok: false, error: "last-owner" };
+  if (!active && target.role === "ceo" && (await wouldOrphanCeos(id))) {
+    return { ok: false, error: "last-ceo" };
   }
 
   await db.update(staff).set({ active, updatedAt: new Date() }).where(eq(staff.id, id));
@@ -156,8 +168,8 @@ export async function deleteStaff(id: string): Promise<Result> {
   const denied = await assertMayEdit(actor, target.role, target.role);
   if (denied) return { ok: false, error: denied };
   if (id === actor.id) return { ok: false, error: "self" };
-  if (target.role === "owner" && (await wouldOrphanOwners(id))) {
-    return { ok: false, error: "last-owner" };
+  if (target.role === "ceo" && (await wouldOrphanCeos(id))) {
+    return { ok: false, error: "last-ceo" };
   }
 
   await db.delete(staff).where(eq(staff.id, id));

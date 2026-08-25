@@ -19,13 +19,13 @@ export type SessionStaff = {
 /**
  * Local dev only (`next dev`; never true for `next start`/deployed builds):
  * stand in for a real session so the login screen isn't required. Picks the
- * seeded owner account (falling back to any active staff row) so capability
+ * seeded CEO account (falling back to any active staff row) so capability
  * checks still exercise real RBAC instead of an all-access shortcut.
  */
 async function devFallbackStaff(): Promise<SessionStaff | null> {
   if (process.env.NODE_ENV === "production") return null;
 
-  const [owner] = await db.select().from(staff).where(eq(staff.role, "owner")).limit(1);
+  const [owner] = await db.select().from(staff).where(eq(staff.role, "ceo")).limit(1);
   const [row] = owner
     ? [owner]
     : await db.select().from(staff).where(eq(staff.active, true)).limit(1);

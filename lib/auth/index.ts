@@ -91,7 +91,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               .values({
                 email: email.toLowerCase().trim(),
                 name: member?.name ?? "Owner",
-                role: "owner",
+                role: "ceo",
                 passwordHash,
                 active: true,
               })

@@ -30,7 +30,7 @@ export default async function BookingsPage({
 
   const branchRows = await db.select().from(branches).orderBy(asc(branches.sort));
 
-  // Managers and receptionists are pinned to their own branch; owners choose.
+  // Admins and receptionists are pinned to their own branch; the CEO chooses.
   const pinned = scopedBranchId(user.role, user.branchId);
   const branchId =
     pinned ?? (searchParams.branch && branchRows.some((b) => b.id === searchParams.branch)
@@ -148,7 +148,9 @@ export default async function BookingsPage({
     <BookingsView
       date={date}
       branchId={branchId}
-      branches={branchRows.map((b) => ({ id: b.id, name: b.name }))}
+      // Only the CEO chooses. For everyone else `pinned` already decides the
+      // query, so offering a picker that changes nothing is a lie.
+      branches={pinned ? [] : branchRows.map((b) => ({ id: b.id, name: b.name }))}
       stations={stationRows.map((s) => ({ id: s.id, label: s.label }))}
       canManage={user.role !== "technician"}
       catalog={{
