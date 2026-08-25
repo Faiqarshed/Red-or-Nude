@@ -26,6 +26,8 @@ import { getSettings } from "@/lib/settings";
 import { riyadhDayRange } from "@/lib/time";
 import { halalasToSar, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { quotePromo, type PromoRefusal } from "@/lib/promo";
+import { quoteReward, spendPoints } from "@/lib/loyalty";
+import type { RewardRefusal } from "@/lib/rewards";
 import { formatTicketNo } from "@/lib/tickets";
 
 /** What one guest is booking. */
@@ -63,6 +65,27 @@ export type CreateBookingsInput = {
    * window is: the quote the browser showed is a preview, this is the charge.
    */
   promoCode?: string | null;
+  /**
+   * The signed-in customer, resolved from the session cookie by the caller.
+   *
+   * **Trusted, and therefore never read from a request body.** The route reads
+   * it with currentCustomer() and passes it down; this module has no access to
+   * request context and shouldn't. Anything else would let a request nominate
+   * whose wallet to spend.
+   *
+   * When set, this row is used as-is and the phone upsert below is skipped —
+   * otherwise a signed-in customer who edits the phone field at checkout would
+   * book against a second row while the points came off the first.
+   */
+  customerId?: string | null;
+  /**
+   * A reward rung the customer ticked at checkout (brief §2.8), in points.
+   *
+   * Re-quoted against a freshly read balance here rather than trusted, exactly
+   * as the promo code is: the browser showed a preview, this is the charge.
+   * Ignored entirely without a `customerId` — there is no wallet to spend.
+   */
+  redeemPoints?: number | null;
   notes?: string | null;
   technicianId?: string | null;
   /**
@@ -93,16 +116,32 @@ export type CreateBookingError =
   | "refill-window"
   /** A discount code was given and does not apply. `promoReason` says why. */
   | "promo-invalid"
+  /**
+   * A reward rung was ticked and can't be spent — no such rung, or the balance
+   * moved between the preview and the charge. `rewardReason` says which.
+   */
+  | "reward-invalid"
   | "failed";
 
 export type CreateBookingsResult =
-  | { ok: true; groupId: string | null; totalHalalas: number; bookings: CreatedBooking[] }
+  | {
+      ok: true;
+      groupId: string | null;
+      totalHalalas: number;
+      bookings: CreatedBooking[];
+      /** Points actually spent on this bill, so the success screen can say so. */
+      pointsSpent: number;
+    }
   | {
       ok: false;
       error: CreateBookingError;
       /** Set only with `promo-invalid` — the checkout repeats it to the customer. */
       promoReason?: PromoRefusal;
       minTotalHalalas?: number;
+      /** Set only with `reward-invalid`. */
+      rewardReason?: RewardRefusal;
+      /** The balance as it actually is, so the checkout can correct itself. */
+      pointsBalance?: number;
     };
 
 // ---- the original one-guest API, unchanged for existing callers -------------
@@ -515,9 +554,41 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     promoShares = shareAmount(groupTotals, quote.discountHalalas);
   }
 
+  // The reward comes off last of all — after the group or refill discount, and
+  // after the promo. A rung is a thank-you for money already spent, not an
+  // alternative to an offer the customer also qualifies for.
+  //
+  // Quoted against the bill as it stands *after* the promo, so 10% off means 10%
+  // of what is actually left to pay, then shared back out by the same
+  // largest-remainder split, so the guests' totals still add to the halala.
+  const afterPromo = groupTotals.map((t, i) => t - promoShares[i]);
+  let pointsSpent = 0;
+  let rewardShares = guests.map(() => 0);
+
+  if (input.customerId && input.redeemPoints) {
+    const quote = await quoteReward(
+      input.customerId,
+      input.redeemPoints,
+      afterPromo.reduce((sum, t) => sum + t, 0),
+    );
+    // Refused rather than ignored, for the same reason a bad promo code is:
+    // silently charging full price to someone who ticked a reward — and would
+    // have spent points for it — is the one outcome nobody would accept.
+    if (!quote.ok) {
+      return {
+        ok: false,
+        error: "reward-invalid",
+        rewardReason: quote.reason,
+        pointsBalance: quote.balance,
+      };
+    }
+    pointsSpent = quote.points;
+    rewardShares = shareAmount(afterPromo, quote.discountHalalas);
+  }
+
   const status = input.status ?? "confirmed";
   const groupId = isGroup ? randomUUID() : null;
-  const billTotal = groupTotals.reduce((sum, t, i) => sum + t - promoShares[i], 0);
+  const billTotal = afterPromo.reduce((sum, t, i) => sum + t - rewardShares[i], 0);
 
   try {
     const created = await db.transaction(async (tx) => {
@@ -533,28 +604,46 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
       );
       if (!stationIds) throw new BookingAbort("slot-taken");
 
-      const [customer] = await tx
-        .insert(customers)
-        .values({
-          phone,
-          name: input.customer.name?.trim() || null,
-          email,
-          lang: input.customer.lang ?? "ar",
-        })
-        .onConflictDoUpdate({
-          target: customers.phone,
-          // Don't blank an existing name or email with an empty one from a
-          // rushed form — but do record a newly supplied one: it is how a
-          // returning customer gets an address on file, and it keeps the
-          // invoice going to the address typed at checkout rather than a stale
-          // one.
-          set: {
-            name: input.customer.name?.trim() || undefined,
-            email: email ?? undefined,
-            updatedAt: new Date(),
-          },
-        })
-        .returning();
+      // A signed-in customer books against the row they signed in as, full stop.
+      //
+      // The upsert below would otherwise conflict on whatever phone number was
+      // in the form, and a customer who corrected a typo there would end up
+      // booking as a *different* row than the one their points came out of.
+      // `for update` takes the same row lock the upsert would have, which is
+      // what serialises two checkouts in two tabs trying to spend one balance.
+      const [customer] = input.customerId
+        ? await tx
+            .select()
+            .from(customers)
+            .where(eq(customers.id, input.customerId))
+            .limit(1)
+            .for("update")
+        : await tx
+            .insert(customers)
+            .values({
+              phone,
+              name: input.customer.name?.trim() || null,
+              email,
+              lang: input.customer.lang ?? "ar",
+            })
+            .onConflictDoUpdate({
+              target: customers.phone,
+              // Don't blank an existing name or email with an empty one from a
+              // rushed form — but do record a newly supplied one: it is how a
+              // returning customer gets an address on file, and it keeps the
+              // invoice going to the address typed at checkout rather than a
+              // stale one.
+              set: {
+                name: input.customer.name?.trim() || undefined,
+                email: email ?? undefined,
+                updatedAt: new Date(),
+              },
+            })
+            .returning();
+
+      // The session pointed at a row that is no longer there. Rare, but the
+      // alternative is a foreign key error further down.
+      if (!customer) throw new BookingAbort("failed");
 
       // Rolls the upsert back too, so a blocked caller leaves nothing behind.
       if (customer.blocked) throw new BookingAbort("blocked");
@@ -570,10 +659,12 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
 
       for (const [i, guest] of guests.entries()) {
         const promoShare = promoShares[i];
-        // Both discounts land in one column: what this guest was let off, in
-        // total. `promo_code_id` records which code produced part of it.
-        const discountHalalas = split[i].discountHalalas + promoShare;
-        const totalHalalas = split[i].totalHalalas - promoShare;
+        const rewardShare = rewardShares[i];
+        // Every discount lands in one column: what this guest was let off, in
+        // total. `promo_code_id` records which code produced part of it, and the
+        // loyalty_txns row written below records the rest.
+        const discountHalalas = split[i].discountHalalas + promoShare + rewardShare;
+        const totalHalalas = split[i].totalHalalas - promoShare - rewardShare;
         // Prices are VAT-inclusive, so VAT comes back out of the discounted total
         // rather than being added on. The customer pays exactly what was shown.
         const vat = vatIncludedIn(totalHalalas, settings.vat_percent);
@@ -630,10 +721,28 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
         });
       }
 
+      // Debit the wallet inside the same transaction, tied to the first booking
+      // on the bill — so a group is one debit, not two.
+      //
+      // At hold time, not at confirmation. That looks inconsistent with the
+      // promo count, which waits for the charge to clear, and it is deliberate:
+      // a promo code is a shared coupon, but points are a per-customer balance,
+      // and deferring the debit would let one customer hold several bookings in
+      // several tabs each claiming the same balance and confirm them all. The
+      // row lock taken on the customer above is what serialises this.
+      //
+      // Nothing gives the points *back* — nothing needs to. The balance query
+      // in lib/loyalty.ts ignores rows whose booking is cancelled or is a hold
+      // gone stale, so an abandoned checkout, a declined payment and a
+      // cancellation each release them with no compensating write.
+      if (input.customerId && pointsSpent > 0) {
+        await spendPoints(tx, customer.id, out[0].id, pointsSpent);
+      }
+
       return out;
     });
 
-    return { ok: true, groupId, totalHalalas: billTotal, bookings: created };
+    return { ok: true, groupId, totalHalalas: billTotal, bookings: created, pointsSpent };
   } catch (err) {
     if (err instanceof BookingAbort) return { ok: false, error: err.reason };
     // Kept as a cheap backstop even though reserveStations now locks: a bug that

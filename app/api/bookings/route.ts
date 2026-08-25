@@ -13,6 +13,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { stations } from "@/lib/db/schema";
 import { createBookings } from "@/lib/bookings";
+import { currentCustomer } from "@/lib/account/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +45,15 @@ const body = z.object({
   refillOfCode: z.string().trim().max(20).nullable().optional(),
   /** An occasion discount code typed at checkout (brief §2.10). */
   promoCode: z.string().trim().max(40).nullable().optional(),
+  /**
+   * A loyalty reward rung the customer ticked (brief §2.8), in points.
+   *
+   * Note what is *not* here: whose points. That comes from the session cookie
+   * below and never from this body — a customer id in a request is a customer
+   * id anyone can edit, and there is a wallet on the other side of it. Someone
+   * signed out who posts this is simply ignored.
+   */
+  redeemPoints: z.number().int().positive().nullable().optional(),
   /**
    * Set only by the station QR flow (brief §2.7), pinning the booking to the
    * chair the customer is already sitting in.
@@ -99,8 +109,14 @@ export async function POST(request: Request) {
     stationId = station.id;
   }
 
+  // Read here, in the request, and handed down as a trusted value — lib/bookings
+  // has no access to cookies and shouldn't grow any. Null for a guest checkout,
+  // which is still the ordinary case: an account is optional (brief §2.8).
+  const customer = await currentCustomer();
+
   const result = await createBookings({
     ...data,
+    customerId: customer?.id ?? null,
     stationId,
     source: "web",
     // The whole point: a web booking holds the chair but is not a booking until
@@ -129,6 +145,10 @@ export async function POST(request: Request) {
         error: result.error,
         promoReason: result.promoReason,
         minTotalHalalas: result.minTotalHalalas,
+        // A refused reward carries the real balance back, so a checkout showing
+        // a stale one can correct itself instead of offering the rung again.
+        rewardReason: result.rewardReason,
+        pointsBalance: result.pointsBalance,
       },
       { status },
     );
@@ -138,6 +158,7 @@ export async function POST(request: Request) {
     {
       groupId: result.groupId,
       totalHalalas: result.totalHalalas,
+      pointsSpent: result.pointsSpent,
       bookings: result.bookings.map((b) => ({ id: b.id, code: b.code })),
     },
     { status: 201 },

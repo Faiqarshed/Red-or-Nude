@@ -15,7 +15,7 @@ import { db } from "@/lib/db";
 import { bookings, services } from "@/lib/db/schema";
 import { claimedWindows } from "@/lib/bookings";
 import { halalasToSar } from "@/lib/money";
-import { OTP_LENGTH, verifyOtp } from "@/lib/otp";
+import { OTP_LENGTH, bookingSubject, verifyOtp } from "@/lib/otp";
 import { refillDaysLeft, refillPriceHalalas } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
   // from a real one with the wrong OTP.
   if (!row) return NextResponse.json({ error: "wrong" }, { status: 401 });
 
-  const check = await verifyOtp(row.id, parsed.data.otp);
+  const check = await verifyOtp(bookingSubject(row.id), parsed.data.otp);
   if (!check.ok) {
     const status = check.reason === "too-many-attempts" ? 429 : 401;
     return NextResponse.json({ error: check.reason }, { status });

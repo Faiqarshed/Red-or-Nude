@@ -3,10 +3,31 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { useAccount } from "@/lib/account/context";
 
 export default function SiteHeader() {
   const { c, dir, toggle } = useI18n();
+  const signedIn = useAccount();
   const [open, setOpen] = useState(false);
+
+  /**
+   * Signed in, Profile *replaces* Bookings rather than joining it: /account is a
+   * superset of /my-bookings — the same appointments with the same actions, plus
+   * the wallet, and without the reference-and-code gate a signed-in customer has
+   * no reason to pass. Two entries to the same appointments would just be two
+   * entries to the same appointments.
+   *
+   * Matched on href, not on index, so reordering the nav in the dictionary
+   * doesn't silently swap the wrong link.
+   */
+  const nav = signedIn
+    ? c.nav.map((l) => (l.href === "/my-bookings" ? { label: c.account.profile, href: "/account" } : l))
+    : c.nav;
+
+  // No account pill beside the language toggle, in either state. Signed in it
+  // duplicated the Profile nav entry above; signed out it put a second red pill
+  // next to the language one and made the header look like a login screen.
+  // Getting to an account is the nav's job — /my-bookings offers it to guests.
 
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-white/60 bg-white/10 backdrop-blur-[14px] backdrop-saturate-[1.8] backdrop-brightness-[1.08] shadow-[0_10px_35px_rgba(184,0,7,0.07)]">
@@ -34,7 +55,7 @@ export default function SiteHeader() {
 
         {/* Nav links (center, desktop only) — order follows the language */}
         <nav dir={dir} className="hidden items-center gap-8 lg:flex">
-          {c.nav.map((l) => (
+          {nav.map((l) => (
             <Link
               key={l.label}
               href={l.href}
@@ -75,7 +96,7 @@ export default function SiteHeader() {
       {open && (
         <div dir={dir} className="relative border-t border-red/10 bg-cream/95 px-6 py-6 backdrop-blur-md lg:hidden">
           <nav className="flex flex-col items-start gap-4 text-start">
-            {c.nav.map((l) => (
+            {nav.map((l) => (
               <Link
                 key={l.label}
                 href={l.href}

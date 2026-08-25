@@ -288,9 +288,44 @@ export const customers = pgTable(
     lang: langEnum("lang").notNull().default("ar"),
     notes: text("notes"),
     blocked: boolean("blocked").notNull().default(false),
+
+    /**
+     * Brief §2.8 — captured at signup, for birthday reminders and offers.
+     * A `date` and not a timestamp: a birthday has no time and no timezone, and
+     * storing one as an instant is how a Riyadh birthday lands on the 4th in
+     * UTC and the reminder goes out a day early.
+     */
+    birthday: date("birthday"),
+
+    /**
+     * The account flag. Null means "we have an address for this person because
+     * they typed one at checkout"; set means "they proved they own it by
+     * reading a code we sent there", which is the only thing that lets them
+     * sign in. There is no separate accounts table — an account *is* a customer
+     * row with this stamped.
+     */
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+
     ...stamps,
   },
-  (t) => ({ phoneUnique: unique("customers_phone_unique").on(t.phone) }),
+  (t) => ({
+    phoneUnique: unique("customers_phone_unique").on(t.phone),
+    /**
+     * Unique, but only over *verified* emails — deliberately partial.
+     *
+     * Checkout upserts on phone and writes whatever email was typed
+     * (createBookings below), so the same address legitimately appears on two
+     * rows when someone books twice from two numbers. A blanket unique index
+     * would turn that into a constraint violation and fail the booking.
+     *
+     * Sign-in only ever resolves *verified* addresses, so uniqueness is only
+     * needed there. `lower()` because an address is not case sensitive and
+     * `Sara@` must not become a second account beside `sara@`.
+     */
+    accountEmailUnique: uniqueIndex("customers_account_email_unique")
+      .on(sql`lower(${t.email})`)
+      .where(sql`${t.emailVerifiedAt} is not null`),
+  }),
 );
 
 export const bookings = pgTable(
@@ -472,26 +507,35 @@ export const ticketCounters = pgTable(
 );
 
 /**
- * One-time codes for opening a booking's private details at /my-bookings.
+ * One-time codes, for two things that turn out to be the same thing.
  *
- * The booking reference alone is a weak credential — it travels in emails and
- * gets forwarded — so anything beyond the booking's own summary is gated behind
- * a code emailed to the address on file. Reference + inbox is two factors with
- * no account, which is the most that can be asked of a customer who never
- * signed up.
+ * Originally `booking_otps`: opening a booking's private details at
+ * /my-bookings, because the reference alone is a weak credential — it travels
+ * in emails and gets forwarded — so anything beyond the booking's own summary
+ * is gated behind a code emailed to the address on file.
+ *
+ * Signing in to an account (brief §2.8) needs the identical rules keyed to an
+ * email instead, so the key was widened to a free-text `subject` rather than
+ * copying security-critical code into a second table:
+ *
+ *   `booking:<uuid>`  — reference + inbox, for customers with no account
+ *   `email:<address>` — the whole of the account sign-in
  *
  * `code_hash`, never the code: this row is what guards customer data, so a
  * database leak must not hand over live codes. Attempts are counted so a code
  * can be burned after a few wrong guesses rather than brute-forced — six digits
  * is only a million, and an unthrottled verify would walk it.
+ *
+ * Widening the key cost the old `booking_id` foreign key and its cascade
+ * delete. Harmless: bookings are cancelled, never deleted, and a code is dead
+ * ten minutes after it is issued either way.
  */
-export const bookingOtps = pgTable(
-  "booking_otps",
+export const otps = pgTable(
+  "otps",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    bookingId: uuid("booking_id")
-      .notNull()
-      .references(() => bookings.id, { onDelete: "cascade" }),
+    /** `booking:<uuid>` or `email:<address>`. Built by lib/otp.ts, never by hand. */
+    subject: text("subject").notNull(),
     codeHash: text("code_hash").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     attempts: integer("attempts").notNull().default(0),
@@ -500,8 +544,8 @@ export const bookingOtps = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
-    // Every lookup is "the newest live code for this booking".
-    byBooking: index("booking_otps_booking_idx").on(t.bookingId, t.createdAt),
+    // Every lookup is "the newest live code for this subject".
+    bySubject: index("otps_subject_idx").on(t.subject, t.createdAt),
   }),
 );
 
@@ -639,6 +683,48 @@ export const giftCardTxns = pgTable("gift_card_txns", {
   actorId: uuid("actor_id").references(() => staff.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+/**
+ * The loyalty wallet (brief §2.8). A ledger, like gift_card_txns above — but
+ * deliberately *without* the running-balance column that table carries.
+ *
+ * The balance is a filtered SUM over these rows (lib/loyalty.ts), so it cannot
+ * drift out of step with its own history, and more importantly so that points
+ * come back on their own:
+ *
+ *   • a redemption row points at the booking it was spent on
+ *   • the balance query ignores rows whose booking is cancelled, a no-show, or
+ *     a hold that has sat unpaid past its window
+ *
+ * which means a cancellation, an abandoned checkout and a declined payment each
+ * return the points with no compensating write anywhere. Every earn row is tied
+ * to a booking too, so cancelling a paid booking revokes what it earned by the
+ * same rule. If a new case appears, widen the filter — do not add a refund path.
+ */
+export const loyaltyTxns = pgTable(
+  "loyalty_txns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    /**
+     * What this movement is attached to. Null only for movements that belong to
+     * no booking at all; every earn and every redemption has one, and the
+     * balance filter leans on it entirely.
+     */
+    bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "cascade" }),
+    /** Negative is a redemption. Whole points — there are no fractional points. */
+    deltaPoints: integer("delta_points").notNull(),
+    reason: text("reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // The only query is "this customer's ledger". The join to bookings drives
+    // through the bookings primary key, so booking_id needs no index of its own.
+    byCustomer: index("loyalty_txns_customer_idx").on(t.customerId, t.createdAt),
+  }),
+);
 
 export const promoCodes = pgTable(
   "promo_codes",

@@ -30,6 +30,25 @@ export const SETTING_DEFAULTS = {
   refill_discount_percent: 50,
   /** How many days before a refill window closes to nudge the customer. */
   refill_reminder_days: 3,
+  /**
+   * How many riyals earn one loyalty point (brief §2.8).
+   *
+   * A **divisor**, not a multiplier, and deliberately so. Points are whole
+   * numbers — an integer column, an integer balance, integers on screen — so
+   * the only way to earn less than a point per riyal with a multiplier is a
+   * fractional setting like 0.2, and a fractional setting is a float sitting in
+   * the middle of a money path waiting to be rounded the wrong way by someone
+   * who forgets. Dividing by an integer cannot produce one.
+   *
+   * What a point is *worth* is the reward ladder in lib/loyalty.ts, not a number
+   * here — a rung is a percentage off, so there is no single exchange rate.
+   *
+   * At 5, a 150 SAR visit earns 30 points and the first rung (100 points, 5%
+   * off) lands after roughly 500 SAR of custom — about 1.5% back. Raise this to
+   * be stingier, lower it to be generous; it is the one knob for the whole
+   * scheme and it needs no deploy.
+   */
+  loyalty_sar_per_point: 5,
   /** Seller identity on the invoice. A KSA tax invoice must carry both. */
   business_legal_name: "Red or Nude",
   /** 15 digits from ZATCA. Empty until registration lands; the line is hidden. */

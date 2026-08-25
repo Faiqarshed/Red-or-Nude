@@ -10,6 +10,7 @@
 
 import "server-only";
 import { sendMail } from "@/lib/email";
+import type { SendMailResult } from "@/lib/email/types";
 import { OTP_TTL_MS } from "@/lib/otp";
 
 const RED = "#b80007";
@@ -43,7 +44,7 @@ export async function sendOtpEmail(input: {
   toName?: string | null;
   code: string;
   lang: "ar" | "en";
-}) {
+}): Promise<SendMailResult> {
   const t = T[input.lang];
   const rtl = input.lang === "ar";
   const start = rtl ? "right" : "left";
@@ -83,7 +84,7 @@ export async function sendOtpEmail(input: {
 
   const text = [t.title, "", t.intro, "", input.code, "", t.minutes(minutes), t.ignore, "", t.footer].join("\n");
 
-  return sendMail({
+  const result = await sendMail({
     to: input.to,
     toName: input.toName,
     // The code is in the subject too: most clients preview it, so a customer can
@@ -94,4 +95,20 @@ export async function sendOtpEmail(input: {
     replyTo: process.env.MAIL_REPLY_TO?.trim() || null,
     tags: ["booking-otp"],
   });
+
+  // Development only (`next dev`; never true for `next start` or a deployed
+  // build). Without SMTP configured sendMail refuses, the caller returns 502,
+  // and the customer is stuck at a dialog they cannot pass — which makes the
+  // whole sign-in flow untestable on a fresh clone. Printing the code to the
+  // server console is the standard local escape hatch.
+  //
+  // Guarded on NODE_ENV *and* on mail having actually failed, so a configured
+  // dev box behaves exactly like production and no code is ever printed
+  // alongside a message that really went out.
+  if (!result.ok && process.env.NODE_ENV !== "production") {
+    console.warn(`[otp] DEV ONLY — code for ${input.to} is ${input.code}`);
+    return { ok: true, id: "dev-console" };
+  }
+
+  return result;
 }

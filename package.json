@@ -22,7 +22,8 @@
     "preview:giftcard": "tsx --conditions=react-server scripts/preview-giftcard.ts",
     "check:promo": "tsx --conditions=react-server scripts/check-promo.ts",
     "check:reviews": "tsx --conditions=react-server scripts/check-reviews.ts",
-    "check:station": "tsx --conditions=react-server scripts/check-station.ts"
+    "check:station": "tsx --conditions=react-server scripts/check-station.ts",
+    "check:loyalty": "tsx --conditions=react-server scripts/check-loyalty.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.8",

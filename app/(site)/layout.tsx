@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Almarai, Tajawal, Poppins } from "next/font/google";
 import "../globals.css";
 import { LanguageProvider } from "@/lib/i18n";
+import { AccountProvider } from "@/lib/account/context";
+import { currentCustomer } from "@/lib/account/guard";
 
 // Closest free fallbacks for the licensed Figma fonts:
 // Almarai ≈ DG Agnadeen (geometric display), Tajawal ≈ Lama Sans (body).
@@ -31,11 +33,15 @@ export const metadata: Metadata = {
   description: "Red Or Nude — beauty & booking",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  // Resolved once here so every SiteHeader on the site knows which button to
+  // render, without any page having to think about auth. See lib/account/context.
+  const customer = await currentCustomer();
+
   return (
     <html
       lang="ar"
@@ -43,7 +49,11 @@ export default function RootLayout({
       className={`${almarai.variable} ${tajawal.variable} ${poppins.variable}`}
     >
       <body className="font-ar bg-cream text-ink">
-        <LanguageProvider>{children}</LanguageProvider>
+        <LanguageProvider>
+          <AccountProvider signedIn={Boolean(customer)}>
+            {children}
+          </AccountProvider>
+        </LanguageProvider>
       </body>
     </html>
   );

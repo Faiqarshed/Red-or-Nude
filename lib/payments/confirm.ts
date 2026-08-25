@@ -20,6 +20,9 @@ import { utcToLocalDate } from "@/lib/availability";
 import { notify } from "@/lib/notify";
 import { sendBookingInvoice } from "@/lib/invoice/send";
 import { countPromoUse } from "@/lib/promo";
+import { awardPoints } from "@/lib/loyalty";
+import { pointsEarned } from "@/lib/rewards";
+import { getSettings } from "@/lib/settings";
 import { getDriver, type PaymentMethod } from "./index";
 
 export type ConfirmedTicket = {
@@ -164,6 +167,21 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     // Now, and not at hold time: an abandoned checkout must not spend a use of
     // a limited code. Once per bill — a group is one redemption, not two.
     if (anchor.promoCodeId) await countPromoUse(anchor.promoCodeId);
+
+    // Loyalty points for the bill just paid (brief §2.8). Also at confirmation
+    // and for the same reason — an abandoned checkout must not mint points.
+    //
+    // Note the asymmetry with *spending* points, which happens at hold time in
+    // lib/bookings.ts: earning is safe to defer because nothing depends on it
+    // yet, whereas a deferred debit could be claimed twice from two tabs.
+    //
+    // Earned against the bill total, so a group earns once. The row is tied to
+    // the anchor booking, which means cancelling it later revokes these points
+    // by the same balance filter that returns spent ones.
+    if (anchor.customerId) {
+      const { loyalty_sar_per_point: sarPerPoint } = await getSettings(["loyalty_sar_per_point"]);
+      await awardPoints(anchor.customerId, anchor.id, pointsEarned(billTotal, sarPerPoint));
+    }
 
     await sendConfirmations(members, tickets, labelOf);
     await sendBookingInvoice(members.map((m) => m.id));

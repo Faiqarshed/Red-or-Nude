@@ -15,7 +15,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings, customers } from "@/lib/db/schema";
-import { issueOtp, maskEmail } from "@/lib/otp";
+import { bookingSubject, issueOtp, maskEmail } from "@/lib/otp";
 import { sendOtpEmail } from "@/lib/otp-email";
 
 export const dynamic = "force-dynamic";
@@ -87,7 +87,7 @@ export async function POST(request: Request) {
   if (BOOKING_LAST.size > 5_000) BOOKING_LAST.clear();
   BOOKING_LAST.set(row.id, Date.now());
 
-  const otp = await issueOtp(row.id);
+  const otp = await issueOtp(bookingSubject(row.id));
   const mail = await sendOtpEmail({
     to: email,
     toName: customer.name,
