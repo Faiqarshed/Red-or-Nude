@@ -245,6 +245,7 @@ const ar = {
     statuses: {
       pending: "بانتظار الدفع",
       confirmed: "مؤكد",
+      checked_in: "تم تسجيل الوصول",
       in_progress: "جارٍ التنفيذ",
       completed: "منتهٍ",
       cancelled: "ملغي",
@@ -605,6 +606,7 @@ const en: Content = {
     statuses: {
       pending: "Awaiting payment",
       confirmed: "Confirmed",
+      checked_in: "Checked in",
       in_progress: "In progress",
       completed: "Completed",
       cancelled: "Cancelled",

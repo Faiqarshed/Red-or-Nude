@@ -13,6 +13,7 @@
 
 import "server-only";
 import { siteOrigin } from "@/lib/site";
+import { esc } from "@/lib/email/html";
 
 const RED = "#b80007";
 const INK = "#1a1a1a";
@@ -52,15 +53,6 @@ const T = {
     footer: "This is an automated message — please don't reply.",
   },
 } satisfies Record<Lang, Record<string, unknown>>;
-
-/** Customer data lands inside an HTML document — never interpolate it raw. */
-function esc(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 export type RenderedEmail = { subject: string; html: string; text: string };
 

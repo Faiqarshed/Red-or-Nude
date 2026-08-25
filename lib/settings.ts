@@ -15,6 +15,15 @@ export const SETTING_DEFAULTS = {
   cancel_cutoff_hours: 3,
   /** How long a paid booking waits to be checked in before its chair is released. */
   no_show_grace_min: 20,
+  /**
+   * How many minutes before her slot a customer may be checked in.
+   *
+   * Zero means not before it at all. Checking someone in early does more than
+   * skew a number: pickTechnician() counts a checked-in booking as busy, so an
+   * early arrival takes her technician off the floor until she is actually
+   * served, while customers who *are* due are told nobody is free.
+   */
+  checkin_early_min: 0,
   /** Discount for booking two guests together, off the combined bill. */
   group_discount_percent: 10,
   /** A refill costs the service price minus this much. */

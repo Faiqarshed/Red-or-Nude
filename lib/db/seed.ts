@@ -114,12 +114,12 @@ async function main() {
       .values({
         name: "Owner",
         email: ownerEmail,
-        role: "owner",
+        role: "ceo",
         passwordHash: await hash(ownerPassword, 10),
       })
       .onConflictDoUpdate({
         target: s.staff.email,
-        set: { passwordHash: await hash(ownerPassword, 10), role: "owner", active: true },
+        set: { passwordHash: await hash(ownerPassword, 10), role: "ceo", active: true },
       });
   } else {
     console.log(

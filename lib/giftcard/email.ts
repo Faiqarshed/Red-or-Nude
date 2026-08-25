@@ -14,6 +14,7 @@
 // images. See the header of lib/invoice/template.ts for why.
 
 import "server-only";
+import { esc } from "@/lib/email/html";
 import { sendMail } from "@/lib/email";
 import { siteOrigin } from "@/lib/site";
 
@@ -72,14 +73,6 @@ const T = {
     footer: "This is an automated message — please don't reply.",
   },
 } satisfies Record<Lang, Record<string, unknown>>;
-
-function esc(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 /** Exported so scripts/preview-giftcard.ts can render it without sending. */
 export function renderGiftCardEmail(input: GiftCardEmailInput, forBuyer = false) {

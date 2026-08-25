@@ -20,6 +20,7 @@ import {
   Sparkles,
   Star,
   Ticket,
+  Timer,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -46,6 +47,7 @@ const ICONS: Record<string, LucideIcon> = {
   ScrollText,
   Star,
   Ticket,
+  Timer,
 };
 
 export default function Sidebar({
@@ -79,7 +81,7 @@ export default function Sidebar({
       <nav className="flex-1 overflow-y-auto px-2 py-3">
         {NAV.map((group) => {
           // Hide a whole group when the role can't reach any item in it.
-          const visible = group.items.filter((item) => can(role, item.cap));
+          const visible = group.items.filter((item) => !item.cap || can(role, item.cap));
           if (visible.length === 0) return null;
 
           return (

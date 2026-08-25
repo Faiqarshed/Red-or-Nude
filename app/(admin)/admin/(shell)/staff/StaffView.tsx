@@ -27,8 +27,8 @@ type StaffRow = {
 const RANK: Record<StaffRole, number> = {
   technician: 1,
   receptionist: 2,
-  manager: 3,
-  owner: 4,
+  admin: 3,
+  ceo: 4,
 };
 
 export default function StaffView({
@@ -52,8 +52,8 @@ export default function StaffView({
   const messageFor = (code: string) =>
     code === "cannot-escalate"
       ? t.staff.cannotEscalate
-      : code === "last-owner"
-        ? t.staff.lastOwner
+      : code === "last-ceo"
+        ? t.staff.lastCeo
         : code === "email-taken"
           ? t.staff.emailTaken
           : code === "password-required"
@@ -119,7 +119,7 @@ export default function StaffView({
                     </span>
                   </button>
 
-                  <Badge tone={s.role === "owner" ? "danger" : "neutral"}>
+                  <Badge tone={s.role === "ceo" ? "danger" : "neutral"}>
                     {ROLE_LABELS[s.role][lang]}
                   </Badge>
 
@@ -228,7 +228,7 @@ function StaffDrawer({
   if (!open) return null;
 
   // Only roles at or below your own — mirrors the server-side escalation guard.
-  const assignable = (["owner", "manager", "receptionist", "technician"] as StaffRole[]).filter(
+  const assignable = (["ceo", "admin", "receptionist", "technician"] as StaffRole[]).filter(
     (r) => RANK[r] <= RANK[currentRole],
   );
 
