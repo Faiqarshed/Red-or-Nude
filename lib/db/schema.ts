@@ -42,8 +42,8 @@ const stamps = {
 // ---------------------------------------------------------------- enums -----
 
 export const staffRole = pgEnum("staff_role", [
-  "owner",
-  "manager",
+  "ceo",
+  "admin",
   "receptionist",
   "technician",
 ]);
@@ -51,6 +51,10 @@ export const staffRole = pgEnum("staff_role", [
 export const bookingStatus = pgEnum("booking_status", [
   "pending",
   "confirmed",
+  // The customer is here and the receptionist has handed them to a technician,
+  // who has not started yet. The gap between this and `in_progress` is the
+  // salon's waiting time (brief §3.2).
+  "checked_in",
   "in_progress",
   "completed",
   "cancelled",
@@ -312,6 +316,21 @@ export const bookings = pgTable(
 
     status: bookingStatus("status").notNull().default("pending"),
     source: bookingSource("source").notNull().default("web"),
+
+    /**
+     * The three moments the salon floor is measured by (brief §3.2).
+     *
+     * Stored as their own columns rather than read off `updated_at`, which moves
+     * on every edit and would quietly corrupt a commission figure months later.
+     *
+     * `finished_at` is the technician saying they are done, which is *not* the
+     * same as the ticket being closed — the receptionist does that, and the
+     * status only reaches `completed` then. Keeping them apart means a slow
+     * front desk never lands on the technician's number.
+     */
+    checkedInAt: timestamp("checked_in_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
 
     // Airline-style queue number ("K45") the salon calls out. Distinct from
     // `code`: that one is a permanent unique reference, this one restarts every
@@ -634,6 +653,15 @@ export const promoCodes = pgTable(
     maxUses: integer("max_uses"),
     uses: integer("uses").notNull().default(0),
     active: boolean("active").notNull().default(true),
+    /**
+     * Set on the per-staff monthly codes of brief §3.3 — one code per employee,
+     * ~90%, one use, renewed each month. Null on the ordinary occasion codes.
+     *
+     * A column rather than a table: a staff code *is* a promo code, with every
+     * rule the engine already enforces (percent, max_uses, date window). The
+     * only fact it adds is whose it is.
+     */
+    staffId: uuid("staff_id").references(() => staff.id, { onDelete: "cascade" }),
     ...stamps,
   },
   (t) => ({ codeUnique: unique("promo_codes_code_unique").on(t.code) }),

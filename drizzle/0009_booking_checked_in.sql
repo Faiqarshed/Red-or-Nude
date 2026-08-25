@@ -1,0 +1,1 @@
+ALTER TYPE "public"."booking_status" ADD VALUE 'checked_in' BEFORE 'in_progress';
