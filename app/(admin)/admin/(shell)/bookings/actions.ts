@@ -9,12 +9,14 @@ import { requireCan } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
 import { createBooking, rescheduleBooking as moveBooking } from "@/lib/bookings";
 import { inviteReview } from "@/lib/reviews/invite";
+import { notifyTechnician, pickTechnician } from "@/lib/assign";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
 const STATUSES = [
   "pending",
   "confirmed",
+  "checked_in",
   "in_progress",
   "completed",
   "cancelled",
@@ -37,12 +39,30 @@ export async function setBookingStatus(
   const [before] = await db.select().from(bookings).where(eq(bookings.id, id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
 
+  // Entering a status stamps its moment (brief §3.2). Guarded on the transition
+  // so re-saving the same status doesn't reset a clock the commission figures
+  // are read from, and written here rather than derived from `updated_at`, which
+  // moves on every unrelated edit.
+  const entering = (to: (typeof STATUSES)[number]) => status === to && before.status !== to;
+  const now = new Date();
+
+  // Someone has to take her. Only picked when the booking doesn't already name a
+  // technician, so a receptionist's override — or an assignment made in advance
+  // — is never quietly overwritten.
+  const technicianId =
+    entering("checked_in") && !before.technicianId
+      ? await pickTechnician(before.branchId)
+      : before.technicianId;
+
   await db
     .update(bookings)
     .set({
       status,
+      technicianId,
+      checkedInAt: entering("checked_in") ? now : before.checkedInAt,
+      startedAt: entering("in_progress") ? now : before.startedAt,
       cancelReason: status === "cancelled" ? (reason ?? null) : before.cancelReason,
-      updatedAt: new Date(),
+      updatedAt: now,
     })
     .where(eq(bookings.id, id));
 
@@ -52,6 +72,13 @@ export async function setBookingStatus(
     entityId: id,
     diff: { status: { from: before.status, to: status } },
   });
+
+  // Same bargain as inviteReview below: awaited, and never allowed to throw. The
+  // customer is checked in and the work is already on the technician's screen —
+  // this mail is the nudge, not the mechanism.
+  if (entering("checked_in")) {
+    await notifyTechnician(id);
+  }
 
   // "End" is this, and nothing else (brief §2.9). Guarded on the *transition*
   // rather than the destination so re-saving a completed booking asks nobody
@@ -81,12 +108,16 @@ const rescheduleSchema = z.object({
  *
  * Note there is no 3-hour window here. That limit is the customer's
  * (lib/cancellation.ts); the salon can move an appointment whenever it needs to.
+ *
+ * Gated on its own capability rather than bookings.manage, because brief §3.3
+ * says an admin cannot change a booking's timing while still needing everything
+ * else bookings.manage carries. See lib/auth/rbac.ts.
  */
 export async function rescheduleBooking(input: {
   id: string;
   startsAt: string;
 }): Promise<Result> {
-  const actor = await requireCan("bookings.manage");
+  const actor = await requireCan("bookings.reschedule");
   const parsed = rescheduleSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "invalid" };
 

@@ -16,6 +16,7 @@ import WalkInDrawer from "./WalkInDrawer";
 export type BookingStatus =
   | "pending"
   | "confirmed"
+  | "checked_in"
   | "in_progress"
   | "completed"
   | "cancelled"
@@ -79,6 +80,7 @@ export type CatalogOption = {
 export const STATUS_TONE: Record<BookingStatus, "neutral" | "info" | "success" | "warning" | "danger"> = {
   pending: "warning",
   confirmed: "info",
+  checked_in: "warning",
   in_progress: "info",
   completed: "success",
   cancelled: "danger",

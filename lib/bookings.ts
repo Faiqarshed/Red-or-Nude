@@ -358,7 +358,7 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
  * and `reserveStations` already exclude it, as does the availability engine's
  * conflict scan. Releasing a chair *is* setting the status.
  *
- * **`in_progress` is the check-in.** A booking still `confirmed` past its grace
+ * **`checked_in` is the check-in.** A booking still `confirmed` past its grace
  * is one nobody marked as arrived. That is a weaker signal than it sounds —
  * today staff rarely press anything — which is why:
  *

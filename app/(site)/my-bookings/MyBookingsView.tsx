@@ -50,6 +50,7 @@ type RefillDetails = {
 const STATUS_TONE: Record<string, string> = {
   pending: "bg-black/[0.06] text-ink/60",
   confirmed: "bg-[#e8f3ec] text-[#2f7a4d]",
+  checked_in: "bg-[#fdf0dc] text-[#9a6b12]",
   in_progress: "bg-[#fdf0dc] text-[#9a6b12]",
   completed: "bg-[#eef1f6] text-[#4a5a72]",
   cancelled: "bg-red/[0.08] text-red",

@@ -1,22 +1,63 @@
+// The one screen everybody lands on, showing each role its own job (brief §3).
+//
+// It requires no capability beyond being signed in, and that is deliberate.
+// Every other page redirects here when a role can't reach it — so if this page
+// could turn someone away, the denial would bounce them straight back to a page
+// that denies them again. A technician signing in used to hit exactly that loop.
+//
+// Each role's data loading lives in its own module. Three query blocks inline
+// would make this the file nobody wants to touch.
+
 import { and, count, eq, gte, lt, sum } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, customers, services } from "@/lib/db/schema";
-import { requirePage } from "@/lib/auth/guard";
+import { bookings, customers, services, branches } from "@/lib/db/schema";
+import { requireStaff } from "@/lib/auth/guard";
 import { can, scopedBranchId } from "@/lib/auth/rbac";
 import { riyadhDayRange } from "@/lib/time";
 import { formatSAR } from "@/lib/money";
+import { asc } from "drizzle-orm";
 import DashboardView from "./DashboardView";
+import MyDayView from "./my-day/MyDayView";
+import { loadMyDay } from "./my-day/data";
+import { isPeriodKey, loadTechnicianStats } from "@/lib/performance";
+import FrontDeskView from "./front-desk/FrontDeskView";
+import { loadFrontDesk } from "./front-desk/data";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage({
+export default async function AdminHomePage({
   searchParams,
 }: {
-  searchParams: { denied?: string };
+  searchParams: { denied?: string; period?: string };
 }) {
-  const user = await requirePage("dashboard.view");
+  const user = await requireStaff();
 
-  // Owners see every branch; everyone else is filtered to their own. The scope
+  if (user.role === "technician") {
+    // Her own numbers, over the period she picked — the same function the CEO's
+    // performance screen calls, narrowed to one person. She sees nobody else's.
+    const period = isPeriodKey(searchParams.period) ? searchParams.period : "today";
+    const [bookings, stats] = await Promise.all([
+      loadMyDay(user.id),
+      loadTechnicianStats({ period, technicianId: user.id }),
+    ]);
+
+    return <MyDayView bookings={bookings} stats={stats[0] ?? null} period={period} />;
+  }
+
+  if (user.role === "receptionist") {
+    // A receptionist belongs to one branch. Falling back to the first branch
+    // keeps a half-configured account usable rather than showing them nothing.
+    const branchId =
+      user.branchId ??
+      (await db.select({ id: branches.id }).from(branches).orderBy(asc(branches.sort)).limit(1))[0]
+        ?.id;
+
+    if (!branchId) return <FrontDeskView branchId="" data={{ rows: [], technicians: [], stats: { finished: 0, inService: 0, waiting: 0, upcoming: 0 } }} />;
+
+    return <FrontDeskView branchId={branchId} data={await loadFrontDesk(branchId)} />;
+  }
+
+  // The CEO sees every branch; everyone else is filtered to their own. The scope
   // is applied in the query, not by hiding numbers in the UI.
   const branchId = scopedBranchId(user.role, user.branchId);
   const branchFilter = branchId ? eq(bookings.branchId, branchId) : undefined;

@@ -15,7 +15,10 @@ import { STATUS_TONE, type BookingReview, type BookingRow, type BookingStatus } 
 // reopening one would silently re-reserve a chair someone else may now hold.
 const NEXT: Record<BookingStatus, BookingStatus[]> = {
   pending: ["confirmed", "cancelled"],
-  confirmed: ["in_progress", "completed", "no_show", "cancelled"],
+  confirmed: ["checked_in", "completed", "no_show", "cancelled"],
+  // The technician moves this one from their own screen. It stays here so an
+  // admin can unstick a booking whose technician never pressed Start.
+  checked_in: ["in_progress", "completed", "cancelled"],
   in_progress: ["completed", "cancelled"],
   completed: [],
   cancelled: [],
@@ -274,10 +277,11 @@ export default function BookingDrawer({
                   )}
                 >
                   {/* The one button whose label is not just its status name.
-                      Pressing it is the arrival record the 20-minute no-show
-                      rule measures, so it says so; the badge above still reads
-                      "In progress". */}
-                  {status === "in_progress" ? t.bookings.checkIn : t.bookings.statuses[status]}
+                      Pressing it is the arrival record the no-show rule
+                      measures, so it says so; the badge above reads "Waiting
+                      for technician". The front desk has its own screen for
+                      this — /admin — and this is the fallback. */}
+                  {status === "checked_in" ? t.bookings.checkIn : t.bookings.statuses[status]}
                 </button>
               ))}
             </div>

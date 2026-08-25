@@ -9,7 +9,8 @@ export type NavItem = {
   key: keyof AdminStrings["nav"];
   href: string;
   icon: string; // lucide icon name, resolved in Sidebar
-  cap: Capability;
+  /** Omitted where every signed-in role may reach the page — see /admin. */
+  cap?: Capability;
   soon?: boolean;
 };
 
@@ -22,7 +23,10 @@ export const NAV: NavGroup[] = [
   {
     key: "operations",
     items: [
-      { key: "dashboard", href: "/admin", icon: "LayoutDashboard", cap: "dashboard.view" },
+      // No capability: /admin is where every role lands, and it renders each of
+      // them a different screen. Gating the link would leave a technician with
+      // an empty sidebar pointing at nothing.
+      { key: "dashboard", href: "/admin", icon: "LayoutDashboard" },
       { key: "bookings", href: "/admin/bookings", icon: "CalendarDays", cap: "bookings.view" },
       { key: "availability", href: "/admin/availability", icon: "Clock", cap: "availability.manage" },
     ],
@@ -41,6 +45,7 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "customers", href: "/admin/customers", icon: "Users", cap: "customers.manage" },
       { key: "staff", href: "/admin/staff", icon: "IdCard", cap: "staff.manage" },
+      { key: "performance", href: "/admin/performance", icon: "Timer", cap: "staff.performance" },
       // Ratings are read by whoever reads bookings — front desk included, and
       // technicians deliberately not.
       { key: "reviews", href: "/admin/reviews", icon: "Star", cap: "bookings.view" },
