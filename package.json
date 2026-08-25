@@ -15,6 +15,7 @@
     "check": "tsx --conditions=react-server scripts/check-booking.ts",
     "preview:invoice": "tsx --conditions=react-server scripts/preview-invoice.ts",
     "check:invoice": "tsx --conditions=react-server scripts/check-invoice-email.ts",
+    "check:roles": "tsx --conditions=react-server scripts/check-roles.ts",
     "check:fields": "tsx scripts/check-fields.ts",
     "check:cancel": "tsx scripts/check-cancel.ts",
     "check:mail": "tsx --conditions=react-server scripts/check-mail.ts",
