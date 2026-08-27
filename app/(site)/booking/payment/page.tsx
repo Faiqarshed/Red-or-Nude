@@ -727,9 +727,6 @@ function SuccessModal({
                   <span className="font-semibold text-ink">{t.serviceName[lang]}</span>
                 )}
               </div>
-              <p className="mt-2 text-[11px] text-ink/40" dir="ltr">
-                {p.reference}: {t.code}
-              </p>
             </div>
           ))}
         </div>
@@ -775,12 +772,10 @@ function SuccessModal({
           </button>
         </div>
 
-        {/* The reference above is the customer's only way back in, so say so
-            here rather than relying on the email having arrived yet. */}
-        <p className="mt-4 text-[11px] text-ink/45">{p.keepReference}</p>
+        {/* The reference goes out by email only — nothing here to memorise. */}
         <Link
           href="/my-bookings"
-          className="mt-1 inline-block text-[12px] font-semibold text-red underline underline-offset-4"
+          className="mt-4 inline-block text-[12px] font-semibold text-red underline underline-offset-4"
         >
           {p.myBookings}
         </Link>

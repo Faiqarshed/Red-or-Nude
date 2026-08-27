@@ -150,7 +150,6 @@ const ar = {
     noSelection: "لم يتم اختيار أي خدمة بعد",
     ticketLabel: "رقم التذكرة",
     stationLabel: "رقم الكرسي",
-    reference: "الرقم المرجعي",
     declined: "لم تتم عملية الدفع. تأكدي من بيانات البطاقة وحاولي مرة أخرى — موعدك محجوز لك مؤقتاً.",
     expired: "انتهت مهلة الحجز المؤقت. اختاري الموعد مرة أخرى من صفحة الحجز.",
     payFirstNote: "لا يتم تأكيد الحجز إلا بعد إتمام الدفع.",
@@ -172,7 +171,6 @@ const ar = {
       minTotal: "هذا الكود يبدأ من {n} ر.س",
       tooMany: "محاولات كثيرة. انتظري دقيقة ثم حاولي مرة أخرى.",
     },
-    keepReference: "احتفظي بالرقم المرجعي — به تفتحين صفحة الحجوزات.",
     myBookings: "الحجوزات",
   },
 
@@ -584,7 +582,6 @@ const en: Content = {
     noSelection: "No service selected yet",
     ticketLabel: "Ticket",
     stationLabel: "Station",
-    reference: "Reference",
     declined: "Payment didn't go through. Check your card details and try again — your slot is still held.",
     expired: "Your held slot has expired. Please pick a time again from the booking page.",
     payFirstNote: "Your booking is confirmed only once payment completes.",
@@ -606,7 +603,6 @@ const en: Content = {
       minTotal: "That code applies from {n} SAR",
       tooMany: "Too many tries. Wait a minute and try again.",
     },
-    keepReference: "Keep your reference — it's how you open Bookings.",
     myBookings: "Bookings",
   },
 
