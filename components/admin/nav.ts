@@ -28,6 +28,12 @@ export const NAV: NavGroup[] = [
       // an empty sidebar pointing at nothing.
       { key: "dashboard", href: "/admin", icon: "LayoutDashboard" },
       { key: "bookings", href: "/admin/bookings", icon: "CalendarDays", cap: "bookings.view" },
+      // The desk, and the floor behind it. Both on bookings.checkin rather than
+      // a receptionist-only gate: an admin covering a lunch break or the CEO
+      // chasing a stuck ticket has the capability and needs somewhere to use it.
+      // The receptionist still lands on the desk at /admin regardless.
+      { key: "frontDesk", href: "/admin/front-desk", icon: "Ticket", cap: "bookings.checkin" },
+      { key: "floor", href: "/admin/floor", icon: "UserCog", cap: "bookings.checkin" },
       { key: "availability", href: "/admin/availability", icon: "Clock", cap: "availability.manage" },
     ],
   },

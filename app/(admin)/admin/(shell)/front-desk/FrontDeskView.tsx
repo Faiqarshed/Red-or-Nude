@@ -12,16 +12,17 @@ import { Card, EmptyState, PageHeader, StatCard, Badge, Button } from "@/compone
 import { STATUS_TONE, type BookingStatus } from "../bookings/BookingsView";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
-import { UTC_OFFSET_HOURS } from "@/lib/time";
+import { localTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
+import { busyDuring } from "@/lib/slots";
 import type { FrontDeskData, FrontDeskRow, TechnicianOption } from "./data";
-import { assignTechnician, checkInTicket, closeTicket, findTicket, type TicketMatch } from "./actions";
-
-function localTime(iso: string): string {
-  return new Date(new Date(iso).getTime() + UTC_OFFSET_HOURS * 3600_000)
-    .toISOString()
-    .slice(11, 16);
-}
+import {
+  assignTechnician,
+  checkInTicket,
+  closeTicket,
+  findTicket,
+  type TicketMatch,
+} from "./actions";
 
 /** The technician has pressed Done and the ticket is still open. */
 function readyToClose(r: FrontDeskRow): boolean {
@@ -133,6 +134,10 @@ export default function FrontDeskView({
     router.refresh();
   }
 
+  // Only ever *to* somebody. Clearing a technician is not on offer here: an
+  // empty technician is how the screen says "this booking arrived after the
+  // morning run", and a receptionist emptying one by hand would forge that
+  // signal.
   async function doReassign(id: string, technicianId: string) {
     if (!technicianId) return;
     setBusy(true);
@@ -141,6 +146,10 @@ export default function FrontDeskView({
     if (!res.ok) setError(f.failed);
     router.refresh();
   }
+
+  // The found ticket is one of today's rows, which is where its hours live —
+  // TicketMatch carries the start but not the end.
+  const matchRow = match ? (data.rows.find((r) => r.id === match.id) ?? null) : null;
 
   // Ready-to-close first: it is the only row that needs a decision from her.
   const rows = [...data.rows].sort((a, b) => {
@@ -211,7 +220,11 @@ export default function FrontDeskView({
                   value={chosenTech}
                   onChange={setChosenTech}
                   options={data.technicians}
-                  autoLabel={f.autoAssigned}
+                  busyIds={matchRow ? busyDuring(data.rows, matchRow) : new Set()}
+                  // Here the empty option is a real choice: it means "let
+                  // check-in pick", which is what happens for a walk-in.
+                  emptyLabel={f.autoAssigned}
+                  allowEmpty
                 />
               </div>
               <Button
@@ -227,8 +240,12 @@ export default function FrontDeskView({
       </Card>
 
       <Card>
+        <div className="border-b border-black/[0.06] px-4 py-3">
+          <p className="text-sm font-semibold text-ink">{f.today}</p>
+        </div>
+
         {rows.length === 0 ? (
-          <EmptyState title={f.today} />
+          <EmptyState title={t.common.none} />
         ) : (
           <ul className="divide-y divide-black/[0.06]">
             {rows.map((r) => {
@@ -258,18 +275,26 @@ export default function FrontDeskView({
                     </span>
                   </span>
 
-                  {r.status === "checked_in" || r.status === "in_progress" ? (
+                  {/* On every row of the day, not only the ones already checked
+                      in: the morning run assigns before anyone arrives, so the
+                      desk has to be able to move a technician beforehand too.
+                      A closed ticket is history and stays read-only. */}
+                  {r.status === "completed" || r.status === "cancelled" ? (
+                    <span className="w-36 shrink-0 truncate text-xs text-ink/50">
+                      {r.technicianName ?? ""}
+                    </span>
+                  ) : (
                     <TechSelect
                       value={r.technicianId ?? ""}
                       onChange={(v) => doReassign(r.id, v)}
                       options={data.technicians}
-                      autoLabel={f.noneFree}
+                      // Against *this* booking's hours, not the wall clock.
+                      busyIds={busyDuring(data.rows, r)}
+                      emptyLabel={f.unassigned}
+                      // Nobody can be un-assigned by hand — see doReassign.
+                      allowEmpty={false}
                       className="w-36"
                     />
-                  ) : (
-                    <span className="w-36 shrink-0 truncate text-xs text-ink/50">
-                      {r.technicianName ?? ""}
-                    </span>
                   )}
 
                   {ready ? (
@@ -291,21 +316,44 @@ export default function FrontDeskView({
   );
 }
 
-function TechSelect({
+/**
+ * Pick a technician for one booking.
+ *
+ * Whoever cannot take *this* slot is greyed out rather than merely labelled:
+ * a list where every name is selectable and half of them are annotated leaves
+ * the receptionist doing the collision check in her head, at the desk, with a
+ * customer in front of her.
+ *
+ * The one who currently holds the booking is never disabled — a row must be
+ * able to render its own value.
+ */
+export function TechSelect({
   id,
   value,
   onChange,
   options,
-  autoLabel,
+  busyIds,
+  omitId,
+  emptyLabel,
+  allowEmpty,
   className,
 }: {
   id?: string;
   value: string;
   onChange: (value: string) => void;
   options: TechnicianOption[];
-  autoLabel: string;
+  /** Technicians already working across this booking's hours. */
+  busyIds: Set<string>;
+  /** Dropped from the list entirely — the technician this booking is leaving. */
+  omitId?: string | null;
+  emptyLabel: string;
+  /** False on a booking row, where clearing a technician is not a human choice. */
+  allowEmpty?: boolean;
   className?: string;
 }) {
+  const { t } = useAdminI18n();
+  const { busySuffix: busyLabel, offSuffix: offLabel } = t.frontDesk;
+
   return (
     <select
       id={id}
@@ -316,12 +364,22 @@ function TechSelect({
         className,
       )}
     >
-      <option value="">{autoLabel}</option>
-      {options.map((o) => (
-        <option key={o.id} value={o.id}>
-          {o.name}
-        </option>
-      ))}
+      {/* Rendered even when it cannot be chosen: an unassigned row has to have
+          something to show, and this is the label that says why. */}
+      <option value="" disabled={!allowEmpty}>
+        {emptyLabel}
+      </option>
+      {options
+        .filter((o) => o.id !== omitId)
+        .map((o) => {
+          // Reasons in order of how much they matter: not in at all beats busy.
+          const reason = o.off ? offLabel : busyIds.has(o.id) ? busyLabel : null;
+          return (
+            <option key={o.id} value={o.id} disabled={!!reason && o.id !== value}>
+              {reason ? `${o.name} · ${reason}` : o.name}
+            </option>
+          );
+        })}
     </select>
   );
 }
