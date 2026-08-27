@@ -7,6 +7,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { staff, staffTimeOff } from "@/lib/db/schema";
 import { requireCan, type SessionStaff } from "@/lib/auth/guard";
+import { mustHaveBranch } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
 import type { StaffRole } from "@/lib/db/schema";
 import { issueMonthlyCode } from "@/lib/staff-codes";
@@ -32,13 +33,9 @@ const saveSchema = z.object({
   password: z.string().min(8).max(200).optional().or(z.literal("")),
   active: z.boolean(),
 })
-  // A receptionist works one front desk and a technician stands at one chair.
-  // Not cosmetic: scopedBranchId() reads a null branch as "no filter", so an
-  // unpinned receptionist would silently see every branch's customers and
-  // bookings. The drawer greys the option out; this is what enforces it.
-  .refine((d) => !["receptionist", "technician"].includes(d.role) || !!d.branchId, {
-    message: "branch-required",
-  });
+  // The drawer greys the option out; this is what enforces it. See
+  // mustHaveBranch for why an unpinned receptionist is a data leak.
+  .refine((d) => !mustHaveBranch(d.role) || !!d.branchId, { message: "branch-required" });
 
 export type StaffInput = z.input<typeof saveSchema>;
 

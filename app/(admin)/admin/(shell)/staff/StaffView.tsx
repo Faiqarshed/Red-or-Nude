@@ -6,11 +6,13 @@ import { IdCard, Plus, Trash2 } from "lucide-react";
 import { Badge, Button, Card, EmptyState, Field, Input, PageHeader } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
-import { ROLE_LABELS } from "@/lib/auth/rbac";
+import { mustHaveBranch, ROLE_LABELS } from "@/lib/auth/rbac";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
 import type { Localized, StaffRole } from "@/lib/db/schema";
-import { deleteStaff, saveStaff, setStaffActive } from "./actions";
+import { addTimeOff, deleteStaff, removeTimeOff, saveStaff, setStaffActive } from "./actions";
+
+type TimeOffRow = { id: string; startsOn: string; endsOn: string };
 
 type StaffRow = {
   id: string;
@@ -22,6 +24,7 @@ type StaffRow = {
   active: boolean;
   lastLoginAt: string | null;
   hasPassword: boolean;
+  timeOff: TimeOffRow[];
 };
 
 const RANK: Record<StaffRole, number> = {
@@ -58,7 +61,11 @@ export default function StaffView({
           ? t.staff.emailTaken
           : code === "password-required"
             ? t.staff.passwordRequired
-            : t.common.error;
+            : code === "bad-range"
+              ? t.staff.badRange
+              : code === "branch-required"
+                ? t.staff.branchRequired
+                : t.common.error;
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) =>
     startTransition(async () => {
@@ -232,6 +239,9 @@ function StaffDrawer({
     (r) => RANK[r] <= RANK[currentRole],
   );
 
+  // Same rule the server refuses on — see mustHaveBranch.
+  const needsBranch = mustHaveBranch(role);
+
   return (
     <Drawer
       open
@@ -244,7 +254,7 @@ function StaffDrawer({
           </Button>
           <Button
             size="sm"
-            disabled={pending || !name.trim() || !email.trim()}
+            disabled={pending || !name.trim() || !email.trim() || (needsBranch && !branchId)}
             onClick={() =>
               startTransition(async () => {
                 const res = await saveStaff({
@@ -307,7 +317,9 @@ function StaffDrawer({
               onChange={(e) => setBranchId(e.target.value)}
               className="h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink outline-none focus:border-sky"
             >
-              <option value="">{t.staff.allBranches}</option>
+              <option value="" disabled={needsBranch}>
+                {needsBranch ? t.staff.pickBranch : t.staff.allBranches}
+              </option>
               {branches.map((b) => (
                 <option key={b.id} value={b.id}>
                   {pick(b.name, lang)}
@@ -340,7 +352,99 @@ function StaffDrawer({
           />
           {t.staff.active}
         </label>
+
+        {/* Only for the people the assignment run actually deals work to.
+            A receptionist's day off changes nothing any code reads. */}
+        {member && role === "technician" && <DaysOff member={member} onError={onError} />}
       </div>
     </Drawer>
+  );
+}
+
+/**
+ * When a technician is not in.
+ *
+ * Native date inputs rather than a picker component: the browser already knows
+ * how to render a calendar, in the user's own locale, and it hands back exactly
+ * the `YYYY-MM-DD` the column stores.
+ *
+ * Saves immediately rather than waiting for the drawer's Save button — the ranges
+ * are their own rows, and half-applying them alongside a cancelled name change
+ * would be the confusing behaviour.
+ */
+function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string) => void }) {
+  const { t } = useAdminI18n();
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+
+  const add = () =>
+    startTransition(async () => {
+      // An empty end means a single day, which is the common case — typing the
+      // same date twice to book one day off is a small daily annoyance.
+      const res = await addTimeOff({ staffId: member.id, startsOn: from, endsOn: to || from });
+      if (!res.ok) return onError(res.error);
+      setFrom("");
+      setTo("");
+      router.refresh();
+    });
+
+  const drop = (id: string) =>
+    startTransition(async () => {
+      const res = await removeTimeOff(id);
+      if (!res.ok) return onError(res.error);
+      router.refresh();
+    });
+
+  return (
+    <div className="border-t border-black/[0.06] pt-5">
+      <p className="text-sm font-semibold text-ink">{t.staff.daysOff}</p>
+      <p className="mt-1 text-xs text-ink/50">{t.staff.daysOffHint}</p>
+
+      {member.timeOff.length === 0 ? (
+        <p className="mt-3 text-xs text-ink/40">{t.staff.noDaysOff}</p>
+      ) : (
+        <ul className="mt-3 space-y-1.5">
+          {member.timeOff.map((r) => (
+            <li
+              key={r.id}
+              className="flex items-center justify-between rounded-xl bg-black/[0.03] px-3 py-2 text-sm text-ink"
+            >
+              <span dir="ltr">
+                {r.startsOn === r.endsOn ? r.startsOn : `${r.startsOn} → ${r.endsOn}`}
+              </span>
+              <button
+                type="button"
+                onClick={() => drop(r.id)}
+                disabled={pending}
+                className="text-ink/40 transition-colors hover:text-red disabled:opacity-40"
+                aria-label={t.staff.removeDayOff}
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3 flex items-end gap-2">
+        <Field label={t.staff.from}>
+          <Input type="date" dir="ltr" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </Field>
+        <Field label={t.staff.to}>
+          <Input
+            type="date"
+            dir="ltr"
+            min={from}
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+          />
+        </Field>
+        <Button size="sm" variant="secondary" disabled={pending || !from} onClick={add}>
+          {t.staff.addDayOff}
+        </Button>
+      </div>
+    </div>
   );
 }

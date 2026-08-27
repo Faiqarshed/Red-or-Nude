@@ -104,6 +104,31 @@ export const staff = pgTable(
   (t) => ({ emailUnique: unique("staff_email_unique").on(t.email) }),
 );
 
+/**
+ * A staff member's days off (brief §3.3).
+ *
+ * Date-only, and a range rather than a single day: a day off is a day, not a
+ * time range, and one row covers both a sick Tuesday and a fortnight away.
+ * `ends_on` is inclusive — the same value in both columns is one day.
+ *
+ * Deliberately not `closures`, which is branch-wide and shuts the whole salon.
+ * This is one person being elsewhere while the branch trades as normal.
+ */
+export const staffTimeOff = pgTable(
+  "staff_time_off",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    staffId: uuid("staff_id")
+      .notNull()
+      .references(() => staff.id, { onDelete: "cascade" }),
+    startsOn: date("starts_on").notNull(),
+    endsOn: date("ends_on").notNull(),
+    reason: text("reason"),
+    ...stamps,
+  },
+  (t) => ({ byStaff: index("staff_time_off_staff_idx").on(t.staffId, t.startsOn) }),
+);
+
 /** Append-only. Prices and bookings are money — every mutation writes a row. */
 export const auditLog = pgTable(
   "audit_log",
@@ -367,22 +392,22 @@ export const bookings = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
 
+    /**
+     * When the assigned technician was told about this booking.
+     *
+     * The dedupe marker for the reminder job, which runs every quarter hour and
+     * would otherwise mail the same technician about the same customer four
+     * times an hour. Check-in stamps it too, so a walk-in served before her slot
+     * comes round never gets a second copy.
+     */
+    techNotifiedAt: timestamp("tech_notified_at", { withTimezone: true }),
+
     // Airline-style queue number ("K45") the salon calls out. Distinct from
     // `code`: that one is a permanent unique reference, this one restarts every
     // day per branch and is only meaningful on the day of the appointment.
     // Null until the booking is actually confirmed — an unpaid hold gets no number.
     ticketNo: text("ticket_no"),
 
-    /**
-     * Admin-granted refill window, overriding the one derived from
-     * `services.refill_days`. Null means "use the service's own window".
-     *
-     * Two jobs: extending a window as a goodwill gesture, and granting one at
-     * all for a service that carries none (`refill_days = 0`). Stored as the
-     * moment the offer lapses rather than a day count, so the deadline can't
-     * drift when a service's window length is edited later.
-     */
-    refillExpiresAt: timestamp("refill_expires_at", { withTimezone: true }),
 
     // Two guests booked together share one uuid. No booking_groups table: a group
     // holds no fact its members don't already carry, and the only query anyone
@@ -857,8 +882,13 @@ export const stationRelations = relations(stations, ({ one, many }) => ({
   bookings: many(bookings),
 }));
 
-export const staffRelations = relations(staff, ({ one }) => ({
+export const staffRelations = relations(staff, ({ one, many }) => ({
   branch: one(branches, { fields: [staff.branchId], references: [branches.id] }),
+  timeOff: many(staffTimeOff),
+}));
+
+export const staffTimeOffRelations = relations(staffTimeOff, ({ one }) => ({
+  staff: one(staff, { fields: [staffTimeOff.staffId], references: [staff.id] }),
 }));
 
 export const bookingRelations = relations(bookings, ({ one, many }) => ({
@@ -909,4 +939,5 @@ export type Staff = typeof staff.$inferSelect;
 export type Branch = typeof branches.$inferSelect;
 export type Booking = typeof bookings.$inferSelect;
 export type Service = typeof services.$inferSelect;
+export type StaffTimeOff = typeof staffTimeOff.$inferSelect;
 export type StaffRole = (typeof staffRole.enumValues)[number];

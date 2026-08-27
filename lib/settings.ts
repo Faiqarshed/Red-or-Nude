@@ -24,6 +24,14 @@ export const SETTING_DEFAULTS = {
    * served, while customers who *are* due are told nobody is free.
    */
   checkin_early_min: 0,
+  /**
+   * How long before her slot the assigned technician is emailed.
+   *
+   * The reminder job runs every quarter hour and mails anyone starting inside
+   * this window, once. Set it shorter than the gap between runs and appointments
+   * will be missed, so keep it comfortably above 15.
+   */
+  assign_notify_min: 30,
   /** Discount for booking two guests together, off the combined bill. */
   group_discount_percent: 10,
   /** A refill costs the service price minus this much. */

@@ -12,6 +12,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx lib/db/seed.ts",
+    "seed:day": "tsx --conditions=react-server scripts/seed-day.ts",
     "check": "tsx --conditions=react-server scripts/check-booking.ts",
     "preview:invoice": "tsx --conditions=react-server scripts/preview-invoice.ts",
     "check:invoice": "tsx --conditions=react-server scripts/check-invoice-email.ts",

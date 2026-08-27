@@ -60,6 +60,9 @@ export async function setBookingStatus(
       status,
       technicianId,
       checkedInAt: entering("checked_in") ? now : before.checkedInAt,
+      // She is here, so the "starting soon" mail has been overtaken by events.
+      // Stamping it here is what stops the reminder job sending a second one.
+      techNotifiedAt: entering("checked_in") ? now : before.techNotifiedAt,
       startedAt: entering("in_progress") ? now : before.startedAt,
       cancelReason: status === "cancelled" ? (reason ?? null) : before.cancelReason,
       updatedAt: now,
@@ -229,71 +232,4 @@ export async function createWalkIn(input: WalkInInput): Promise<Result & { code?
 
   revalidate();
   return { ok: true, code: result.code };
-}
-
-const grantRefillSchema = z.object({
-  id: z.string().uuid(),
-  /**
-   * Days from today. `0` withdraws the grant, falling back to whatever the
-   * service's own `refill_days` allows — which may still be an open window, so
-   * withdrawing is not the same as refusing.
-   */
-  days: z.number().int().min(0).max(365),
-});
-
-/**
- * Grant, extend, shorten or withdraw a booking's refill window by hand.
- *
- * Stored as a deadline rather than a day count so it cannot drift when someone
- * edits the service's `refill_days` afterwards — a customer who was told "you
- * have until the 18th" keeps until the 18th.
- *
- * Counted from *now*, not from the appointment: this is used when a customer
- * asks for more time, and they mean more time from today.
- *
- * The grant only sets a deadline. Every other rule in refillDaysLeft() still
- * applies — a cancelled booking, one that has not happened yet, or one whose
- * refill was already claimed stays ineligible however long the window.
- */
-export async function grantRefill(input: {
-  id: string;
-  days: number;
-}): Promise<Result & { expiresAt?: string | null }> {
-  const actor = await requireCan("bookings.manage");
-
-  const parsed = grantRefillSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: "invalid" };
-
-  const [before] = await db
-    .select({ id: bookings.id, refillExpiresAt: bookings.refillExpiresAt })
-    .from(bookings)
-    .where(eq(bookings.id, parsed.data.id))
-    .limit(1);
-  if (!before) return { ok: false, error: "not-found" };
-
-  const expiresAt =
-    parsed.data.days > 0
-      ? new Date(Date.now() + parsed.data.days * 86_400_000)
-      : null;
-
-  await db
-    .update(bookings)
-    .set({ refillExpiresAt: expiresAt, updatedAt: new Date() })
-    .where(eq(bookings.id, parsed.data.id));
-
-  // Money-adjacent: a refill is a discount, so who granted it is auditable.
-  await recordAudit(actor, {
-    action: expiresAt ? "grant-refill" : "revoke-refill",
-    entity: "bookings",
-    entityId: parsed.data.id,
-    diff: {
-      refillExpiresAt: {
-        from: before.refillExpiresAt?.toISOString() ?? null,
-        to: expiresAt?.toISOString() ?? null,
-      },
-    },
-  });
-
-  revalidate();
-  return { ok: true, expiresAt: expiresAt?.toISOString() ?? null };
 }

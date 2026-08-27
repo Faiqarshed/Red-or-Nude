@@ -15,6 +15,18 @@ export function riyadhDayRange(now: Date = new Date()): { start: Date; end: Date
   return { start: new Date(startUtcMs), end: new Date(startUtcMs + 24 * HOUR_MS) };
 }
 
+/** `YYYY-MM-DD` in Riyadh — the shape date-only columns store. */
+export function riyadhDateKey(day: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TIMEZONE }).format(day);
+}
+
+/** Riyadh wall clock, HH:MM, from an ISO string. */
+export function localTime(iso: string): string {
+  return new Date(new Date(iso).getTime() + UTC_OFFSET_HOURS * HOUR_MS)
+    .toISOString()
+    .slice(11, 16);
+}
+
 /** Weekday index with Saturday = 0, matching the site's calendar and branch_hours. */
 export function riyadhWeekday(date: Date): number {
   const local = new Date(date.getTime() + UTC_OFFSET_HOURS * HOUR_MS);
