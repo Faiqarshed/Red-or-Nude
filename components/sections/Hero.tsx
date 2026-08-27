@@ -112,14 +112,7 @@ export default function Hero() {
               href={card.href}
               // `group` so the capsule below can respond to a hover anywhere on
               // the card, not only on the capsule itself.
-              //
-              // A flex column, not a block with the capsule absolutely pinned to
-              // the bottom. Pinning worked only while every description fitted on
-              // one line — the gift card's runs to two, and the capsule sat on top
-              // of it. Here the description takes the room it needs and `mt-auto`
-              // pushes the capsule down to whatever is left, so the three still
-              // line up across the row and none of them can ever collide.
-              className="group flex flex-col rounded-card bg-white px-[8.7%] py-[9%] text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] transition-shadow hover:shadow-[0_24px_60px_rgba(184,0,7,0.12)] md:aspect-[530/320]"
+              className="group relative block rounded-card bg-white px-[8.7%] py-[9%] text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] transition-shadow hover:shadow-[0_24px_60px_rgba(184,0,7,0.12)] md:aspect-[530/320]"
             >
               <p className="font-display text-[clamp(14px,1.0vw,19px)] font-light text-ink/70">
                 {card.kicker}
@@ -130,7 +123,7 @@ export default function Hero() {
               <p className="mt-[6%] font-display text-[clamp(14px,1.0vw,19px)] font-light leading-relaxed text-ink/70">
                 {card.desc}
               </p>
-              <div className="mt-6 md:mt-auto md:pt-5">
+              <div className="mt-6 md:absolute md:bottom-[12%] md:mt-0 md:ltr:left-[8.7%] md:rtl:right-[8.7%]">
                 <CardCta label={card.cta} />
               </div>
             </Link>
