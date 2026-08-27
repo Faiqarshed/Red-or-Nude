@@ -24,10 +24,22 @@ export default function SiteHeader() {
     ? c.nav.map((l) => (l.href === "/my-bookings" ? { label: c.account.profile, href: "/account" } : l))
     : c.nav;
 
-  // No account pill beside the language toggle, in either state. Signed in it
-  // duplicated the Profile nav entry above; signed out it put a second red pill
-  // next to the language one and made the header look like a login screen.
-  // Getting to an account is the nav's job — /my-bookings offers it to guests.
+  /**
+   * Signed out only. Signed in it would duplicate the Profile nav entry above,
+   * and there is nothing else a header needs to offer — Sign out lives on
+   * /account beside the customer's name, where the thing it signs out of is.
+   *
+   * Styled as the language toggle's twin so the two read as one control group,
+   * which is why it is a Link wearing a button rather than its own shape.
+   */
+  const signInPill = signedIn ? null : (
+    <Link
+      href="/account"
+      className="rounded-full border-[1.5px] border-red px-6 py-1.5 font-serif text-lg italic text-red transition-colors hover:bg-red hover:text-white"
+    >
+      {c.account.signIn}
+    </Link>
+  );
 
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-white/60 bg-white/10 backdrop-blur-[14px] backdrop-saturate-[1.8] backdrop-brightness-[1.08] shadow-[0_10px_35px_rgba(184,0,7,0.07)]">
@@ -78,6 +90,7 @@ export default function SiteHeader() {
           >
             {c.header.otherLang}
           </button>
+          {signInPill}
         </div>
 
         {/* Mobile: hamburger toggle (right) */}
@@ -115,6 +128,15 @@ export default function SiteHeader() {
             >
               {c.header.otherLang}
             </button>
+            {!signedIn && (
+              <Link
+                href="/account"
+                onClick={() => setOpen(false)}
+                className="rounded-full border-[1.5px] border-red px-5 py-1.5 font-serif italic text-red transition-colors hover:bg-red hover:text-white"
+              >
+                {c.account.signIn}
+              </Link>
+            )}
           </div>
         </div>
       )}

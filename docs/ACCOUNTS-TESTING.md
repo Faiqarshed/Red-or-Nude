@@ -48,10 +48,9 @@ select b.status, b.created_at, lt.delta_points from loyalty_txns lt
 
 ## 1. Signing up
 
-1. Open `/`. The header has **no account button** — only the
-   **English/العربية** toggle. The centre nav shows **Bookings**.
-2. Click **Bookings** → `/my-bookings`, and take the **Sign in** link under the
-   heading → `/account`. You get an email field, and below the form the reward
+1. Open `/`. Beside the **English/العربية** toggle there is a **Sign in**
+   button. The centre nav shows **Bookings**.
+2. Click it → `/account`. You get an email field, and below the form the reward
    ladder as an advert (100 → 5%, 200 → 10%, 300 → 15%). ✅ *The ladder is shown
    signed out on purpose — it is the reason to make an account.*
 3. Enter a fresh address → **Send code**. The screen moves to the code step and
@@ -62,9 +61,10 @@ select b.status, b.created_at, lt.delta_points from loyalty_txns lt
    sign-up page.
 5. Leave birthday empty, fill name and mobile, → **Create account**.
 
-**Expect:** you land on `/account` signed in, and the centre nav's **Bookings**
-entry has been *replaced* by **Profile** — same nav length, still no button on
-the right. **Sign out** lives on the page itself, top right, not in the header.
+**Expect:** you land on `/account` signed in. The **Sign in** button is **gone**
+from the header — check `/`, not just `/account` — and the centre nav's
+**Bookings** entry has been *replaced* by **Profile**. **Sign out** lives on the
+page itself, top right, not in the header.
 
 **Check the cookie:** Application → Cookies → `ron_account`. It must be
 `HttpOnly ✓`, `SameSite: Lax`, and its value must be opaque gibberish — if you
@@ -86,14 +86,14 @@ can read a customer id in it, something is very wrong.
 
 | State | Nav entry | Right side | `/my-bookings` |
 |---|---|---|---|
-| Signed out | Bookings | language toggle only | reference form + Sign in link |
+| Signed out | Bookings | language toggle + **Sign in** | reference form + Sign in link |
 | Signed in | **Profile** | language toggle only | **redirects to `/account`** |
 
 Check this on a page from each family, because they render the header
 differently: `/` (server component), `/booking` (client), `/gift-card` (client).
 Then check the **mobile** panel — shrink the window below `lg`, open the
-hamburger: the nav list has the same swap and the action row has only the
-language toggle.
+hamburger: the nav list has the same swap, and the action row carries Sign in
+only when signed out.
 
 Switch to English and back — both languages, both states.
 

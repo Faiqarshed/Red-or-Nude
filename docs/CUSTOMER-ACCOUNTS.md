@@ -25,15 +25,17 @@ redirects there.
 | `/my-bookings` | guests only | Unchanged. A signed-in visitor is redirected to `/account`. |
 | `/booking/payment` | anyone | Gains a reward picker, shown only when signed in. |
 
-Header: **no account button.** The nav's **Bookings** entry becomes **Profile**
-when signed in — matched on href, so reordering the nav can't swap the wrong
-link — and the right-hand side carries only the EN/AR toggle in both states. See
-[`components/SiteHeader.tsx`](../components/SiteHeader.tsx).
+Header: a **Sign in** button beside the EN/AR toggle **when signed out, and
+nothing there when signed in** — signed in it would only duplicate the nav's
+Profile entry, and Sign out belongs on `/account` beside the customer's name,
+next to the thing it signs out of. The nav's **Bookings** entry becomes
+**Profile** while signed in, matched on href so reordering the nav can't swap
+the wrong link. See [`components/SiteHeader.tsx`](../components/SiteHeader.tsx).
 
-That leaves `/my-bookings` as the only route into an account from the site
-chrome, which is why it carries a one-line **Sign in** offer under its heading.
-It is the right place for it: a signed-out customer hunting for their bookings
-lands there, and a signed-in one never sees it.
+`/my-bookings` also carries a one-line **Sign in** offer under its heading,
+because it can say *why* — every booking and the loyalty points, without a
+reference — which a button in the header cannot. A signed-in customer never
+sees it; that page redirects them.
 
 ---
 
