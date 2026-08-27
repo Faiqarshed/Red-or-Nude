@@ -16,10 +16,35 @@ import { useI18n } from "@/lib/i18n";
 const FADE_BOTTOM = "linear-gradient(to bottom, #000 76%, rgba(0,0,0,0.55) 88%, transparent 99%)";
 const fadeBottom = { maskImage: FADE_BOTTOM, WebkitMaskImage: FADE_BOTTOM } as const;
 
-function CardArrow() {
-  // Red capsule outline (Figma 108:4121) — narrower on mobile.
+/**
+ * The call to action on each card (Figma 108:4121 — the red capsule).
+ *
+ * The capsule shipped empty, which reads as a button that failed to load rather
+ * than as decoration. It now carries its card's own verb: "Book now" and "Buy a
+ * card" are different promises, and one shared label would flatten them.
+ *
+ * A span, not a button or a link — the whole card is already the `<Link>`, and
+ * nesting an interactive element inside an anchor is invalid HTML that screen
+ * readers and keyboard users both trip over. It fills on hover of the card via
+ * `group-hover`, so the affordance responds wherever the pointer lands.
+ */
+function CardCta({ label }: { label: string }) {
   return (
-    <span className="block h-[26px] w-[70px] rounded-full border-[2px] border-red md:w-[103px]" />
+    <span className="inline-flex items-center gap-2 rounded-full border-[2px] border-red px-5 py-1.5 font-display text-[clamp(12px,0.85vw,15px)] font-semibold text-red transition-colors group-hover:bg-red group-hover:text-white">
+      {label}
+      {/* Points the way the language reads; the repo's idiom for this is
+          rtl:rotate-180 (see components/booking/ScheduleModal.tsx). */}
+      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 rtl:rotate-180" aria-hidden>
+        <path
+          d="M5 12h14M13 6l6 6-6 6"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
   );
 }
 
@@ -97,7 +122,9 @@ export default function Hero() {
             <Link
               key={card.title}
               href={card.href}
-              className="relative block rounded-card bg-white px-[8.7%] py-[9%] text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] transition-shadow hover:shadow-[0_24px_60px_rgba(184,0,7,0.12)] md:aspect-[530/320]"
+              // `group` so the capsule below can respond to a hover anywhere on
+              // the card, not only on the capsule itself.
+              className="group relative block rounded-card bg-white px-[8.7%] py-[9%] text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] transition-shadow hover:shadow-[0_24px_60px_rgba(184,0,7,0.12)] md:aspect-[530/320]"
             >
               <p className="font-display text-[clamp(14px,1.0vw,19px)] font-light text-ink/70">
                 {card.kicker}
@@ -108,8 +135,8 @@ export default function Hero() {
               <p className="mt-[6%] font-display text-[clamp(14px,1.0vw,19px)] font-light leading-relaxed text-ink/70">
                 {card.desc}
               </p>
-              <div className="mt-6 md:absolute md:bottom-[12%] md:left-[8.7%] md:mt-0">
-                <CardArrow />
+              <div className="mt-6 md:absolute md:bottom-[12%] md:mt-0 md:ltr:left-[8.7%] md:rtl:right-[8.7%]">
+                <CardCta label={card.cta} />
               </div>
             </Link>
           ))}

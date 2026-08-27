@@ -16,9 +16,9 @@ const ar = {
 
   hero: {
     cards: [
-      { kicker: "الحجــز", title: "احجــزي موعــدًا", desc: "حدّد الخدمات لنفسك", href: "/booking" },
-      { kicker: "الحجــز", title: "موعــد جماعـــي", desc: "لـنـفـسـك وللآخـريــن", href: "/booking/group" },
-      { kicker: "اشتــر", title: "بطاقــة هديــة", desc: "دلّلي نفسك أو صديقتك بزيارات مستقبلية", href: "/gift-card" },
+      { kicker: "الحجــز", title: "احجــزي موعــدًا", desc: "حدّد الخدمات لنفسك", cta: "احجزي الآن", href: "/booking" },
+      { kicker: "الحجــز", title: "موعــد جماعـــي", desc: "لـنـفـسـك وللآخـريــن", cta: "احجزي معًا", href: "/booking/group" },
+      { kicker: "اشتــر", title: "بطاقــة هديــة", desc: "دلّلي نفسك أو صديقتك بزيارات مستقبلية", cta: "اشتري بطاقة", href: "/gift-card" },
     ],
   },
 
@@ -451,9 +451,9 @@ const en: Content = {
 
   hero: {
     cards: [
-      { kicker: "BOOKING", title: "Book an Appointment", desc: "Choose your services and build your own experience", href: "/booking" },
-      { kicker: "BOOKING", title: "Group Booking", desc: "Book for yourself and others", href: "/booking/group" },
-      { kicker: "PURCHASE", title: "Gift Card", desc: "Treat yourself or surprise someone special with future visits", href: "/gift-card" },
+      { kicker: "BOOKING", title: "Book an Appointment", desc: "Choose your services and build your own experience", cta: "Book now", href: "/booking" },
+      { kicker: "BOOKING", title: "Group Booking", desc: "Book for yourself and others", cta: "Book together", href: "/booking/group" },
+      { kicker: "PURCHASE", title: "Gift Card", desc: "Treat yourself or surprise someone special with future visits", cta: "Buy a card", href: "/gift-card" },
     ],
   },
 
