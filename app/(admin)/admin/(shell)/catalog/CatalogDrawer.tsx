@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { Button, Field, Input } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
@@ -79,6 +79,17 @@ export default function CatalogDrawer({
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
+
+  // Zero is still how "no refill" is stored — one number, and every reader of
+  // it (lib/refill.ts, the reminder job, the customer's history) keeps working
+  // unchanged. The tick is a way of asking the question, not a second field to
+  // hold in sync with this one.
+  const hasRefill = Number(form.refillDays) > 0;
+
+  // Remembered so unticking and re-ticking does not lose the length that was
+  // typed — an accidental click should cost nothing.
+  const lastRefillDays = useRef<string | null>(null);
+  if (hasRefill) lastRefillDays.current = form.refillDays;
 
   const title = row
     ? kind === "service"
@@ -217,22 +228,49 @@ export default function CatalogDrawer({
               onChange={(e) => set("durationMin", e.target.value)}
             />
           </Field>
-          {/* Services only: this is what makes the refill button appear in the
-              customer's booking history, and for how long. */}
-          {kind === "service" ? (
-            <Field label={t.catalog.refillDays} hint={t.catalog.refillDaysHint}>
-              <Input
-                type="number"
-                min={0}
-                step="1"
-                dir="ltr"
-                className="text-left tabular-nums"
-                value={form.refillDays}
-                onChange={(e) => set("refillDays", e.target.value)}
-              />
-            </Field>
-          ) : null}
         </div>
+
+        {/* Services only: this is what makes the refill button appear in the
+            customer's booking history, and for how long.
+
+            A tick and a length, rather than a lone number where 0 quietly meant
+            "none" — a rule you had to be told, and one that made an empty box
+            and a deliberate "no refill" look identical. */}
+        {kind === "service" ? (
+          <div className="rounded-xl border border-black/[0.06] bg-white p-4">
+            <label className="flex items-center gap-2 text-sm text-ink">
+              <input
+                type="checkbox"
+                checked={hasRefill}
+                onChange={(e) =>
+                  // Ticking restores the last length typed, or the usual 30,
+                  // so nobody has to think about a number to answer "yes".
+                  set("refillDays", e.target.checked ? (lastRefillDays.current ?? "30") : "0")
+                }
+                className="h-4 w-4 accent-red"
+              />
+              {t.catalog.hasRefill}
+            </label>
+            <p className="mt-1 text-start text-[11px] text-ink/40">{t.catalog.hasRefillHint}</p>
+
+            {hasRefill ? (
+              <div className="mt-3">
+                <Field label={t.catalog.refillDays} hint={t.catalog.refillDaysHint}>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={365}
+                    step="1"
+                    dir="ltr"
+                    className="text-left tabular-nums"
+                    value={form.refillDays}
+                    onChange={(e) => set("refillDays", e.target.value)}
+                  />
+                </Field>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {kind !== "removal" ? (
           <MediaPicker

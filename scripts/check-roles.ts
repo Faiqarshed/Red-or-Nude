@@ -11,10 +11,11 @@
 // and docs/ROLE-SCREENS.md §"Try to break it" walks through proving it by hand.
 
 import assert from "node:assert";
-import { can, scopedBranchId, ROLE_LABELS } from "@/lib/auth/rbac";
-import { chooseTechnician } from "@/lib/assign";
+import { can, mustHaveBranch, scopedBranchId, ROLE_LABELS } from "@/lib/auth/rbac";
+import { chooseTechnician, planAssignments, type PlannableBooking } from "@/lib/assign";
 import { monthWindow, STAFF_CODE_PERCENT } from "@/lib/staff-codes";
 import { NAV } from "@/components/admin/nav";
+import { busyDuring, overlaps, type SlotRow } from "@/lib/slots";
 import type { StaffRole } from "@/lib/db/schema";
 
 const ROLES: StaffRole[] = ["ceo", "admin", "receptionist", "technician"];
@@ -89,6 +90,21 @@ for (const role of ROLES) {
   assert.ok(ROLE_LABELS[role].ar && ROLE_LABELS[role].en, `${role} is labelled in both languages`);
 }
 
+// The two floor screens follow check-in — not staff.manage, which the
+// receptionist who actually sends someone home does not have, and not a
+// receptionist-only gate, which would shut out an admin covering the desk.
+for (const href of ["/admin/floor", "/admin/front-desk"]) {
+  const item = NAV.flatMap((g) => g.items).find((i) => i.href === href);
+  assert.ok(item, `${href} is in the sidebar`);
+  assert.strictEqual(item!.cap, "bookings.checkin", `${href} is gated on check-in`);
+
+  // Everyone who works a floor can reach it — the desk, and whoever covers it.
+  for (const role of ["receptionist", "admin", "ceo"] as StaffRole[]) {
+    assert.ok(can(role, item!.cap!), `${role} can reach ${href}`);
+  }
+  assert.ok(!can("technician", item!.cap!), `a technician cannot reach ${href}`);
+}
+
 // -- who takes the next customer --------------------------------------------
 
 const noLoad = new Map<string, number>();
@@ -125,6 +141,206 @@ assert.strictEqual(
   "a",
   "a technician with no bookings today counts as zero, not as missing",
 );
+
+// -- who is free at a given hour ---------------------------------------------
+//
+// lib/slots.ts, shared by the assignment engine, the front desk and the floor
+// screen. Getting this wrong in one of the three is how a technician ends up
+// greyed out on one screen and handed a second customer by another.
+
+const t9 = new Date(Date.UTC(2026, 8, 1, 9));
+const t10 = new Date(Date.UTC(2026, 8, 1, 10));
+const t11 = new Date(Date.UTC(2026, 8, 1, 11));
+const t12 = new Date(Date.UTC(2026, 8, 1, 12));
+
+assert.ok(overlaps(t9, t11, t10, t12), "spans that cross do overlap");
+assert.ok(overlaps(t10, t12, t9, t11), "…in either order");
+assert.ok(overlaps(t9, t12, t10, t11), "a span wholly inside another overlaps");
+assert.ok(
+  !overlaps(t10, t11, t11, t12),
+  "back-to-back is not a clash — half-open, or half the floor would idle",
+);
+assert.ok(!overlaps(t9, t10, t11, t12), "spans with a gap do not overlap");
+
+const slot = (over: Partial<SlotRow> = {}): SlotRow => ({
+  id: "target",
+  technicianId: null,
+  startsAt: t10.toISOString(),
+  endsAt: t11.toISOString(),
+  status: "confirmed",
+  ...over,
+});
+
+const target = slot();
+
+assert.deepStrictEqual(
+  [...busyDuring([slot({ id: "other", technicianId: "a" })], target)],
+  ["a"],
+  "a technician booked across these hours is busy for them",
+);
+assert.deepStrictEqual(
+  [...busyDuring([slot({ id: "other", technicianId: "a", startsAt: t11.toISOString(), endsAt: t12.toISOString() })], target)],
+  [],
+  "the technician on the next slot along is free for this one",
+);
+assert.deepStrictEqual(
+  [...busyDuring([slot({ id: "other", technicianId: "a", status: "cancelled" })], target)],
+  [],
+  "a cancelled booking holds nobody",
+);
+assert.deepStrictEqual(
+  [...busyDuring([slot({ id: "other", technicianId: "a", status: "completed" })], target)],
+  [],
+  "nor does a closed one",
+);
+assert.deepStrictEqual(
+  [...busyDuring([slot({ technicianId: "a" })], slot({ technicianId: "a" }))],
+  [],
+  "a booking never makes its own technician unavailable for itself",
+);
+assert.deepStrictEqual(
+  [...busyDuring([slot({ id: "other", technicianId: null })], target)],
+  [],
+  "an unassigned booking blocks nobody",
+);
+
+// -- dealing out the whole day ----------------------------------------------
+//
+// The morning run (lib/assign/index.ts). Same shape as the block above: the real
+// function, no database, so what is asserted here is the rule itself.
+
+/** `n` back-to-back hour-long slots from 10:00, so nothing overlaps. */
+function sequentialDay(n: number): PlannableBooking[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `b${i}`,
+    startsAt: new Date(Date.UTC(2026, 8, 1, 7 + i)),
+    endsAt: new Date(Date.UTC(2026, 8, 1, 8 + i)),
+  }));
+}
+
+function spread(plan: Map<string, string | null>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const tech of plan.values()) {
+    if (tech) counts.set(tech, (counts.get(tech) ?? 0) + 1);
+  }
+  return counts;
+}
+
+// The whole point of the feature: six bookings across three technicians is
+// 2/2/2, not 6/0/0 for whoever sorts first.
+const even = planAssignments(sequentialDay(6), ["a", "b", "c"]);
+assert.deepStrictEqual(
+  [...spread(even).values()].sort(),
+  [2, 2, 2],
+  "a day of six spreads evenly across three technicians",
+);
+assert.ok([...even.values()].every(Boolean), "…and every booking got someone");
+
+// Overlap is the thing a count-based rule cannot see on its own.
+const sameTime: PlannableBooking[] = [
+  { id: "x", startsAt: new Date(Date.UTC(2026, 8, 1, 7)), endsAt: new Date(Date.UTC(2026, 8, 1, 9)) },
+  { id: "y", startsAt: new Date(Date.UTC(2026, 8, 1, 8)), endsAt: new Date(Date.UTC(2026, 8, 1, 10)) },
+];
+const overlapping = planAssignments(sameTime, ["a", "b"]);
+assert.notStrictEqual(
+  overlapping.get("x"),
+  overlapping.get("y"),
+  "two overlapping slots never land on the same technician",
+);
+
+// Back-to-back is not an overlap: 10–11 and 11–12 are exactly how a chair is
+// meant to be used, so the same technician may take both.
+const backToBack = planAssignments(sequentialDay(2), ["a"]);
+assert.deepStrictEqual(
+  [backToBack.get("b0"), backToBack.get("b1")],
+  ["a", "a"],
+  "consecutive appointments stack on one technician — half-open intervals",
+);
+
+// More overlapping work than technicians: the surplus comes back null for the
+// receptionist to sort out, rather than double-booking someone.
+const crowded = planAssignments(
+  [
+    ...sameTime,
+    { id: "z", startsAt: new Date(Date.UTC(2026, 8, 1, 8, 30)), endsAt: new Date(Date.UTC(2026, 8, 1, 9, 30)) },
+  ],
+  ["a", "b"],
+);
+assert.strictEqual([...crowded.values()].filter((v) => v === null).length, 1, "the surplus is left unassigned, not doubled up");
+
+// Someone off today simply is not a candidate — assignDay filters them out
+// before calling this, which is what excluding them from the list models.
+const withoutNoura = planAssignments(sequentialDay(4), ["a", "c"]);
+assert.ok(
+  ![...withoutNoura.values()].includes("noura"),
+  "a technician on leave takes no bookings, however light her load",
+);
+
+// A booking a receptionist already assigned by hand tilts the rest away from
+// that person, instead of the run pretending the day starts empty.
+const tilted = planAssignments(sequentialDay(2), ["a", "b"], new Map([["a", 5]]));
+assert.deepStrictEqual(
+  [tilted.get("b0"), tilted.get("b1")],
+  ["b", "b"],
+  "an existing manual load is counted: five ahead, and the run keeps catching up",
+);
+
+// …and once the gap is one, the day alternates as you would expect.
+const level = planAssignments(sequentialDay(2), ["a", "b"], new Map([["a", 1]]));
+assert.deepStrictEqual(
+  [level.get("b0"), level.get("b1")],
+  ["b", "a"],
+  "one booking behind, and the next two go one each",
+);
+
+// Existing commitments block their own hours, so the run cannot hand a manually
+// assigned technician a second customer at the same time.
+const held = new Map([
+  ["a", [{ startsAt: new Date(Date.UTC(2026, 8, 1, 7)), endsAt: new Date(Date.UTC(2026, 8, 1, 8)) }]],
+]);
+assert.strictEqual(
+  planAssignments(sequentialDay(1), ["a", "b"], new Map(), held).get("b0"),
+  "b",
+  "a technician already booked for that hour is skipped for it",
+);
+
+// The floor can be empty — a public holiday, everyone on leave — and nothing
+// here may throw. The salon still opens; the desk assigns by hand.
+assert.deepStrictEqual(
+  [...planAssignments(sequentialDay(3), []).values()],
+  [null, null, null],
+  "no available technicians leaves every booking unassigned, without throwing",
+);
+assert.strictEqual(planAssignments([], ["a"]).size, 0, "an empty day plans nothing");
+
+// The caller's maps are inputs, not scratch space — assignDay reuses them.
+const callersLoad = new Map([["a", 1]]);
+planAssignments(sequentialDay(2), ["a", "b"], callersLoad);
+assert.deepStrictEqual([...callersLoad], [["a", 1]], "the caller's load map is left alone");
+
+// -- who may span branches ---------------------------------------------------
+//
+// scopedBranchId reads a null branch as "no filter". That is deliberate for the
+// CEO and a regional admin, and would be a data leak for anyone else — so the
+// staff form refuses to save a receptionist or technician without a branch.
+// This asserts the reason that rule exists, not the form itself.
+
+assert.deepStrictEqual(
+  ROLES.filter(mustHaveBranch),
+  ["receptionist", "technician"],
+  "the desk and the floor belong to one branch; the CEO and a regional admin do not",
+);
+assert.strictEqual(
+  scopedBranchId("receptionist", null),
+  null,
+  "an unpinned receptionist is filtered by nothing — which is why saveStaff refuses one",
+);
+assert.strictEqual(
+  scopedBranchId("receptionist", "branch-1"),
+  "branch-1",
+  "…and a pinned one sees her own branch only",
+);
+assert.strictEqual(scopedBranchId("ceo", "branch-1"), null, "the CEO spans branches by design");
 
 // -- the monthly staff code window -------------------------------------------
 

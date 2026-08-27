@@ -492,38 +492,31 @@ rather than an equality one.
 
 ---
 
-## Part 4 — Granting a refill, and unlocking it
+## Part 4 — Setting a window, and unlocking it
 
-Two additions to the flow above: the salon can grant a window by hand, and the
-customer proves their identity before the offer is shown.
+Where the window comes from, and how the customer proves their identity before
+the offer is shown.
 
-### 4.1 Admin grants
+### 4.1 The window belongs to the service
 
-**Admin → Bookings → a booking → Grant refill.** Enter days from today.
+**Admin → Catalogue → a service → "This service has a refill."** Tick it and set
+the length in days; leave it unticked and the service has no refill at all.
 
-Stored as `bookings.refill_expires_at`, a **deadline rather than a day count**,
-so it cannot drift when someone edits the service's `refill_days` afterwards — a
-customer told "you have until the 18th" keeps until the 18th.
+Stored as one number, `services.refill_days`, where zero means none. The tick is
+a way of asking the question, not a second field — a boolean beside a length is
+two things that can contradict each other, and the reminder job, the customer's
+history and `lib/refill.ts` would each have to decide which one wins.
 
-Counted from **today, not from the appointment**, because this exists for "give
-her another two weeks" and that is what the customer means by it.
+The deadline is **the service's, counted from the appointment**, and nothing
+moves it for one booking. There used to be a per-booking grant
+(`bookings.refill_expires_at`) that could extend, shorten, or create a window
+where the service had none. It is gone: two customers on the same service could
+hold different deadlines with nothing on screen explaining why, and "is this
+customer owed a refill?" had two answers depending on where you looked.
 
-It does three things, all through the same field:
-
-| Days | Effect |
-| --- | --- |
-| > 0 on a service with a window | extends or **shortens** it |
-| > 0 on a service with `refill_days: 0` | creates an offer where there was none |
-| 0 (Revoke) | drops back to the service's own window, which may still be open |
-
-A grant sets a deadline and nothing else. **Every other rule in
-`refillDaysLeft()` still applies**: a booking that has not happened yet, one
-whose refill was already claimed, or a refill of its own stays ineligible however
-generous the grant. `npm run check:fields` asserts exactly that.
-
-Granting is `bookings.manage` only and writes an `audit_log` row
-(`grant-refill` / `revoke-refill`) — a refill is a discount, so who gave it is a
-money question.
+Every other rule in `refillDaysLeft()` is unchanged: a booking that has not
+happened yet, one whose refill was already claimed, or a refill of its own is
+never eligible. `npm run check:fields` asserts exactly that.
 
 ### 4.2 The customer unlocks it with an emailed code
 

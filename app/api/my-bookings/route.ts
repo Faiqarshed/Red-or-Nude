@@ -62,7 +62,6 @@ export async function POST(request: Request) {
       serviceName: bookings.serviceName,
       totalHalalas: bookings.totalHalalas,
       refillOfBookingId: bookings.refillOfBookingId,
-      refillExpiresAt: bookings.refillExpiresAt,
       // The live catalogue price, not the snapshot: the server prices a refill
       // off today's price list, so the button has to quote the same number.
       servicePriceHalalas: services.priceHalalas,
@@ -90,8 +89,7 @@ export async function POST(request: Request) {
           refillDays: r.refillDays ?? 0,
           alreadyRefilled: spentOn.has(r.id),
           isRefill: Boolean(r.refillOfBookingId),
-          expiresAt: r.refillExpiresAt,
-        },
+          },
         now,
       );
 

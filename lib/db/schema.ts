@@ -104,6 +104,31 @@ export const staff = pgTable(
   (t) => ({ emailUnique: unique("staff_email_unique").on(t.email) }),
 );
 
+/**
+ * A staff member's days off (brief §3.3).
+ *
+ * Date-only, and a range rather than a single day: a day off is a day, not a
+ * time range, and one row covers both a sick Tuesday and a fortnight away.
+ * `ends_on` is inclusive — the same value in both columns is one day.
+ *
+ * Deliberately not `closures`, which is branch-wide and shuts the whole salon.
+ * This is one person being elsewhere while the branch trades as normal.
+ */
+export const staffTimeOff = pgTable(
+  "staff_time_off",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    staffId: uuid("staff_id")
+      .notNull()
+      .references(() => staff.id, { onDelete: "cascade" }),
+    startsOn: date("starts_on").notNull(),
+    endsOn: date("ends_on").notNull(),
+    reason: text("reason"),
+    ...stamps,
+  },
+  (t) => ({ byStaff: index("staff_time_off_staff_idx").on(t.staffId, t.startsOn) }),
+);
+
 /** Append-only. Prices and bookings are money — every mutation writes a row. */
 export const auditLog = pgTable(
   "audit_log",
@@ -288,9 +313,44 @@ export const customers = pgTable(
     lang: langEnum("lang").notNull().default("ar"),
     notes: text("notes"),
     blocked: boolean("blocked").notNull().default(false),
+
+    /**
+     * Brief §2.8 — captured at signup, for birthday reminders and offers.
+     * A `date` and not a timestamp: a birthday has no time and no timezone, and
+     * storing one as an instant is how a Riyadh birthday lands on the 4th in
+     * UTC and the reminder goes out a day early.
+     */
+    birthday: date("birthday"),
+
+    /**
+     * The account flag. Null means "we have an address for this person because
+     * they typed one at checkout"; set means "they proved they own it by
+     * reading a code we sent there", which is the only thing that lets them
+     * sign in. There is no separate accounts table — an account *is* a customer
+     * row with this stamped.
+     */
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+
     ...stamps,
   },
-  (t) => ({ phoneUnique: unique("customers_phone_unique").on(t.phone) }),
+  (t) => ({
+    phoneUnique: unique("customers_phone_unique").on(t.phone),
+    /**
+     * Unique, but only over *verified* emails — deliberately partial.
+     *
+     * Checkout upserts on phone and writes whatever email was typed
+     * (createBookings below), so the same address legitimately appears on two
+     * rows when someone books twice from two numbers. A blanket unique index
+     * would turn that into a constraint violation and fail the booking.
+     *
+     * Sign-in only ever resolves *verified* addresses, so uniqueness is only
+     * needed there. `lower()` because an address is not case sensitive and
+     * `Sara@` must not become a second account beside `sara@`.
+     */
+    accountEmailUnique: uniqueIndex("customers_account_email_unique")
+      .on(sql`lower(${t.email})`)
+      .where(sql`${t.emailVerifiedAt} is not null`),
+  }),
 );
 
 export const bookings = pgTable(
@@ -332,22 +392,22 @@ export const bookings = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
 
+    /**
+     * When the assigned technician was told about this booking.
+     *
+     * The dedupe marker for the reminder job, which runs every quarter hour and
+     * would otherwise mail the same technician about the same customer four
+     * times an hour. Check-in stamps it too, so a walk-in served before her slot
+     * comes round never gets a second copy.
+     */
+    techNotifiedAt: timestamp("tech_notified_at", { withTimezone: true }),
+
     // Airline-style queue number ("K45") the salon calls out. Distinct from
     // `code`: that one is a permanent unique reference, this one restarts every
     // day per branch and is only meaningful on the day of the appointment.
     // Null until the booking is actually confirmed — an unpaid hold gets no number.
     ticketNo: text("ticket_no"),
 
-    /**
-     * Admin-granted refill window, overriding the one derived from
-     * `services.refill_days`. Null means "use the service's own window".
-     *
-     * Two jobs: extending a window as a goodwill gesture, and granting one at
-     * all for a service that carries none (`refill_days = 0`). Stored as the
-     * moment the offer lapses rather than a day count, so the deadline can't
-     * drift when a service's window length is edited later.
-     */
-    refillExpiresAt: timestamp("refill_expires_at", { withTimezone: true }),
 
     // Two guests booked together share one uuid. No booking_groups table: a group
     // holds no fact its members don't already carry, and the only query anyone
@@ -472,26 +532,35 @@ export const ticketCounters = pgTable(
 );
 
 /**
- * One-time codes for opening a booking's private details at /my-bookings.
+ * One-time codes, for two things that turn out to be the same thing.
  *
- * The booking reference alone is a weak credential — it travels in emails and
- * gets forwarded — so anything beyond the booking's own summary is gated behind
- * a code emailed to the address on file. Reference + inbox is two factors with
- * no account, which is the most that can be asked of a customer who never
- * signed up.
+ * Originally `booking_otps`: opening a booking's private details at
+ * /my-bookings, because the reference alone is a weak credential — it travels
+ * in emails and gets forwarded — so anything beyond the booking's own summary
+ * is gated behind a code emailed to the address on file.
+ *
+ * Signing in to an account (brief §2.8) needs the identical rules keyed to an
+ * email instead, so the key was widened to a free-text `subject` rather than
+ * copying security-critical code into a second table:
+ *
+ *   `booking:<uuid>`  — reference + inbox, for customers with no account
+ *   `email:<address>` — the whole of the account sign-in
  *
  * `code_hash`, never the code: this row is what guards customer data, so a
  * database leak must not hand over live codes. Attempts are counted so a code
  * can be burned after a few wrong guesses rather than brute-forced — six digits
  * is only a million, and an unthrottled verify would walk it.
+ *
+ * Widening the key cost the old `booking_id` foreign key and its cascade
+ * delete. Harmless: bookings are cancelled, never deleted, and a code is dead
+ * ten minutes after it is issued either way.
  */
-export const bookingOtps = pgTable(
-  "booking_otps",
+export const otps = pgTable(
+  "otps",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    bookingId: uuid("booking_id")
-      .notNull()
-      .references(() => bookings.id, { onDelete: "cascade" }),
+    /** `booking:<uuid>` or `email:<address>`. Built by lib/otp.ts, never by hand. */
+    subject: text("subject").notNull(),
     codeHash: text("code_hash").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     attempts: integer("attempts").notNull().default(0),
@@ -500,8 +569,8 @@ export const bookingOtps = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
-    // Every lookup is "the newest live code for this booking".
-    byBooking: index("booking_otps_booking_idx").on(t.bookingId, t.createdAt),
+    // Every lookup is "the newest live code for this subject".
+    bySubject: index("otps_subject_idx").on(t.subject, t.createdAt),
   }),
 );
 
@@ -640,6 +709,48 @@ export const giftCardTxns = pgTable("gift_card_txns", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+/**
+ * The loyalty wallet (brief §2.8). A ledger, like gift_card_txns above — but
+ * deliberately *without* the running-balance column that table carries.
+ *
+ * The balance is a filtered SUM over these rows (lib/loyalty.ts), so it cannot
+ * drift out of step with its own history, and more importantly so that points
+ * come back on their own:
+ *
+ *   • a redemption row points at the booking it was spent on
+ *   • the balance query ignores rows whose booking is cancelled, a no-show, or
+ *     a hold that has sat unpaid past its window
+ *
+ * which means a cancellation, an abandoned checkout and a declined payment each
+ * return the points with no compensating write anywhere. Every earn row is tied
+ * to a booking too, so cancelling a paid booking revokes what it earned by the
+ * same rule. If a new case appears, widen the filter — do not add a refund path.
+ */
+export const loyaltyTxns = pgTable(
+  "loyalty_txns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    /**
+     * What this movement is attached to. Null only for movements that belong to
+     * no booking at all; every earn and every redemption has one, and the
+     * balance filter leans on it entirely.
+     */
+    bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "cascade" }),
+    /** Negative is a redemption. Whole points — there are no fractional points. */
+    deltaPoints: integer("delta_points").notNull(),
+    reason: text("reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // The only query is "this customer's ledger". The join to bookings drives
+    // through the bookings primary key, so booking_id needs no index of its own.
+    byCustomer: index("loyalty_txns_customer_idx").on(t.customerId, t.createdAt),
+  }),
+);
+
 export const promoCodes = pgTable(
   "promo_codes",
   {
@@ -771,8 +882,13 @@ export const stationRelations = relations(stations, ({ one, many }) => ({
   bookings: many(bookings),
 }));
 
-export const staffRelations = relations(staff, ({ one }) => ({
+export const staffRelations = relations(staff, ({ one, many }) => ({
   branch: one(branches, { fields: [staff.branchId], references: [branches.id] }),
+  timeOff: many(staffTimeOff),
+}));
+
+export const staffTimeOffRelations = relations(staffTimeOff, ({ one }) => ({
+  staff: one(staff, { fields: [staffTimeOff.staffId], references: [staff.id] }),
 }));
 
 export const bookingRelations = relations(bookings, ({ one, many }) => ({
@@ -823,4 +939,5 @@ export type Staff = typeof staff.$inferSelect;
 export type Branch = typeof branches.$inferSelect;
 export type Booking = typeof bookings.$inferSelect;
 export type Service = typeof services.$inferSelect;
+export type StaffTimeOff = typeof staffTimeOff.$inferSelect;
 export type StaffRole = (typeof staffRole.enumValues)[number];

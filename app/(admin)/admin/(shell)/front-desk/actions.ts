@@ -138,6 +138,10 @@ export async function closeTicket(id: string): Promise<Result> {
  * Reassign without checking anyone in — the receptionist swapping a technician
  * on a booking already in progress, or covering for someone who went home sick
  * (brief §3.3).
+ *
+ * Only ever *to* somebody. An empty technician is how the floor says "this
+ * booking arrived after the morning run", so clearing one by hand would forge
+ * that signal — the screen offers no way to, and neither does this.
  */
 export async function assignTechnician(id: string, technicianId: string): Promise<Result> {
   const actor = await requireCan("bookings.checkin");
@@ -159,3 +163,4 @@ export async function assignTechnician(id: string, technicianId: string): Promis
 
   return { ok: true };
 }
+

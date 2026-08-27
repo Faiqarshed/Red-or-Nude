@@ -15,8 +15,8 @@ import { db } from "@/lib/db";
 import { bookings, services } from "@/lib/db/schema";
 import { claimedWindows } from "@/lib/bookings";
 import { halalasToSar } from "@/lib/money";
-import { OTP_LENGTH, verifyOtp } from "@/lib/otp";
-import { refillDaysLeft, refillPriceHalalas } from "@/lib/refill";
+import { OTP_LENGTH, bookingSubject, verifyOtp } from "@/lib/otp";
+import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +45,6 @@ export async function POST(request: Request) {
       startsAt: bookings.startsAt,
       status: bookings.status,
       refillOfBookingId: bookings.refillOfBookingId,
-      refillExpiresAt: bookings.refillExpiresAt,
       servicePriceHalalas: services.priceHalalas,
       refillDays: services.refillDays,
     })
@@ -58,7 +57,7 @@ export async function POST(request: Request) {
   // from a real one with the wrong OTP.
   if (!row) return NextResponse.json({ error: "wrong" }, { status: 401 });
 
-  const check = await verifyOtp(row.id, parsed.data.otp);
+  const check = await verifyOtp(bookingSubject(row.id), parsed.data.otp);
   if (!check.ok) {
     const status = check.reason === "too-many-attempts" ? 429 : 401;
     return NextResponse.json({ error: check.reason }, { status });
@@ -67,22 +66,19 @@ export async function POST(request: Request) {
   const spentOn = await claimedWindows([row.id]);
   const settings = await getSettings(["refill_discount_percent"]);
 
-  const daysLeft = refillDaysLeft({
+  const offer = {
     startsAt: row.startsAt,
     status: row.status,
     refillDays: row.refillDays ?? 0,
     alreadyRefilled: spentOn.has(row.id),
     isRefill: Boolean(row.refillOfBookingId),
-    expiresAt: row.refillExpiresAt,
-  });
+  };
+  const daysLeft = refillDaysLeft(offer);
 
-  // The deadline shown to the customer, computed the same way the rule does so
-  // the date and the countdown can never disagree.
-  const expiresAt =
-    daysLeft > 0
-      ? (row.refillExpiresAt ??
-        new Date(row.startsAt.getTime() + (row.refillDays ?? 0) * 86_400_000))
-      : null;
+  // The deadline shown to the customer, from the same function the rule uses —
+  // it was worked out by hand here, which is exactly how a date and a countdown
+  // drift apart.
+  const expiresAt = daysLeft > 0 ? refillWindowEnd(offer) : null;
 
   return NextResponse.json({
     refill: {

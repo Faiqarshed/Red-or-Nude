@@ -12,6 +12,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx lib/db/seed.ts",
+    "seed:day": "tsx --conditions=react-server scripts/seed-day.ts",
     "check": "tsx --conditions=react-server scripts/check-booking.ts",
     "preview:invoice": "tsx --conditions=react-server scripts/preview-invoice.ts",
     "check:invoice": "tsx --conditions=react-server scripts/check-invoice-email.ts",
@@ -22,7 +23,8 @@
     "preview:giftcard": "tsx --conditions=react-server scripts/preview-giftcard.ts",
     "check:promo": "tsx --conditions=react-server scripts/check-promo.ts",
     "check:reviews": "tsx --conditions=react-server scripts/check-reviews.ts",
-    "check:station": "tsx --conditions=react-server scripts/check-station.ts"
+    "check:station": "tsx --conditions=react-server scripts/check-station.ts",
+    "check:loyalty": "tsx --conditions=react-server scripts/check-loyalty.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.8",

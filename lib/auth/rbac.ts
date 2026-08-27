@@ -112,6 +112,24 @@ export function canAny(role: StaffRole | undefined | null, caps: Capability[]): 
   return caps.some((c) => can(role, c));
 }
 
+/**
+ * Must this role belong to exactly one branch?
+ *
+ * A receptionist works one front desk and a technician stands at one chair, so
+ * "all branches" means nothing for either. It is not cosmetic: scopedBranchId()
+ * below reads a null branch as "no filter", so an unpinned receptionist would
+ * quietly see every branch's customers and bookings.
+ *
+ * The CEO spans branches by definition, and an admin may be regional.
+ *
+ * One definition, used by the staff form to grey the option out and by
+ * saveStaff to refuse it — a rule enforced in only one of those two places is a
+ * rule with a hole in it.
+ */
+export function mustHaveBranch(role: StaffRole): boolean {
+  return role === "receptionist" || role === "technician";
+}
+
 /** The CEO sees every branch; everyone else is pinned to the one they belong to. */
 export function scopedBranchId(
   role: StaffRole | undefined | null,

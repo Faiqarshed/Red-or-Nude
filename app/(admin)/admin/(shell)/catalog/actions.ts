@@ -45,7 +45,8 @@ const itemSchema = z.object({
   // Entered in riyals; stored in halalas.
   priceSar: z.coerce.number().min(0).max(100_000),
   durationMin: z.coerce.number().int().min(0).max(600),
-  // Services only. 0 = this service has no follow-up refill.
+  // Services only. Zero is how the form's "has a refill" tick stores "no" —
+  // one number rather than a boolean and a length that could contradict it.
   refillDays: z.coerce.number().int().min(0).max(365).optional(),
   image: z.string().max(400).nullable().optional(),
   isSeasonal: z.boolean().optional(),

@@ -11,6 +11,7 @@ import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { clearBooking, emptySelection, loadBooking, type BookingSelection } from "@/lib/booking";
 import { isValidSaudiMobile, toStoredPhone } from "@/lib/phone";
+import { REWARDS } from "@/lib/rewards";
 
 // Figma: Desktop-2 payment step (276:1902 / 276:6624) + success modal (276:6765).
 //
@@ -39,6 +40,7 @@ const METHOD_KEYS = ["cardTitle", "madaTitle", "stcTitle", "appleTitle"] as cons
 export default function PaymentPage() {
   const { c, lang } = useI18n();
   const p = c.payment;
+  const a = c.account;
   const router = useRouter();
 
   const [booking, setBooking] = useState<BookingSelection>(emptySelection);
@@ -65,11 +67,38 @@ export default function PaymentPage() {
   const [promoDiscountSar, setPromoDiscountSar] = useState(0);
   const [promoError, setPromoError] = useState<string | null>(null);
   const [promoChecking, setPromoChecking] = useState(false);
+  /**
+   * The loyalty wallet (brief §2.8). Opt-in: nothing is spent unless a rung is
+   * picked, the same way nothing is discounted unless a code is typed.
+   *
+   * `redeemPoints` is the rung the *server* accepted, not the one clicked — a
+   * refused rung clears back to null so the summary can never show a discount
+   * the charge won't honour.
+   */
+  /** The balance, or null when signed out — which is when the picker is hidden. */
+  const [balance, setBalance] = useState<number | null>(null);
+  const [redeemPoints, setRedeemPoints] = useState<number | null>(null);
+  const [redeemDiscountSar, setRedeemDiscountSar] = useState(0);
+  const [redeemError, setRedeemError] = useState<string | null>(null);
 
   useEffect(() => {
     const saved = loadBooking();
     if (saved) setBooking(saved);
     setLoaded(true);
+  }, []);
+
+  // The ladder and the balance. Signed out this comes back with `signedIn:
+  // false` and the picker simply never renders — an account is optional, and a
+  // guest checkout must not grow a sign-in wall (brief §2.8).
+  useEffect(() => {
+    void fetch("/api/loyalty/quote")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.signedIn) setBalance(d.balance);
+      })
+      .catch(() => {
+        /* the wallet is an extra; a checkout must still work without it */
+      });
   }, []);
 
   // A direct visit with nothing selected has nothing to pay for.
@@ -89,8 +118,13 @@ export default function PaymentPage() {
     return (["card", "mada", "stc", "apple"] as const)[i === -1 ? 0 : i];
   };
 
-  /** What the customer actually pays: the quoted bill, less any code. */
-  const payableTotal = booking.total - promoDiscountSar;
+  /**
+   * What the customer actually pays: the quoted bill, less the code, less the
+   * reward. In that order, matching lib/bookings.ts exactly — the reward is
+   * quoted against the post-promo figure there, so quoting it against anything
+   * else here would show a number the charge disagrees with.
+   */
+  const payableTotal = booking.total - promoDiscountSar - redeemDiscountSar;
 
   const promoReasonText = (reason: string, minTotalHalalas?: number): string => {
     const e = p.promoErrors;
@@ -154,6 +188,69 @@ export default function PaymentPage() {
     setPromoInput("");
   };
 
+  /**
+   * Pick a rung, or unpick one.
+   *
+   * Re-quoted server-side on every click rather than computed here: the balance
+   * can have moved since the page loaded, and the percentage applies to the
+   * post-promo total which changes when a code is applied or removed.
+   */
+  const pickReward = async (points: number | null) => {
+    setRedeemError(null);
+    if (points === null) {
+      setRedeemPoints(null);
+      setRedeemDiscountSar(0);
+      return;
+    }
+    try {
+      const res = await fetch("/api/loyalty/quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          points,
+          // The bill after the code, which is what the server prices against.
+          totalHalalas: Math.round((booking.total - promoDiscountSar) * 100),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data.ok) {
+        setRedeemPoints(null);
+        setRedeemDiscountSar(0);
+        setRedeemError(rewardReasonText(res.status === 401 ? "signed-out" : data.reason));
+        // The refusal carries the real balance, so a stale ladder corrects
+        // itself instead of offering the same rung again.
+        if (typeof data.balance === "number") setBalance(data.balance);
+        return;
+      }
+
+      setRedeemPoints(data.points);
+      setRedeemDiscountSar(data.discountHalalas / 100);
+    } catch {
+      setRedeemError(a.redeemErrors.unknown);
+    }
+  };
+
+  /** The percentage of the picked rung. Read off the ladder, never stored. */
+  const redeemPercent = redeemPoints ? (REWARDS.find((r) => r.points === redeemPoints)?.percent ?? 0) : 0;
+
+  const rewardReasonText = (reason: string): string => {
+    const e = a.redeemErrors;
+    if (reason === "locked") return e.locked;
+    if (reason === "signed-out") return e.signedOut;
+    return e.unknown;
+  };
+
+  // A code applied or removed moves the total the percentage applies to, so a
+  // reward picked before it is now priced against the wrong number. Re-quoting
+  // is one request and keeps the summary honest.
+  useEffect(() => {
+    if (redeemPoints !== null) void pickReward(redeemPoints);
+    // Intentionally keyed on the base total only: re-running on redeemPoints
+    // would loop, since pickReward sets it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [promoDiscountSar, booking.total]);
+
   const confirm = async () => {
     if (!hasSelection || submitting) return;
     // PaymentMethods has its own confirm button, which doesn't know about these
@@ -190,6 +287,9 @@ export default function PaymentPage() {
             refillOfCode: booking.refillOf ?? null,
             stationToken: booking.stationToken ?? null,
             promoCode: promoApplied,
+            // Which rung, not whose points — the server reads that from the
+            // session cookie. See app/api/bookings/route.ts.
+            redeemPoints,
           }),
         });
 
@@ -206,6 +306,15 @@ export default function PaymentPage() {
             setPromoApplied(null);
             setPromoDiscountSar(0);
             setPromoError(promoReasonText(data.promoReason ?? "unknown", data.minTotalHalalas));
+            setError(p.promoRejected);
+          }
+          // Same shape as a refused code: the hold was refused rather than
+          // charged at the wrong price, so clear the reward and say why.
+          else if (data.error === "reward-invalid") {
+            setRedeemPoints(null);
+            setRedeemDiscountSar(0);
+            setRedeemError(rewardReasonText(data.rewardReason ?? "unknown"));
+            if (typeof data.pointsBalance === "number") setBalance(data.pointsBalance);
             setError(p.promoRejected);
           }
           else if (res.status === 409) setError(p.slotTaken);
@@ -397,7 +506,84 @@ export default function PaymentPage() {
                 )}
               </div>
 
-              {(booking.total < booking.grossTotal || promoDiscountSar > 0) && (
+              {/* The loyalty ladder (brief §2.8). Rendered only for a signed-in
+                  customer — an account is optional and a guest checkout must
+                  never grow a sign-in wall. Locked rungs are shown but not
+                  selectable, so the customer can see what they are working
+                  towards instead of an empty box. */}
+              {balance !== null && (
+                <div className="mt-4">
+                  <div className="mb-1.5 flex items-center justify-between gap-2">
+                    <span className="text-[12px] text-ink/55">{a.redeemLabel}</span>
+                    <span className="text-[11px] font-semibold text-red">
+                      {a.redeemBalance.replace("{n}", String(balance))}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {REWARDS.map((r) => {
+                      const unlocked = balance >= r.points;
+                      const picked = redeemPoints === r.points;
+                      return (
+                        <label
+                          key={r.points}
+                          className={`flex items-center justify-between gap-3 rounded-[12px] border px-4 py-3 text-[13px] ${
+                            picked
+                              ? "border-red/40 bg-red/[0.04] text-red"
+                              : unlocked
+                                ? "cursor-pointer border-black/[0.08] text-ink hover:border-red/30"
+                                : "cursor-not-allowed border-black/[0.05] text-ink/35"
+                          }`}
+                        >
+                          <span className="flex items-center gap-2.5">
+                            <input
+                              type="radio"
+                              name="reward"
+                              checked={picked}
+                              disabled={!unlocked}
+                              onChange={() => void pickReward(r.points)}
+                              className="accent-red"
+                            />
+                            <span className="font-semibold">
+                              {a.rewardRow
+                                .replace("{points}", String(r.points))
+                                .replace("{percent}", String(r.percent))}
+                            </span>
+                          </span>
+                          {!unlocked && (
+                            <span className="text-[11px]">
+                              {a.ladderLocked.replace("{n}", String(r.points - balance))}
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
+
+                    {/* Opt out explicitly. Without this row the only way to
+                        un-pick a radio is to reload the page. */}
+                    <label className="flex cursor-pointer items-center gap-2.5 px-4 py-1.5 text-[12px] text-ink/45">
+                      <input
+                        type="radio"
+                        name="reward"
+                        checked={redeemPoints === null}
+                        onChange={() => void pickReward(null)}
+                        className="accent-red"
+                      />
+                      {a.redeemNone}
+                    </label>
+                  </div>
+
+                  {redeemError && (
+                    <p role="alert" className="mt-1.5 text-[11px] text-red">
+                      {redeemError}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {(booking.total < booking.grossTotal ||
+                promoDiscountSar > 0 ||
+                redeemDiscountSar > 0) && (
                 <div className="mt-4 space-y-1.5 rounded-[14px] bg-cream/60 p-4 text-[13px]">
                   <div className="flex items-center justify-between text-ink/55">
                     <span className="flex items-center gap-1">
@@ -422,6 +608,19 @@ export default function PaymentPage() {
                         {promoDiscountSar}
                       </span>
                       <span dir="ltr">{promoApplied}</span>
+                    </div>
+                  )}
+                  {redeemDiscountSar > 0 && (
+                    <div className="flex items-center justify-between font-semibold text-red">
+                      <span className="flex items-center gap-1">
+                        −<Riyal className="h-3 w-3" />
+                        {redeemDiscountSar}
+                      </span>
+                      <span>
+                        {a.redeemApplied
+                          .replace("{percent}", String(redeemPercent))
+                          .replace("{points}", String(redeemPoints ?? 0))}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -528,9 +727,6 @@ function SuccessModal({
                   <span className="font-semibold text-ink">{t.serviceName[lang]}</span>
                 )}
               </div>
-              <p className="mt-2 text-[11px] text-ink/40" dir="ltr">
-                {p.reference}: {t.code}
-              </p>
             </div>
           ))}
         </div>
@@ -576,12 +772,10 @@ function SuccessModal({
           </button>
         </div>
 
-        {/* The reference above is the customer's only way back in, so say so
-            here rather than relying on the email having arrived yet. */}
-        <p className="mt-4 text-[11px] text-ink/45">{p.keepReference}</p>
+        {/* The reference goes out by email only — nothing here to memorise. */}
         <Link
           href="/my-bookings"
-          className="mt-1 inline-block text-[12px] font-semibold text-red underline underline-offset-4"
+          className="mt-4 inline-block text-[12px] font-semibold text-red underline underline-offset-4"
         >
           {p.myBookings}
         </Link>

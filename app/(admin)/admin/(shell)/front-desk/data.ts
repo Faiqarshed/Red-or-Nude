@@ -9,11 +9,14 @@ import { and, asc, eq, gte, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers, staff, stations, type Localized } from "@/lib/db/schema";
 import { riyadhDayRange } from "@/lib/time";
+import { offOn } from "@/lib/assign";
 
 export type FrontDeskRow = {
   id: string;
   ticketNo: string | null;
   startsAt: string;
+  /** Needed to tell whether two of the day's bookings collide. */
+  endsAt: string;
   status: string;
   finishedAt: string | null;
   serviceName: Localized | null;
@@ -23,7 +26,18 @@ export type FrontDeskRow = {
   technicianName: string | null;
 };
 
-export type TechnicianOption = { id: string; name: string };
+export type TechnicianOption = {
+  id: string;
+  name: string;
+  /**
+   * Not in today (staff_time_off).
+   *
+   * Whether she is *free* is deliberately not here: that depends on which
+   * booking you are looking at, so the screen works it out per row against the
+   * day it already has. "Busy" is a fact about a slot, not about a person.
+   */
+  off: boolean;
+};
 
 export type FrontDeskData = {
   rows: FrontDeskRow[];
@@ -34,12 +48,13 @@ export type FrontDeskData = {
 export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
   const { start, end } = riyadhDayRange();
 
-  const [rows, technicians] = await Promise.all([
+  const [rows, technicians, off] = await Promise.all([
     db
       .select({
         id: bookings.id,
         ticketNo: bookings.ticketNo,
         startsAt: bookings.startsAt,
+        endsAt: bookings.endsAt,
         status: bookings.status,
         finishedAt: bookings.finishedAt,
         serviceName: bookings.serviceName,
@@ -68,7 +83,11 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
         and(eq(staff.active, true), eq(staff.role, "technician"), eq(staff.branchId, branchId)),
       )
       .orderBy(asc(staff.name)),
+
+    offOn(),
   ]);
+
+
 
   // Counted here rather than in four more round trips: the day's rows are
   // already in memory and a salon books tens of appointments a day, not
@@ -90,9 +109,10 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
     rows: rows.map((r) => ({
       ...r,
       startsAt: r.startsAt.toISOString(),
+      endsAt: r.endsAt.toISOString(),
       finishedAt: r.finishedAt?.toISOString() ?? null,
     })),
-    technicians,
+    technicians: technicians.map((tech) => ({ ...tech, off: off.has(tech.id) })),
     stats,
   };
 }

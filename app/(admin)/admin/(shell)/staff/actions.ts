@@ -5,8 +5,9 @@ import { hash } from "bcryptjs";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { staff } from "@/lib/db/schema";
+import { staff, staffTimeOff } from "@/lib/db/schema";
 import { requireCan, type SessionStaff } from "@/lib/auth/guard";
+import { mustHaveBranch } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
 import type { StaffRole } from "@/lib/db/schema";
 import { issueMonthlyCode } from "@/lib/staff-codes";
@@ -31,7 +32,10 @@ const saveSchema = z.object({
   branchId: z.string().uuid().nullable().optional(),
   password: z.string().min(8).max(200).optional().or(z.literal("")),
   active: z.boolean(),
-});
+})
+  // The drawer greys the option out; this is what enforces it. See
+  // mustHaveBranch for why an unpinned receptionist is a data leak.
+  .refine((d) => !mustHaveBranch(d.role) || !!d.branchId, { message: "branch-required" });
 
 export type StaffInput = z.input<typeof saveSchema>;
 
@@ -59,7 +63,10 @@ async function wouldOrphanCeos(targetId: string): Promise<boolean> {
 export async function saveStaff(input: StaffInput): Promise<Result> {
   const actor = await requireCan("staff.manage");
   const parsed = saveSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: "invalid" };
+  if (!parsed.success) {
+    const branch = parsed.error.issues.some((i) => i.message === "branch-required");
+    return { ok: false, error: branch ? "branch-required" : "invalid" };
+  }
   const d = parsed.data;
 
   const existing = d.id
@@ -176,5 +183,95 @@ export async function deleteStaff(id: string): Promise<Result> {
   await recordAudit(actor, { action: "delete", entity: "staff", entityId: id });
 
   revalidatePath("/admin/staff");
+  return { ok: true };
+}
+
+// ------------------------------------------------------------- days off -----
+//
+// Who is not in, so the morning assignment run and the check-in picker both know
+// to leave them out (lib/assign/index.ts). Dates only, and inclusive at both
+// ends — the same day in both fields is one day off.
+
+const timeOffSchema = z
+  .object({
+    staffId: z.string().uuid(),
+    // `<input type="date">` hands back exactly this shape, which is also what
+    // the column stores — so there is no parsing, and no timezone to get wrong.
+    startsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    endsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    reason: z.string().trim().max(200).optional(),
+  })
+  // A range that ends before it starts covers no days at all and would sit in
+  // the table looking like leave that isn't working. Refused, the same way
+  // saveBranchHours refuses a day that closes before it opens.
+  .refine((d) => d.endsOn >= d.startsOn, { message: "bad-range" });
+
+export type TimeOffInput = z.input<typeof timeOffSchema>;
+
+export async function addTimeOff(input: TimeOffInput): Promise<Result> {
+  const actor = await requireCan("staff.manage");
+
+  const parsed = timeOffSchema.safeParse(input);
+  if (!parsed.success) {
+    const bad = parsed.error.issues[0]?.message === "bad-range";
+    return { ok: false, error: bad ? "bad-range" : "invalid" };
+  }
+  const d = parsed.data;
+
+  const [target] = await db.select().from(staff).where(eq(staff.id, d.staffId)).limit(1);
+  if (!target) return { ok: false, error: "not-found" };
+
+  const denied = await assertMayEdit(actor, target.role, target.role);
+  if (denied) return { ok: false, error: denied };
+
+  const [row] = await db
+    .insert(staffTimeOff)
+    .values({
+      staffId: d.staffId,
+      startsOn: d.startsOn,
+      endsOn: d.endsOn,
+      reason: d.reason || null,
+    })
+    .returning({ id: staffTimeOff.id });
+
+  await recordAudit(actor, {
+    action: "create",
+    entity: "staff_time_off",
+    entityId: row.id,
+    diff: {
+      staffId: { from: null, to: d.staffId },
+      range: { from: null, to: `${d.startsOn}…${d.endsOn}` },
+    },
+  });
+
+  revalidatePath("/admin/staff");
+  revalidatePath("/admin");
+  revalidatePath("/admin/front-desk");
+  return { ok: true };
+}
+
+export async function removeTimeOff(id: string): Promise<Result> {
+  const actor = await requireCan("staff.manage");
+
+  const [row] = await db.select().from(staffTimeOff).where(eq(staffTimeOff.id, id)).limit(1);
+  if (!row) return { ok: false, error: "not-found" };
+
+  const [target] = await db.select().from(staff).where(eq(staff.id, row.staffId)).limit(1);
+  if (target) {
+    const denied = await assertMayEdit(actor, target.role, target.role);
+    if (denied) return { ok: false, error: denied };
+  }
+
+  await db.delete(staffTimeOff).where(eq(staffTimeOff.id, id));
+  await recordAudit(actor, {
+    action: "delete",
+    entity: "staff_time_off",
+    entityId: id,
+    diff: { range: { from: `${row.startsOn}…${row.endsOn}`, to: null } },
+  });
+
+  revalidatePath("/admin/staff");
+  revalidatePath("/admin");
+  revalidatePath("/admin/front-desk");
   return { ok: true };
 }

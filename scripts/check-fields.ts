@@ -158,49 +158,26 @@ assert.equal(refillDaysLeft({ ...served, refillDays: 30 }, today), 12);
 assert.equal(refillDaysLeft({ ...served, refillDays: 14 }, today), 0, "14-day window has lapsed");
 assert.equal(refillDaysLeft({ ...served, refillDays: 0 }, today), 0, "no window on this service");
 
-// An admin grant replaces the derived deadline — it can extend...
-assert.equal(
-  refillDaysLeft({ ...served, refillDays: 14, expiresAt: new Date("2026-09-18T12:00:00Z") }, today),
-  30,
-  "a grant revives a lapsed window",
-);
-// ...create one where the service has none...
-assert.equal(
-  refillDaysLeft({ ...served, refillDays: 0, expiresAt: new Date("2026-08-24T12:00:00Z") }, today),
-  5,
-  "a grant works on a service with refillDays 0",
-);
-// ...and shorten one.
-assert.equal(
-  refillDaysLeft({ ...served, refillDays: 30, expiresAt: new Date("2026-08-21T12:00:00Z") }, today),
-  2,
-  "a grant can shorten as well as extend",
-);
-// A grant already in the past offers nothing.
-assert.equal(
-  refillDaysLeft({ ...served, refillDays: 30, expiresAt: new Date("2026-08-10T12:00:00Z") }, today),
-  0,
-);
-console.log("  refill: admin grants override the derived window ✓");
-
-// No grant overrides these three — the refill is spent, or was never on offer.
-for (const override of [{ alreadyRefilled: true }, { isRefill: true }]) {
+// The deadline belongs to the service and nothing moves it per booking. There
+// used to be an admin grant that could; it meant two customers on the same
+// service holding different deadlines with nothing on screen saying why.
+for (const spent of [{ alreadyRefilled: true }, { isRefill: true }]) {
   assert.equal(
-    refillDaysLeft({ ...served, ...override, refillDays: 30, expiresAt: new Date("2027-01-01T00:00:00Z") }, today),
+    refillDaysLeft({ ...served, ...spent, refillDays: 30 }, today),
     0,
-    `a grant must not revive: ${JSON.stringify(override)}`,
+    `spent or self-refilled offers nothing: ${JSON.stringify(spent)}`,
   );
 }
-// An appointment that has not happened yet cannot be refilled, granted or not.
+// An appointment that has not happened yet cannot be refilled.
 assert.equal(
   refillDaysLeft(
-    { ...served, startsAt: new Date("2026-12-01T10:00:00Z"), status: "confirmed", refillDays: 30, expiresAt: new Date("2027-01-01T00:00:00Z") },
+    { ...served, startsAt: new Date("2026-12-01T10:00:00Z"), status: "confirmed", refillDays: 30 },
     today,
   ),
   0,
   "unserved bookings stay ineligible",
 );
-console.log("  refill: grants cannot revive a spent or unserved booking ✓");
+console.log("  refill: spent, self-refilled and unserved bookings offer nothing ✓");
 
 // The deadline the picker greys out and the one the server enforces are the
 // same function, so a date can never be offered and then refused.
@@ -208,13 +185,6 @@ assert.equal(
   refillWindowEnd({ ...served, refillDays: 30 })?.toISOString().slice(0, 10),
   "2026-08-31",
   "derived window ends 30 days after the appointment",
-);
-assert.equal(
-  refillWindowEnd({ ...served, refillDays: 30, expiresAt: new Date("2026-09-18T12:00:00Z") })
-    ?.toISOString()
-    .slice(0, 10),
-  "2026-09-18",
-  "a grant replaces the derived deadline",
 );
 assert.equal(refillWindowEnd({ ...served, refillDays: 0 }), null, "no window, no deadline");
 
