@@ -30,20 +30,8 @@ const fadeBottom = { maskImage: FADE_BOTTOM, WebkitMaskImage: FADE_BOTTOM } as c
  */
 function CardCta({ label }: { label: string }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-full border-[2px] border-red px-5 py-1.5 font-display text-[clamp(12px,0.85vw,15px)] font-semibold text-red transition-colors group-hover:bg-red group-hover:text-white">
+    <span className="inline-flex items-center rounded-full border-[2px] border-red px-5 py-1.5 font-display text-[clamp(12px,0.85vw,15px)] font-semibold text-red transition-colors group-hover:bg-red group-hover:text-white">
       {label}
-      {/* Points the way the language reads; the repo's idiom for this is
-          rtl:rotate-180 (see components/booking/ScheduleModal.tsx). */}
-      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 rtl:rotate-180" aria-hidden>
-        <path
-          d="M5 12h14M13 6l6 6-6 6"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
     </span>
   );
 }
@@ -124,7 +112,14 @@ export default function Hero() {
               href={card.href}
               // `group` so the capsule below can respond to a hover anywhere on
               // the card, not only on the capsule itself.
-              className="group relative block rounded-card bg-white px-[8.7%] py-[9%] text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] transition-shadow hover:shadow-[0_24px_60px_rgba(184,0,7,0.12)] md:aspect-[530/320]"
+              //
+              // A flex column, not a block with the capsule absolutely pinned to
+              // the bottom. Pinning worked only while every description fitted on
+              // one line — the gift card's runs to two, and the capsule sat on top
+              // of it. Here the description takes the room it needs and `mt-auto`
+              // pushes the capsule down to whatever is left, so the three still
+              // line up across the row and none of them can ever collide.
+              className="group flex flex-col rounded-card bg-white px-[8.7%] py-[9%] text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] transition-shadow hover:shadow-[0_24px_60px_rgba(184,0,7,0.12)] md:aspect-[530/320]"
             >
               <p className="font-display text-[clamp(14px,1.0vw,19px)] font-light text-ink/70">
                 {card.kicker}
@@ -135,7 +130,7 @@ export default function Hero() {
               <p className="mt-[6%] font-display text-[clamp(14px,1.0vw,19px)] font-light leading-relaxed text-ink/70">
                 {card.desc}
               </p>
-              <div className="mt-6 md:absolute md:bottom-[12%] md:mt-0 md:ltr:left-[8.7%] md:rtl:right-[8.7%]">
+              <div className="mt-6 md:mt-auto md:pt-5">
                 <CardCta label={card.cta} />
               </div>
             </Link>
