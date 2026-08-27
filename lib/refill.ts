@@ -21,25 +21,17 @@ export type RefillInput = {
    * price. Flip this one condition if the salon wants refills to chain.
    */
   isRefill: boolean;
-  /**
-   * An admin-granted deadline (`bookings.refill_expires_at`), overriding the
-   * window derived from `refillDays`.
-   *
-   * It can also *create* an offer where the service carries none, so a manager
-   * can hand a refill to an unhappy customer on a service with `refillDays: 0`.
-   * That is the whole point of granting it by hand — but it is still subject to
-   * every other rule below: a cancelled booking, an unserved one, or one whose
-   * window was already spent stays ineligible however generous the grant.
-   */
-  expiresAt?: Date | null;
 };
 
 const DAY_MS = 86_400_000;
 
 /**
- * When the offer lapses — an admin grant if there is one, otherwise the
- * service's own window measured from the appointment. Null when the service
- * carries no window and nothing was granted.
+ * When the offer lapses: the service's own window, measured from the
+ * appointment. Null when the service carries no refill at all.
+ *
+ * The deadline is the service's and nobody's to move. It was once overridable
+ * per booking, which meant two customers on the same service could hold
+ * different deadlines and neither the catalogue nor the invoice said why.
  *
  * Exported because the deadline has two jobs, and they must not disagree:
  * deciding whether the offer is still open *today*, and deciding which
@@ -47,7 +39,6 @@ const DAY_MS = 86_400_000;
  * places is how a picker ends up offering slots the server then rejects.
  */
 export function refillWindowEnd(b: RefillInput): Date | null {
-  if (b.expiresAt) return b.expiresAt;
   if (b.refillDays > 0) return new Date(b.startsAt.getTime() + b.refillDays * DAY_MS);
   return null;
 }
@@ -58,13 +49,12 @@ export function refillWindowEnd(b: RefillInput): Date | null {
  * `daysLeft > 0` is a second field to keep in sync.
  */
 export function refillDaysLeft(b: RefillInput, now: Date = new Date()): number {
-  // Already spent, or a refill of its own — nothing to offer, and no grant
-  // overrides either: both mean this booking's one refill is gone or was never
-  // its to give.
+  // Already spent, or a refill of its own — either way this booking's one
+  // refill is gone, or was never its to give.
   if (b.alreadyRefilled || b.isRefill) return 0;
 
-  // A service with no window is not offered unless someone granted one.
-  if (b.refillDays <= 0 && !b.expiresAt) return 0;
+  // The service carries no refill. Nothing can add one after the fact.
+  if (b.refillDays <= 0) return 0;
 
   // You cannot refill something that has not happened yet. `completed` is the
   // salon pressing End; `confirmed` in the past covers the common case of staff
@@ -73,9 +63,6 @@ export function refillDaysLeft(b: RefillInput, now: Date = new Date()): number {
     b.status === "completed" || (b.status === "confirmed" && b.startsAt.getTime() <= now.getTime());
   if (!served) return 0;
 
-  // The grant replaces the derived deadline outright rather than extending it,
-  // so shortening a window is possible too — and so an edit to the service's
-  // refillDays can never move a deadline a customer was already told.
   const endsAt = refillWindowEnd(b);
   if (!endsAt) return 0;
 

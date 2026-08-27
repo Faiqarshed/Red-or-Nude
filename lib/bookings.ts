@@ -286,7 +286,6 @@ async function loadRefillParent(code: string) {
       startsAt: bookings.startsAt,
       status: bookings.status,
       refillOfBookingId: bookings.refillOfBookingId,
-      refillExpiresAt: bookings.refillExpiresAt,
       removalTypeId: bookings.removalTypeId,
       refillDays: services.refillDays,
     })
@@ -307,7 +306,6 @@ async function loadRefillParent(code: string) {
     // Renamed for refillDaysLeft(), which takes the deadline as `expiresAt`.
     // Without this an admin-granted window is honoured in the booking history
     // and then refused here, which is the worst of both.
-    expiresAt: parent.refillExpiresAt,
   };
 }
 

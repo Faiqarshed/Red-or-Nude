@@ -15,18 +15,11 @@ import Link from "next/link";
 import { Card, EmptyState, PageHeader, StatCard, Badge } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
-import { UTC_OFFSET_HOURS } from "@/lib/time";
+import { localTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import type { PeriodKey, TechnicianStats } from "@/lib/performance";
 import type { MyDayBooking } from "./data";
 import { finishService, startService } from "./actions";
-
-/** Riyadh wall clock, HH:MM. */
-function localTime(iso: string): string {
-  return new Date(new Date(iso).getTime() + UTC_OFFSET_HOURS * 3600_000)
-    .toISOString()
-    .slice(11, 16);
-}
 
 function minutesBetween(fromIso: string, to: number): number {
   return Math.max(0, Math.round((to - new Date(fromIso).getTime()) / 60000));

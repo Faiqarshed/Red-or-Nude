@@ -6,7 +6,7 @@ import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, List, Plus } fr
 import { Badge, Button, Card, EmptyState, PageHeader, scoreTone } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
-import { UTC_OFFSET_HOURS } from "@/lib/time";
+import { UTC_OFFSET_HOURS, localTime } from "@/lib/time";
 import { pick } from "@/lib/localized";
 import type { Localized } from "@/lib/db/schema";
 import { resolveNoShow } from "./actions";
@@ -49,7 +49,6 @@ export type BookingRow = {
   /** The booking this one refills, if any — shown so staff know why it's cheaper. */
   refillOfCode?: string | null;
   /** An admin-granted refill deadline, if one was set by hand. */
-  refillExpiresAt?: string | null;
   /** What staff wrote when they cleared a no-show flag, if they wrote anything. */
   noShowNote?: string | null;
   /** Null when no invitation was ever created for this booking. */
@@ -105,10 +104,6 @@ function riyadhParts(iso: string): { date: string; time: string } {
     new Date(iso).getTime() + UTC_OFFSET_HOURS * 3600_000,
   ).toISOString();
   return { date: shifted.slice(0, 10), time: shifted.slice(11, 16) };
-}
-
-function localTime(iso: string): string {
-  return riyadhParts(iso).time;
 }
 
 function minutesFromDayStart(iso: string): number {

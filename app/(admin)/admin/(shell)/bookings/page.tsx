@@ -74,7 +74,6 @@ export default async function BookingsPage({
         customerPhone: customers.phone,
         // Why this booking is cheaper than the price list says.
         refillOfBookingId: bookings.refillOfBookingId,
-        refillExpiresAt: bookings.refillExpiresAt,
         noShowNote: bookings.noShowNote,
         // How the appointment actually went. `reviews_booking_unique` means this
         // join can never fan a booking out into two rows, so it costs one join
@@ -196,7 +195,6 @@ export default async function BookingsPage({
           customerName: r.customerName,
           customerPhone: r.customerPhone,
           refillOfCode: r.refillOfBookingId ? (parentCodes.get(r.refillOfBookingId) ?? null) : null,
-          refillExpiresAt: r.refillExpiresAt?.toISOString() ?? null,
           noShowNote: r.noShowNote,
           // Null means no invitation exists at all — which for a completed
           // booking is worth saying out loud, since one should have been sent.

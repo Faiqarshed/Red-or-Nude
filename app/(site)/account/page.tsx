@@ -46,7 +46,6 @@ export default async function AccountPage() {
         serviceName: bookings.serviceName,
         totalHalalas: bookings.totalHalalas,
         refillOfBookingId: bookings.refillOfBookingId,
-        refillExpiresAt: bookings.refillExpiresAt,
         refillDays: services.refillDays,
       })
       .from(bookings)
@@ -72,7 +71,6 @@ export default async function AccountPage() {
         refillDays: r.refillDays ?? 0,
         alreadyRefilled: spentOn.has(r.id),
         isRefill: Boolean(r.refillOfBookingId),
-        expiresAt: r.refillExpiresAt,
       },
       now,
     );
