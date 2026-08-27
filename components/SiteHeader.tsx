@@ -35,7 +35,10 @@ export default function SiteHeader() {
   const signInPill = signedIn ? null : (
     <Link
       href="/account"
-      className="rounded-full border-[1.5px] border-red px-6 py-1.5 font-serif text-lg italic text-red transition-colors hover:bg-red hover:text-white"
+      // Filled by default and hollow on hover — the language toggle's states,
+      // inverted. Same pill, so the two still read as one control group, but
+      // the solid one is obviously the thing to press.
+      className="rounded-full border-[1.5px] border-red bg-red px-6 py-1.5 font-serif text-lg italic text-white transition-colors hover:bg-transparent hover:text-red"
     >
       {c.account.signIn}
     </Link>
@@ -132,7 +135,7 @@ export default function SiteHeader() {
               <Link
                 href="/account"
                 onClick={() => setOpen(false)}
-                className="rounded-full border-[1.5px] border-red px-5 py-1.5 font-serif italic text-red transition-colors hover:bg-red hover:text-white"
+                className="rounded-full border-[1.5px] border-red bg-red px-5 py-1.5 font-serif italic text-white transition-colors hover:bg-transparent hover:text-red"
               >
                 {c.account.signIn}
               </Link>
