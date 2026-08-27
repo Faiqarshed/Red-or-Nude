@@ -154,6 +154,12 @@ Twice, never for the same booking:
   `bookings.tech_notified_at`;
 - **at check-in** — unchanged from before, for a walk-in nobody was expecting.
 
+The first of those is **not in `vercel.json`**: Hobby allows no cron more often
+than daily, and a `*/15` entry fails the whole deployment rather than being
+ignored — which takes the morning run down with it. The endpoint is still there
+and still guarded by `CRON_SECRET`; point any outside scheduler at it, or go
+without and let check-in be the technician's first notice.
+
 Check-in stamps `tech_notified_at` too, so a customer who arrives early never
 costs her technician a second copy. The reminder job stamps *before* sending:
 `notifyTechnician` never throws, so a failure there is one missing nudge, while
@@ -171,7 +177,7 @@ No new template — `renderAssignmentEmail` already said exactly this.
 | `lib/assign/index.ts` | `offOn`, `planAssignments`, `assignDay`; time off in `pickTechnician` |
 | `app/api/cron/assign-day/route.ts` | the morning run |
 | `app/api/cron/tech-reminders/route.ts` | the "starting soon" mail |
-| `vercel.json` | both schedules |
+| `vercel.json` | the morning schedule (see §8 for why the reminder job is not there) |
 | `lib/settings.ts` | `assign_notify_min` |
 | `app/(admin)/admin/(shell)/bookings/actions.ts` | stamps `tech_notified_at` at check-in |
 | `app/(admin)/admin/(shell)/staff/*` | the days-off block |

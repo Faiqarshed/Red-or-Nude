@@ -1,7 +1,15 @@
 // "Your next customer is in half an hour" — sent to the assigned technician.
 //
-// Schedule every quarter hour in vercel.json:
-//   { "crons": [{ "path": "/api/cron/tech-reminders", "schedule": "*/15 * * * *" }] }
+// NOT scheduled in vercel.json. It wants a quarter-hourly run, and Vercel's
+// Hobby plan refuses any cron more frequent than once a day — the deployment
+// fails outright on `*/15 * * * *`, taking the morning assignment job down with
+// it. Until the project is on Pro, drive this from outside instead:
+//
+//   curl -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/cron/tech-reminders
+//
+// from any scheduler that can fire every 15 minutes (GitHub Actions, cron-job.org,
+// a box you already own). Unscheduled, the technician still learns about her
+// customer at check-in — she just loses the half-hour of warning.
 //
 // The window (`assign_notify_min`) must stay comfortably wider than the gap
 // between runs, or an appointment can fall between two firings and be missed.

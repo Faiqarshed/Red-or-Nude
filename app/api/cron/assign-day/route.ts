@@ -2,7 +2,10 @@
 //
 // Schedule this for early morning in vercel.json:
 //   { "crons": [{ "path": "/api/cron/assign-day", "schedule": "0 4 * * *" }] }
-// 04:00 UTC is 07:00 in Riyadh, comfortably before the first appointment.
+// 04:00 UTC is 07:00 in Riyadh, comfortably before the first appointment. On
+// the Hobby plan Vercel fires a daily cron somewhere inside its hour rather
+// than on the minute, so read that as 07:00–08:00 — still ahead of the 09:00
+// open, and the job is idempotent anyway.
 //
 // Safe to run more than once, and safe to run late: assignDay only fills rows
 // where technician_id is null, so a retry, a double fire, or a mid-morning run
