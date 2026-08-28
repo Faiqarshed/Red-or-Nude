@@ -434,6 +434,22 @@ const ar = {
     am: "صباحاً",
     pm: "مساءً",
   },
+
+  chat: {
+    open: "اسألينا",
+    title: "مساعدة ريد أور نيود",
+    intro: "أسألي عن خدماتنا وأسعارها، أوقات الفروع، أو الأسئلة الشائعة.",
+    // Not decoration. The replies come from a model, and on the free tier the
+    // conversation reaches Google — the customer should know before typing.
+    disclaimer: "الردود آلية وقد تحتوي على أخطاء. لا تشاركي معلومات حساسة.",
+    placeholder: "اكتبي سؤالك…",
+    send: "إرسال",
+    thinking: "جارٍ الكتابة…",
+    tooMany: "أسئلة كثيرة. انتظري دقيقة ثم حاولي مرة أخرى.",
+    failed: "تعذر الرد، حاولي مرة أخرى.",
+    unavailable: "المساعدة غير متاحة حالياً.",
+    close: "إغلاق",
+  },
 };
 
 export type Content = typeof ar;
@@ -864,6 +880,20 @@ const en: Content = {
     weekdaysFull: ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
     am: "AM",
     pm: "PM",
+  },
+
+  chat: {
+    open: "Ask us",
+    title: "Red Or Nude assistant",
+    intro: "Ask about our services and prices, branch hours, or the FAQs.",
+    disclaimer: "Replies are AI-generated and can be wrong. Don't share sensitive details.",
+    placeholder: "Type your question…",
+    send: "Send",
+    thinking: "Typing…",
+    tooMany: "Too many questions. Wait a minute and try again.",
+    failed: "Couldn't reply, please try again.",
+    unavailable: "The assistant is unavailable right now.",
+    close: "Close",
   },
 };
 
