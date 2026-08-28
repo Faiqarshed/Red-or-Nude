@@ -67,9 +67,6 @@ export const dynamic = "force-dynamic";
  */
 const MODEL = "gemini-3.1-flash-lite";
 
-/** One tool call is the honest maximum; two is the seatbelt. */
-const MAX_TOOL_ROUNDS = 2;
-
 const body = z.object({
   lang: z.enum(["ar", "en"]),
   messages: z
@@ -109,34 +106,33 @@ const BOOKING_BY_REFERENCE: FunctionDeclaration = {
 const reference = z.string().trim().min(4).max(20);
 
 function rules(lang: "ar" | "en", signedIn: boolean): string {
-  return [
-    "You are the assistant on the Red Or Nude salon website.",
-    "",
-    "Answer ONLY from the information below, plus the my_bookings tool if you have it.",
-    "In scope: the FAQs, the services with their prices and durations, and the branches",
-    "with their addresses, phone numbers and opening hours.",
-    "",
-    "Anything else — beauty or medical advice, complaints, comparisons with other salons,",
-    "general conversation — decline in one sentence and give the branch phone number.",
-    "",
-    "Never invent a price, a duration, an address or a policy. If the answer is not below,",
-    "say you do not have it and offer the branch phone number.",
-    "",
-    "You CANNOT book, cancel, reschedule or claim a refill, and must never say or imply that",
-    "you have done any of them. Send the customer to the website instead:",
-    signedIn
-      ? "their bookings and those actions are at /account."
-      : "an existing booking is managed at /my-bookings with the reference from the confirmation email, and a new booking is made at /booking.",
-    signedIn
-      ? ""
-      : "You CAN look a booking up if they give you its reference — ask for it, then use booking_by_reference. You still cannot change it.",
-    "",
-    `Reply in ${lang === "ar" ? "Arabic" : "English"}. Keep answers to a few sentences.`,
-    "",
-    "--- What you know ---",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const bookings = signedIn
+    ? "Their bookings and those actions are at /account."
+    : [
+        "An existing booking is managed at /my-bookings with the reference from the",
+        "confirmation email, and a new booking is made at /booking. You CAN look a booking",
+        "up if they give you its reference — ask for it, then use booking_by_reference.",
+        "You still cannot change it.",
+      ].join(" ");
+
+  return `You are the assistant on the Red Or Nude salon website.
+
+Answer ONLY from the information below, plus the booking tool if you have one.
+In scope: the FAQs, the services with their prices and durations, and the branches
+with their addresses, phone numbers and opening hours.
+
+Anything else — beauty or medical advice, complaints, comparisons with other salons,
+general conversation — decline in one sentence and give the branch phone number.
+
+Never invent a price, a duration, an address or a policy. If the answer is not below,
+say you do not have it and offer the branch phone number.
+
+You CANNOT book, cancel, reschedule or claim a refill, and must never say or imply that
+you have done any of them. Send the customer to the website instead. ${bookings}
+
+Reply in ${lang === "ar" ? "Arabic" : "English"}. Keep answers to a few sentences.
+
+--- What you know ---`;
 }
 
 export async function POST(request: Request) {
@@ -198,9 +194,11 @@ export async function POST(request: Request) {
   try {
     let response = await ai.models.generateContent({ model: MODEL, contents, config });
 
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const calls = response.functionCalls;
-      if (!calls?.length) break;
+    // One round, because there is one tool and it answers in full. A model that
+    // asks again after being answered is looping, and the second reply would be
+    // built from the same row it already holds.
+    const calls = response.functionCalls;
+    if (calls?.length) {
 
       const turn = response.candidates?.[0]?.content;
       if (turn) contents.push(turn);

@@ -32,7 +32,8 @@ import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { otps } from "@/lib/db/schema";
 
-export const OTP_LENGTH = 6;
+import { OTP_LENGTH } from "./otp-length";
+export { OTP_LENGTH };
 export const OTP_TTL_MS = 10 * 60_000;
 export const OTP_MAX_ATTEMPTS = 5;
 

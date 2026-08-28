@@ -19,8 +19,9 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import OtpInput from "@/components/OtpInput";
+import Modal from "@/components/booking/Modal";
 import ScheduleModal from "@/components/booking/ScheduleModal";
-import OtpSteps, { otpErrorMessage } from "@/components/booking/OtpSteps";
 import { useAccount } from "@/lib/account/context";
 import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
@@ -29,60 +30,201 @@ import { formatDateLabel, type BookingSummary } from "@/lib/booking";
 import { localTime } from "@/lib/time";
 
 /** Shared backdrop for all dialogs in BookingCard. */
-function Backdrop({
+
+/**
+ * A circle, a sentence, and the buttons that answer it.
+ *
+ * The success and confirm dialogs were the same forty lines of centred layout
+ * twice over, differing only in the colour of the ring and what the buttons
+ * said.
+ */
+function IconDialog({
   onClose,
+  tone,
+  icon,
+  message,
   children,
-  className = "",
 }: {
   onClose: () => void;
+  tone: "good" | "warn";
+  icon: React.ReactNode;
+  message: string;
   children: React.ReactNode;
-  className?: string;
 }) {
-  // Hold the page still underneath, and close on Escape.
-  //
-  // Without the first, the wheel scrolls the booking list behind the dialog and
-  // leaves a second scrollbar down the side of the screen. Without the second,
-  // the only way out of a full-screen overlay is to find the button — which on
-  // a short screen may be the part that had to scroll.
-  //
-  // Assumes one of these is open at a time, which is true here: the gate closes
-  // as the outcome opens. Two at once would restore the body on the first
-  // unmount.
-  useEffect(() => {
-    // Both elements: which one actually scrolls depends on the layout, and
-    // pinning only <body> leaves the page moving under the dialog here.
-    const html = document.documentElement;
-    const previous = { html: html.style.overflow, body: document.body.style.overflow };
-    html.style.overflow = "hidden";
-    document.body.style.overflow = "hidden";
-
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => {
-      html.style.overflow = previous.html;
-      document.body.style.overflow = previous.body;
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-    >
-      {/* A column capped at the viewport, so a long booking scrolls *inside*
-          the card instead of growing past the top and bottom of the screen.
-          `dvh` rather than `vh` because mobile browser chrome moves. */}
-      <div
-        className={`flex max-h-[calc(100dvh-2rem)] w-full max-w-[420px] flex-col overflow-hidden rounded-[24px] bg-white text-start shadow-[0_40px_100px_rgba(0,0,0,0.25)] ${className}`}
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal onClose={onClose} chrome={false} className="max-w-[420px]">
+      <div className="flex flex-col items-center px-7 py-10 text-center">
+        <div
+          className={`grid h-16 w-16 place-items-center rounded-full ${
+            tone === "good" ? "bg-[#eaf5ee]" : "bg-red/[0.08]"
+          }`}
+        >
+          {icon}
+        </div>
+        <p
+          className={`mt-5 text-[15px] font-semibold ${
+            tone === "good" ? "text-[#2f7a4d]" : "text-ink"
+          }`}
+        >
+          {message}
+        </p>
         {children}
       </div>
-    </div>
+    </Modal>
   );
+}
+
+// Ask for a code, then spend it. The two steps, without a screen around them.
+//
+// Extracted from RefillDialog when the guest lookup needed the same pair. The
+// two callers differ only in the sentence above the button and in what the six
+// digits are posted to, which is what `intro` and `onSubmit` are — everything
+// else, including the resend and the "we sent it to f•••@…" line, is identical
+// and was never worth a second copy.
+//
+// Deliberately not a dialog: the refill flow needs it inside a modal, the
+// lookup flow needs it inline on the page. The shell is the caller's problem.
+
+
+function OtpSteps({
+  code,
+  intro,
+  onSubmit,
+}: {
+  /** Booking reference the code is being sent for. */
+  code: string;
+  /** Why we're asking. The one line that differs between callers. */
+  intro: string;
+  /** Spend the code. Return a message to show, or null when it worked. */
+  onSubmit: (otp: string) => Promise<string | null>;
+}) {
+  const { c } = useI18n();
+  const h = c.history;
+
+  const [step, setStep] = useState<"ask" | "enter">("ask");
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [otp, setOtp] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const request = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/my-bookings/otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(res.status === 429 ? h.tooMany : h.verifyMailFailed);
+        return;
+      }
+      // The route answers the same way for a reference that does not exist, so
+      // reaching step two proves nothing about the reference. That is the point.
+      setSentTo(data.sentTo ?? null);
+      setStep("enter");
+    } catch {
+      setError(h.verifyMailFailed);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (busy || otp.length !== 6) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const message = await onSubmit(otp);
+      if (message) {
+        setError(message);
+        setOtp("");
+      }
+    } catch {
+      setError(h.failed);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <h3 className="font-display text-xl font-extrabold text-ink">{h.verifyTitle}</h3>
+
+      {step === "ask" ? (
+        <>
+          <p className="mt-2 text-sm text-ink/55">{intro}</p>
+          <button
+            type="button"
+            onClick={request}
+            disabled={busy}
+            className={`mt-6 w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
+              busy
+                ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
+                : "bg-red-grad text-white hover:opacity-90"
+            }`}
+          >
+            {busy ? h.verifySending : h.verifySend}
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="mt-2 text-sm text-ink/55">
+            {h.verifySentTo} <span dir="ltr">{sentTo ?? "—"}</span>
+          </p>
+
+          <label className="mt-5 block">
+            <span className="mb-1.5 block text-[12px] text-ink/55">{h.verifyCodeLabel}</span>
+            <OtpInput value={otp} onChange={setOtp} onEnter={() => void submit()} />
+          </label>
+
+          <button
+            type="button"
+            onClick={submit}
+            disabled={busy || otp.length !== 6}
+            className={`mt-4 w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
+              busy || otp.length !== 6
+                ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
+                : "bg-red-grad text-white hover:opacity-90"
+            }`}
+          >
+            {busy ? h.verifyChecking : h.verifySubmit}
+          </button>
+
+          <button
+            type="button"
+            onClick={request}
+            disabled={busy}
+            className="mt-3 w-full text-center text-[12px] text-ink/45 underline underline-offset-4 hover:text-red"
+          >
+            {h.verifyResend}
+          </button>
+        </>
+      )}
+
+      {error && (
+        <p role="alert" className="mt-4 rounded-[12px] bg-red/[0.08] px-4 py-3 text-xs text-red">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * The shared mapping from an API refusal to something a customer can act on.
+ *
+ * Both callers post to different endpoints but get the same four answers back,
+ * because every code-checking route returns them from the same verifyOtp().
+ */
+function otpErrorMessage(error: unknown, h: ReturnType<typeof useI18n>["c"]["history"]): string {
+  if (error === "too-many-attempts") return h.verifyTooMany;
+  if (error === "no-code" || error === "expired") return h.verifyExpired;
+  if (error === "too-many") return h.tooMany;
+  return h.verifyWrong;
 }
 
 type RefillDetails = {
@@ -109,9 +251,6 @@ const STATUS_TONE: Record<string, string> = {
  * that their window has closed sends them looking for a deadline problem they
  * do not have. See lib/cancellation.ts.
  */
-/** Refusals that mean "the code was wrong", not "the request was". */
-const OTP_ERRORS = new Set(["otp-required", "wrong", "no-code", "too-many-attempts"]);
-
 function refusalMessage(
   data: { error?: string; cutoffHours?: number },
   h: {
@@ -201,7 +340,9 @@ export default function BookingCard({
       if (data.error === "slot-taken" || data.error === "too-soon") return h.slotTaken;
       // The credential was refused rather than the request: that is the code
       // dialog's language, not the cancellation window's.
-      if (OTP_ERRORS.has(data.error)) return otpErrorMessage(data.error, h);
+      // Refusals that mean "the code was wrong", not "the request was".
+      if (["otp-required", "wrong", "no-code", "too-many-attempts"].includes(data.error))
+        return otpErrorMessage(data.error, h);
       return refusalMessage(data, h);
     } catch {
       return h.failed;
@@ -371,7 +512,7 @@ export default function BookingCard({
 
       {/* ── Booking details popup ── */}
       {details && (
-        <Backdrop onClose={() => setDetails(false)} className="overflow-hidden">
+        <Modal onClose={() => setDetails(false)} chrome={false} className="max-w-[420px]">
           {/* Main Service Image Header */}
           {row.serviceImage && (
             <div className="relative h-36 w-full shrink-0 overflow-hidden bg-black/[0.04] sm:h-44">
@@ -476,67 +617,67 @@ export default function BookingCard({
               {c.payment.close}
             </button>
           </div>
-        </Backdrop>
+        </Modal>
       )}
 
       {/* ── Success modal (after reschedule / cancel) ── */}
       {successMsg && (
-        <Backdrop onClose={() => setSuccessMsg(null)}>
-          <div className="flex flex-col items-center px-7 py-10 text-center">
-            {/* Green checkmark */}
-            <div className="grid h-16 w-16 place-items-center rounded-full bg-[#eaf5ee]">
-              <svg viewBox="0 0 24 24" width={32} height={32} fill="none" stroke="#2f7a4d" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M20 6 9 17l-5-5" />
-              </svg>
-            </div>
-            <p className="mt-5 text-[15px] font-semibold text-[#2f7a4d]">{successMsg}</p>
-            <button
-              type="button"
-              onClick={() => setSuccessMsg(null)}
-              className="mt-8 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
-            >
-              {h.successDone}
-            </button>
-          </div>
-        </Backdrop>
+        <IconDialog
+          onClose={() => setSuccessMsg(null)}
+          tone="good"
+          message={successMsg}
+          icon={
+            <svg viewBox="0 0 24 24" width={32} height={32} fill="none" stroke="#2f7a4d" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
+          }
+        >
+          <button
+            type="button"
+            onClick={() => setSuccessMsg(null)}
+            className="mt-8 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
+          >
+            {h.successDone}
+          </button>
+        </IconDialog>
       )}
 
       {/* ── Cancel confirmation modal ── */}
       {confirmCancel && (
-        <Backdrop onClose={() => setConfirmCancel(false)}>
-          <div className="flex flex-col items-center px-7 py-10 text-center">
-            {/* Warning icon */}
-            <div className="grid h-16 w-16 place-items-center rounded-full bg-red/[0.08]">
-              <svg viewBox="0 0 24 24" width={32} height={32} fill="none" stroke="#B80007" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
-            </div>
-            <p className="mt-5 text-[15px] font-semibold text-ink">{h.cancelConfirm}</p>
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={onCancelConfirmed}
-              className="mt-8 w-full rounded-[12px] bg-red-grad py-3 text-center text-sm font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              {busy === "cancel" ? h.cancelling : h.cancel}
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirmCancel(false)}
-              className="mt-3 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
-            >
-              {h.cancelKeep}
-            </button>
-          </div>
-        </Backdrop>
+        <IconDialog
+          onClose={() => setConfirmCancel(false)}
+          tone="warn"
+          message={h.cancelConfirm}
+          icon={
+            <svg viewBox="0 0 24 24" width={32} height={32} fill="none" stroke="#B80007" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          }
+        >
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={onCancelConfirmed}
+            className="mt-8 w-full rounded-[12px] bg-red-grad py-3 text-center text-sm font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            {busy === "cancel" ? h.cancelling : h.cancel}
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmCancel(false)}
+            className="mt-3 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
+          >
+            {h.cancelKeep}
+          </button>
+        </IconDialog>
       )}
 
       {/* A guest confirms the change with a code sent to the booking's own
           address. Knowing the reference opens the booking; it does not end it. */}
       {gate && (
-        <Backdrop onClose={() => setGate(null)} className="p-7">
+        <Modal onClose={() => setGate(null)} chrome={false} className="max-w-[420px] p-7">
           <OtpSteps
             code={row.code}
             intro={h.verifyIntroChange}
@@ -553,7 +694,7 @@ export default function BookingCard({
           >
             {c.payment.close}
           </button>
-        </Backdrop>
+        </Modal>
       )}
     </article>
   );

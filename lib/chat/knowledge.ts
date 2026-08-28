@@ -34,20 +34,7 @@ const DAYS = [
   "Friday",
 ] as const;
 
-/**
- * ponytail: cached per server instance, not shared, and rebuilt on cold start —
- * the same ceiling lib/throttle.ts documents. Five minutes is well inside how
- * often a salon edits its price list, and it saves four queries on every
- * message including the second half of a tool round trip. Move it to a shared
- * cache only if instance count ever makes the staleness visible.
- */
-const CACHE = new Map<Lang, { text: string; at: number }>();
-const TTL_MS = 5 * 60_000;
-
 export async function knowledgeBlock(lang: Lang): Promise<string> {
-  const hit = CACHE.get(lang);
-  if (hit && Date.now() - hit.at < TTL_MS) return hit.text;
-
   const now = new Date();
   const [faqRows, serviceRows, branchRows, hourRows, closureRows] = await Promise.all([
     db.select().from(faqs).where(eq(faqs.active, true)).orderBy(asc(faqs.sort)),
@@ -128,7 +115,5 @@ export async function knowledgeBlock(lang: Lang): Promise<string> {
     );
   }
 
-  const text = sections.join("\n\n");
-  CACHE.set(lang, { text, at: Date.now() });
-  return text;
+  return sections.join("\n\n");
 }
