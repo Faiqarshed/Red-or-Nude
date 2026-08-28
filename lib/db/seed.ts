@@ -207,6 +207,23 @@ async function main() {
     console.log("→ media library already populated, skipping");
   }
 
+  // Independent of the catalogue below, and guarded on its own count: the
+  // branch check further down returns early on an existing database, and
+  // anything placed after it never runs again.
+  const [{ n: faqCount }] = await db.select({ n: sql<number>`count(*)::int` }).from(s.faqs);
+  if (faqCount > 0) {
+    console.log(`→ faqs already seeded (${faqCount}), skipping`);
+  } else {
+    await db.insert(s.faqs).values(
+      SEED_FAQS.map((f, i) => ({
+        question: { ar: f.ar.q, en: f.en.q },
+        answer: { ar: f.ar.a, en: f.en.a },
+        sort: i,
+      })),
+    );
+    console.log(`→ faqs (${SEED_FAQS.length})`);
+  }
+
   // ---- one-time domain data ------------------------------------------------
   const [{ n: branchCount }] = await db
     .select({ n: sql<number>`count(*)::int` })
@@ -302,15 +319,6 @@ async function main() {
       collectionId: collection.id,
       name: { ar: `Art ${i + 1}`, en: `Art ${i + 1}` },
       image: SEED_DESIGN_IMGS[i % SEED_DESIGN_IMGS.length],
-      sort: i,
-    })),
-  );
-
-  console.log("→ faqs");
-  await db.insert(s.faqs).values(
-    SEED_FAQS.map((f, i) => ({
-      question: { ar: f.ar.q, en: f.en.q },
-      answer: { ar: f.ar.a, en: f.en.a },
       sort: i,
     })),
   );
