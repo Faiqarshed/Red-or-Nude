@@ -46,6 +46,7 @@ import {
 import { z } from "zod";
 import { currentCustomer } from "@/lib/account/guard";
 import { bookingSummaries } from "@/lib/bookings";
+import type { BookingSummary } from "@/lib/booking";
 import { knowledgeBlock } from "@/lib/chat/knowledge";
 import { clientIp, throttled } from "@/lib/throttle";
 
@@ -258,15 +259,27 @@ async function runTool(
     //
     // Newest first, and only a handful: fifty bookings is a lot of prompt to
     // pay for, and nobody asks about their appointment from two years ago.
-    return { bookings: (await bookingSummaries({ customerId: customer.id })).slice(0, 5) };
+    return {
+      bookings: (await bookingSummaries({ customerId: customer.id })).slice(0, 5).map(forModel),
+    };
   }
 
   if (!customer && name === BOOKING_BY_REFERENCE.name) {
     const parsed = reference.safeParse(args?.reference);
     // A model that invented a reference gets the same nothing a wrong one does.
     if (!parsed.success) return { bookings: [] };
-    return { bookings: await bookingSummaries({ code: parsed.data.toUpperCase() }) };
+    const bookings = await bookingSummaries({ code: parsed.data.toUpperCase() });
+    return { bookings: bookings.map(forModel) };
   }
 
   return { error: "unavailable" };
+}
+
+/**
+ * Drop what only a screen can use. An image URL and a branch id are tokens the
+ * model pays for and can do nothing with, and on the free tier that ceiling is
+ * low enough to care about.
+ */
+function forModel({ serviceImage, branchId, ...rest }: BookingSummary) {
+  return rest;
 }

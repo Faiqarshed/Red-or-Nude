@@ -177,4 +177,13 @@ export type BookingSummary = {
   /** What the reschedule picker needs, and nothing more. */
   branchId: string;
   durationMin: number;
+
+  // Catalogue detail for the booking's own screen. Safe to add here: these come
+  // from the services and branches tables, which the public site already shows
+  // to everyone. The line this type must not cross is *customer* data — no
+  // name, phone, email, station or notes. See lib/bookings.ts.
+  /** Live catalogue image for the service, or null if it has none. */
+  serviceImage: string | null;
+  /** Which salon, by name rather than by id. */
+  branchName: Localized | null;
 };

@@ -26,6 +26,7 @@ import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
 import { formatDateLabel, type BookingSummary } from "@/lib/booking";
+import { localTime } from "@/lib/time";
 
 
 type RefillDetails = {
@@ -92,13 +93,22 @@ export default function BookingCard({
 
   const signedIn = useAccount();
   const [busy, setBusy] = useState<"cancel" | "reschedule" | null>(null);
-  const [note, setNote] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   /** The change waiting on a code, for a guest. Null for a signed-in customer. */
   const [gate, setGate] = useState<
     { kind: "cancel" } | { kind: "reschedule"; startsAt: string } | null
   >(null);
+  /**
+   * The details dialog. Opened by tapping the card, and again by a cancellation
+   * or a move — the same screen either way, because "what does my booking say
+   * now" is the same question before and after a change. `outcome` is the line
+   * that appears above it when the second route was taken.
+   *
+   * It stays open across the parent's refetch, so the numbers under the banner
+   * are the new ones rather than a snapshot of what was just replaced.
+   */
+  const [details, setDetails] = useState<{ outcome?: string } | null>(null);
 
   /**
    * Post a change. Returns a message to show, or null when it worked, because
@@ -123,14 +133,15 @@ export default function BookingCard({
       if (res.ok) {
         // A cancelled booking is gone either way; `refunded: false` only means
         // the money needs a human, and saying so beats a silent "cancelled".
-        setNote(
-          what === "cancel"
-            ? data.refunded
-              ? h.cancelled
-              : h.cancelledNoRefund
-            : h.rescheduled,
-        );
         setGate(null);
+        setDetails({
+          outcome:
+            what === "cancel"
+              ? data.refunded
+                ? h.cancelled
+                : h.cancelledNoRefund
+              : h.rescheduled,
+        });
         onChanged();
         return null;
       }
@@ -171,6 +182,27 @@ export default function BookingCard({
 
   return (
     <article className="rounded-[20px] bg-white p-5 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
+      {/* The heading area opens the details, not the whole card: the buttons
+          below cancel and move real appointments, and a card-wide tap target
+          would sit underneath them.
+          
+          A div with role/tabIndex rather than a <button>, because the region
+          contains an <h2> and a button may only hold phrasing content. Keyboard
+          activation is therefore ours to provide, hence the Enter/Space handler
+          — without it this would be reachable by tab and impossible to press. */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setDetails({})}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setDetails({});
+          }
+        }}
+        aria-label={h.detailsOpen}
+        className="-m-1 block w-full cursor-pointer rounded-[16px] p-1 text-start transition-colors hover:bg-black/[0.02] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red/50"
+      >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -213,6 +245,7 @@ export default function BookingCard({
             {row.totalSar}
           </span>
         </div>
+      </div>
       </div>
 
       {/* The whole feature. Absent — not disabled — once the window lapses.
@@ -261,7 +294,6 @@ export default function BookingCard({
         </p>
       )}
 
-      {note && <p className="mt-3 text-[12px] font-semibold text-[#2f7a4d]">{note}</p>}
       {problem && (
         <p role="alert" className="mt-3 text-[12px] text-red">
           {problem}
@@ -279,6 +311,89 @@ export default function BookingCard({
           onConfirm={(_date, _time, startsAt) => onSlotPicked(startsAt)}
           onClose={() => setPicking(false)}
         />
+      )}
+
+      {details && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setDetails(null)}
+        >
+          <div
+            className="w-full max-w-[420px] overflow-hidden rounded-[24px] bg-white text-start shadow-[0_40px_100px_rgba(0,0,0,0.25)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Only after a change, and above everything else, because it is
+                the answer to the question that opened this. */}
+            {details.outcome && (
+              <p
+                role="status"
+                className="bg-[#eaf5ee] px-7 py-4 text-[13px] font-semibold text-[#2f7a4d]"
+              >
+                {details.outcome}
+              </p>
+            )}
+
+            {row.serviceImage && (
+              // eslint-disable-next-line @next/next/no-img-element -- the URL is
+              // whatever the media store returned; next/image would need every
+              // one of those hosts declared up front.
+              <img
+                src={row.serviceImage}
+                alt=""
+                className="h-40 w-full object-cover"
+                loading="lazy"
+              />
+            )}
+
+            <div className="p-7">
+              <h3 className="font-display text-xl font-extrabold text-ink">
+                {row.serviceName ? pick(row.serviceName, lang) : h.detailsTitle}
+              </h3>
+
+              <dl className="mt-5 space-y-3">
+                {[
+                  [h.whenLabel, `${formatDateLabel(row.startsAt.slice(0, 10), lang)} · ${localTime(row.startsAt)}`],
+                  [h.branchLabel, row.branchName ? pick(row.branchName, lang) : null],
+                  [h.durationLabel, h.durationMin.replace("{n}", String(row.durationMin))],
+                  [h.ticket, row.ticketNo],
+                  [h.statusLabel, h.statuses[row.status] ?? row.status],
+                  [h.referenceLabel, row.code],
+                ]
+                  .filter(([, value]) => value)
+                  .map(([label, value]) => (
+                    <div key={label as string} className="flex items-baseline justify-between gap-4">
+                      <dt className="text-[13px] text-ink/55">{label}</dt>
+                      <dd className="text-[13px] font-semibold text-ink">{value}</dd>
+                    </div>
+                  ))}
+
+                <div className="flex items-baseline justify-between gap-4 border-t border-black/[0.06] pt-3">
+                  <dt className="text-[13px] text-ink/55">{h.totalLabel}</dt>
+                  <dd className="flex items-center gap-1 font-display text-base font-extrabold text-red">
+                    <Riyal className="h-4 w-4" />
+                    {row.totalSar}
+                  </dd>
+                </div>
+              </dl>
+
+              {row.canCancel && (
+                <p className="mt-4 text-[11px] text-ink/40">
+                  {h.changeBy} {formatDateLabel(row.cancelBy.slice(0, 10), lang)}
+                </p>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setDetails(null)}
+                className="mt-6 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
+              >
+                {c.payment.close}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* A guest confirms the change with a code sent to the booking's own

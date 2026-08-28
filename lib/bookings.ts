@@ -13,6 +13,7 @@ import {
   addons,
   bookingAddons,
   bookings,
+  branches,
   customers,
   designs,
   removalTypes,
@@ -30,6 +31,7 @@ import { quotePromo, type PromoRefusal } from "@/lib/promo";
 import { quoteReward, spendPoints } from "@/lib/loyalty";
 import type { RewardRefusal } from "@/lib/rewards";
 import { formatTicketNo } from "@/lib/tickets";
+import { mediaUrl } from "@/lib/storage";
 import type { BookingSummary } from "@/lib/booking";
 
 /** What one guest is booking. */
@@ -367,9 +369,15 @@ export async function bookingSummaries(
       totalHalalas: bookings.totalHalalas,
       refillOfBookingId: bookings.refillOfBookingId,
       refillDays: services.refillDays,
+      // Live catalogue image, not a snapshot: if the salon reshoots a service
+      // the old bookings should show the new picture, and there is nothing to
+      // mis-price here the way there would be with a stored image of a receipt.
+      serviceImage: services.image,
+      branchName: branches.name,
     })
     .from(bookings)
     .leftJoin(services, eq(services.id, bookings.serviceId))
+    .leftJoin(branches, eq(branches.id, bookings.branchId))
     .where(byCode ? eq(bookings.code, lookup.code) : eq(bookings.customerId, lookup.customerId))
     .orderBy(desc(bookings.startsAt))
     .limit(byCode ? 1 : 50);
@@ -414,6 +422,8 @@ export async function bookingSummaries(
       cancelBy: cancelDeadline(r, cutoff).toISOString(),
       branchId: r.branchId,
       durationMin: Math.round((r.endsAt.getTime() - r.startsAt.getTime()) / 60_000),
+      serviceImage: mediaUrl(r.serviceImage),
+      branchName: r.branchName,
     };
   });
 }
