@@ -14,12 +14,16 @@
 //     argued into calling something that does not exist, so "always send them
 //     to the website" is enforced by absence rather than by good behaviour.
 //
-// The one tool takes no arguments at all. The customer id comes from the
-// session cookie, which the model never sees and has no parameter to supply, so
-// there is no channel through which a conversation could reach someone else's
-// bookings. A guest is not offered the tool at all; they get a link to
-// /my-bookings. That is also why this endpoint never handles a booking
-// reference, and so can never become an oracle for guessing one.
+// There are two read tools and the cookie picks between them, server-side.
+//
+// For a signed-in customer the tool takes no arguments at all: the customer id
+// comes from the session, which the model never sees and has no parameter to
+// supply, so no conversation can reach another customer's bookings.
+//
+// For a guest it takes a reference, and returns exactly what typing that
+// reference into /my-bookings returns — no more. That does make this a second
+// door onto the same reference space, so it carries its own throttle below;
+// the exposure is the website's existing one, not a new one.
 //
 // PRIVACY: the free Gemini tier is in use, and Google's terms say free-tier
 // prompts and responses are used to improve their products and may be read by
@@ -86,6 +90,23 @@ const MY_BOOKINGS: FunctionDeclaration = {
   parameters: { type: Type.OBJECT, properties: {} },
 };
 
+const BOOKING_BY_REFERENCE: FunctionDeclaration = {
+  name: "booking_by_reference",
+  description:
+    "One booking, looked up by the reference from its confirmation email (e.g. RON-4F2K). " +
+    "Use only a reference the customer typed in this conversation; never invent or guess one.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      reference: { type: Type.STRING, description: "The booking reference the customer gave." },
+    },
+    required: ["reference"],
+  },
+};
+
+/** Same bounds the other public routes hold a reference to. */
+const reference = z.string().trim().min(4).max(20);
+
 function rules(lang: "ar" | "en", signedIn: boolean): string {
   return [
     "You are the assistant on the Red Or Nude salon website.",
@@ -104,10 +125,10 @@ function rules(lang: "ar" | "en", signedIn: boolean): string {
     "you have done any of them. Send the customer to the website instead:",
     signedIn
       ? "their bookings and those actions are at /account."
-      : "an existing booking opens at /my-bookings with the reference from the confirmation email, and a new booking is made at /booking.",
+      : "an existing booking is managed at /my-bookings with the reference from the confirmation email, and a new booking is made at /booking.",
     signedIn
       ? ""
-      : "If they ask about their own booking, tell them to open it at /my-bookings — you cannot look it up for them.",
+      : "You CAN look a booking up if they give you its reference — ask for it, then use booking_by_reference. You still cannot change it.",
     "",
     `Reply in ${lang === "ar" ? "Arabic" : "English"}. Keep answers to a few sentences.`,
     "",
@@ -161,7 +182,9 @@ export async function POST(request: Request) {
     // `thinkingLevel`, not the 2.x `thinkingBudget` — passing that to a 3.x
     // model is rejected as an invalid argument, with no hint as to which one.
     thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
-    ...(customer ? { tools: [{ functionDeclarations: [MY_BOOKINGS] }] } : {}),
+    // Which tool exists is decided here, from the cookie — never from anything
+    // the conversation said about who is asking.
+    tools: [{ functionDeclarations: [customer ? MY_BOOKINGS : BOOKING_BY_REFERENCE] }],
   };
 
   const contents: Content[] = messages.map((m) => ({
@@ -188,7 +211,7 @@ export async function POST(request: Request) {
             functionResponse: {
               id: call.id,
               name: call.name ?? MY_BOOKINGS.name,
-              response: await runTool(call.name, customer, request),
+              response: await runTool(call.name, call.args, customer, request),
             },
           })),
         ),
@@ -220,17 +243,30 @@ export async function POST(request: Request) {
  */
 async function runTool(
   name: string | undefined,
+  args: Record<string, unknown> | undefined,
   customer: { id: string } | null,
   request: Request,
 ): Promise<Record<string, unknown>> {
-  if (name !== MY_BOOKINGS.name || !customer) return { error: "unavailable" };
-
-  // Its own budget. One message can provoke several calls, so counting messages
-  // alone would leave this path effectively unmetered.
+  // Its own budget, separate from the message throttle: one message can provoke
+  // several calls, and without this the reference path would be a code-guessing
+  // oracle sitting behind a chat box.
   if (throttled(`chat-tool:${clientIp(request)}`, { max: 5 })) return { error: "too-many" };
 
-  // Newest first, and only a handful: fifty bookings is a lot of prompt to pay
-  // for, and nobody asks about their appointment from two years ago.
-  const bookings = (await bookingSummaries({ customerId: customer.id })).slice(0, 5);
-  return { bookings };
+  if (customer && name === MY_BOOKINGS.name) {
+    // `args` is ignored entirely — the declaration has no parameters, and the
+    // identity comes from the cookie.
+    //
+    // Newest first, and only a handful: fifty bookings is a lot of prompt to
+    // pay for, and nobody asks about their appointment from two years ago.
+    return { bookings: (await bookingSummaries({ customerId: customer.id })).slice(0, 5) };
+  }
+
+  if (!customer && name === BOOKING_BY_REFERENCE.name) {
+    const parsed = reference.safeParse(args?.reference);
+    // A model that invented a reference gets the same nothing a wrong one does.
+    if (!parsed.success) return { bookings: [] };
+    return { bookings: await bookingSummaries({ code: parsed.data.toUpperCase() }) };
+  }
+
+  return { error: "unavailable" };
 }

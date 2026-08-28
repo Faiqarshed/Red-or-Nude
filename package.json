@@ -25,7 +25,6 @@
     "check:reviews": "tsx --conditions=react-server scripts/check-reviews.ts",
     "check:station": "tsx --conditions=react-server scripts/check-station.ts",
     "check:loyalty": "tsx --conditions=react-server scripts/check-loyalty.ts",
-    "check:ticket": "tsx --conditions=react-server scripts/check-ticket.ts",
     "check:chat": "tsx --conditions=react-server scripts/check-chat.ts"
   },
   "dependencies": {

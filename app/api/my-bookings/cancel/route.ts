@@ -5,12 +5,12 @@
 // from the `bookings_station_slot_unique` index, from `reserveStations`, and
 // from the availability engine's conflict scan, so cancelling *is* releasing.
 //
-// Auth is no longer the booking reference alone. A reference is forwardable and
-// stays valid in an inbox forever, so it now proves only that you know which
-// booking you mean — not that it is yours. mayActOnBooking() wants one of two
-// real credentials: a session that owns the row, or the short-lived ticket a
-// guest gets by spending a code at POST /api/my-bookings. The throttle below and
-// the audit row remain, but they are no longer the only guards.
+// Auth is not the booking reference alone. A reference is forwardable and stays
+// valid in an inbox forever, so on its own it proves only that you know which
+// booking you mean — enough to read it, not enough to end it. This wants a
+// session that owns the row, or a code sent to the booking's own address; see
+// lib/booking-auth.ts. The throttle below and the audit row remain, but they
+// are no longer the only guards.
 
 import { NextResponse } from "next/server";
 import { and, asc, eq, inArray } from "drizzle-orm";
@@ -23,11 +23,19 @@ import { clientIp, throttled } from "@/lib/throttle";
 import { refundBookings } from "@/lib/payments/refund";
 import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
-import { mayActOnBooking } from "@/lib/account/guard";
+import { refuseBookingAction } from "@/lib/booking-auth";
+import { OTP_LENGTH } from "@/lib/otp";
 
 export const dynamic = "force-dynamic";
 
-const body = z.object({ code: z.string().trim().min(4).max(20) });
+const body = z.object({
+  code: z.string().trim().min(4).max(20),
+  // Absent on the first attempt: a guest is expected to be turned away once
+  // with `otp-required`, which is the screen's cue to ask for a code.
+  // A regex literal, not a template string: `\d` inside backticks is just "d",
+  // which silently makes the pattern match six letter-d's and nothing else.
+  otp: z.string().trim().length(OTP_LENGTH).regex(/^\d+$/).optional(),
+});
 
 export async function POST(request: Request) {
   // Tighter than the read endpoint: this one moves money and frees chairs, so
@@ -49,11 +57,14 @@ export async function POST(request: Request) {
   const code = parsed.data.code.toUpperCase();
 
   const [anchor] = await db.select().from(bookings).where(eq(bookings.code, code)).limit(1);
-  // One answer for "no such reference" and for "not yours". Splitting them would
-  // hand a caller walking the code space a way to confirm a hit without ever
-  // holding the credential — the oracle the code at lookup exists to close.
-  if (!anchor || !(await mayActOnBooking(anchor))) {
-    return NextResponse.json({ error: "wrong" }, { status: 401 });
+  // No pretence that this hides whether the reference exists — POST
+  // /api/my-bookings answers that openly and by design. What is guarded here is
+  // the action, not the existence of the booking.
+  if (!anchor) return NextResponse.json({ error: "wrong" }, { status: 401 });
+
+  const denied = await refuseBookingAction(anchor, parsed.data.otp);
+  if (denied) {
+    return NextResponse.json({ error: denied.error }, { status: denied.status });
   }
 
   const { cancel_cutoff_hours: cutoff } = await getSettings(["cancel_cutoff_hours"]);

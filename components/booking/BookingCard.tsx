@@ -11,15 +11,17 @@
 // into a form, or a session cookie — and not in what a booking is or what may
 // be done to it. So this component knows nothing about either.
 //
-// It also knows nothing about which credential got them here. Cancel, move and
-// refill all post the reference and let the server decide, because the server
-// is the only side that can see the session cookie and the guest ticket — see
-// mayActOnBooking() in lib/account/guard.ts.
+// It does know whether someone is signed in, and only to decide which dialog to
+// open: a guest confirms cancel, reschedule and refill with a code emailed to
+// the booking, while a signed-in customer's session already says more than the
+// code would. The server decides for real either way (lib/booking-auth.ts), so
+// a stale flag here costs a round trip, never a wrong answer.
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import ScheduleModal from "@/components/booking/ScheduleModal";
 import OtpSteps, { otpErrorMessage } from "@/components/booking/OtpSteps";
+import { useAccount } from "@/lib/account/context";
 import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
@@ -50,13 +52,15 @@ const STATUS_TONE: Record<string, string> = {
  * that their window has closed sends them looking for a deadline problem they
  * do not have. See lib/cancellation.ts.
  */
+/** Refusals that mean "the code was wrong", not "the request was". */
+const OTP_ERRORS = new Set(["otp-required", "wrong", "no-code", "too-many-attempts"]);
+
 function refusalMessage(
   data: { error?: string; cutoffHours?: number },
   h: {
     windowClosed: string;
     alreadyCancelled: string;
     notCancellable: string;
-    sessionExpired: string;
     failed: string;
   },
 ): string {
@@ -67,11 +71,6 @@ function refusalMessage(
       return h.alreadyCancelled;
     case "not-cancellable":
       return h.notCancellable;
-    // The credential went stale — most often a guest whose half-hour ticket
-    // lapsed while they browsed the calendar. "Try again" would be a lie; the
-    // way back is another lookup.
-    case "wrong":
-      return h.sessionExpired;
     default:
       return h.failed;
   }
@@ -91,69 +90,83 @@ export default function BookingCard({
   const { c } = useI18n();
   const h = c.history;
 
+  const signedIn = useAccount();
   const [busy, setBusy] = useState<"cancel" | "reschedule" | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+  /** The change waiting on a code, for a guest. Null for a signed-in customer. */
+  const [gate, setGate] = useState<
+    { kind: "cancel" } | { kind: "reschedule"; startsAt: string } | null
+  >(null);
 
-  const cancel = async () => {
-    // The one destructive thing a customer can do to their own booking, and it
-    // takes their money with it — so it asks first. `confirm` is the browser's,
-    // deliberately: a bespoke modal here would be a second dialog to maintain
-    // for a question with two answers.
-    if (busy || !window.confirm(h.cancelConfirm)) return;
-    setBusy("cancel");
+  /**
+   * Post a change. Returns a message to show, or null when it worked, because
+   * the caller decides where it goes: straight onto the card for a signed-in
+   * customer, or into the code dialog for a guest who is mid-verification.
+   */
+  const submit = async (
+    what: "cancel" | "reschedule",
+    payload: Record<string, unknown>,
+    otp?: string,
+  ): Promise<string | null> => {
+    setBusy(what);
     setProblem(null);
     try {
-      const res = await fetch("/api/my-bookings/cancel", {
+      const res = await fetch(`/api/my-bookings/${what}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: row.code }),
+        body: JSON.stringify(otp ? { ...payload, otp } : payload),
       });
       const data = await res.json().catch(() => ({}));
 
       if (res.ok) {
-        // The booking is gone either way; `refunded: false` only means the money
-        // needs a human, and saying so beats a silent "cancelled".
-        setNote(data.refunded ? h.cancelled : h.cancelledNoRefund);
+        // A cancelled booking is gone either way; `refunded: false` only means
+        // the money needs a human, and saying so beats a silent "cancelled".
+        setNote(
+          what === "cancel"
+            ? data.refunded
+              ? h.cancelled
+              : h.cancelledNoRefund
+            : h.rescheduled,
+        );
+        setGate(null);
         onChanged();
-        return;
+        return null;
       }
-      setProblem(refusalMessage(data, h));
+      if (data.error === "slot-taken" || data.error === "too-soon") return h.slotTaken;
+      // The credential was refused rather than the request: that is the code
+      // dialog's language, not the cancellation window's.
+      if (OTP_ERRORS.has(data.error)) return otpErrorMessage(data.error, h);
+      return refusalMessage(data, h);
     } catch {
-      setProblem(h.failed);
+      return h.failed;
     } finally {
       setBusy(null);
     }
   };
 
-  const reschedule = async (startsAt: string) => {
-    setPicking(false);
-    setBusy("reschedule");
-    setProblem(null);
-    try {
-      const res = await fetch("/api/my-bookings/reschedule", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: row.code, startsAt }),
-      });
-      const data = await res.json().catch(() => ({}));
+  /** Run it now and report on the card — the signed-in path. */
+  const runNow = (fn: () => Promise<string | null>) => {
+    void fn().then((message) => message && setProblem(message));
+  };
 
-      if (res.ok) {
-        setNote(h.rescheduled);
-        onChanged();
-        return;
-      }
-      setProblem(
-        data.error === "slot-taken" || data.error === "too-soon"
-          ? h.slotTaken
-          : refusalMessage(data, h),
-      );
-    } catch {
-      setProblem(h.failed);
-    } finally {
-      setBusy(null);
-    }
+  const onCancelClick = () => {
+    // The one destructive thing a customer can do to their own booking, and it
+    // takes their money with it — so it asks first. `confirm` is the browser's,
+    // deliberately: a bespoke modal here would be a second dialog to maintain
+    // for a question with two answers.
+    if (busy || !window.confirm(h.cancelConfirm)) return;
+    if (signedIn) runNow(() => submit("cancel", { code: row.code }));
+    else setGate({ kind: "cancel" });
+  };
+
+  const onSlotPicked = (startsAt: string) => {
+    setPicking(false);
+    // The slot is chosen before the code is asked for, not after: a code lives
+    // ten minutes, and browsing the calendar can easily outlast one.
+    if (signedIn) runNow(() => submit("reschedule", { code: row.code, startsAt }));
+    else setGate({ kind: "reschedule", startsAt });
   };
 
   return (
@@ -233,7 +246,7 @@ export default function BookingCard({
           </button>
           <button
             type="button"
-            onClick={() => void cancel()}
+            onClick={onCancelClick}
             disabled={busy !== null}
             className="rounded-[12px] px-4 py-2 text-[13px] font-semibold text-red transition-colors hover:bg-red/[0.06] disabled:opacity-40"
           >
@@ -263,9 +276,42 @@ export default function BookingCard({
           durationMin={row.durationMin}
           initialDate={row.startsAt.slice(0, 10)}
           initialTime={null}
-          onConfirm={(_date, _time, startsAt) => void reschedule(startsAt)}
+          onConfirm={(_date, _time, startsAt) => onSlotPicked(startsAt)}
           onClose={() => setPicking(false)}
         />
+      )}
+
+      {/* A guest confirms the change with a code sent to the booking's own
+          address. Knowing the reference opens the booking; it does not end it. */}
+      {gate && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setGate(null)}
+        >
+          <div
+            className="w-full max-w-[420px] rounded-[24px] bg-white p-7 text-start shadow-[0_40px_100px_rgba(0,0,0,0.25)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <OtpSteps
+              code={row.code}
+              intro={h.verifyIntroChange}
+              onSubmit={(otp) =>
+                gate.kind === "cancel"
+                  ? submit("cancel", { code: row.code }, otp)
+                  : submit("reschedule", { code: row.code, startsAt: gate.startsAt }, otp)
+              }
+            />
+            <button
+              type="button"
+              onClick={() => setGate(null)}
+              className="mt-5 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
+            >
+              {c.payment.close}
+            </button>
+          </div>
+        </div>
       )}
     </article>
   );

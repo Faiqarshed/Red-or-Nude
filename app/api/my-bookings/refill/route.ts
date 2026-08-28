@@ -6,10 +6,9 @@
 // owns the row, or the ticket a guest gets at POST /api/my-bookings — and keeps
 // the direct code path for a caller holding no cookie at all.
 //
-// A guest who just spent a code at lookup is not asked for a second one sixty
-// seconds later: that was friction with nothing behind it, since the first code
-// already proved reach into the same inbox. See lib/otp.ts for the rules the
-// code itself is held to.
+// A signed-in customer who owns the row needs no code — the session already
+// proves more than an emailed digit string does. See lib/otp.ts for the rules
+// the code itself is held to.
 //
 // What comes back is the refill *offer*: how long is left, and what it costs.
 // The customer still books their own slot afterwards through /booking?refill=…,
@@ -22,10 +21,10 @@ import { db } from "@/lib/db";
 import { bookings, services } from "@/lib/db/schema";
 import { claimedWindows } from "@/lib/bookings";
 import { halalasToSar } from "@/lib/money";
-import { OTP_LENGTH, bookingSubject, verifyOtp } from "@/lib/otp";
+import { OTP_LENGTH } from "@/lib/otp";
 import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
-import { mayActOnBooking } from "@/lib/account/guard";
+import { refuseBookingAction } from "@/lib/booking-auth";
 import { clientIp, throttled } from "@/lib/throttle";
 
 export const dynamic = "force-dynamic";
@@ -72,22 +71,11 @@ export async function POST(request: Request) {
     .where(eq(bookings.code, code))
     .limit(1);
 
-  if (!row || !(await mayActOnBooking(row))) {
-    // No cookie-borne credential, so a code is the only way through. Asked
-    // before the reference is judged, so the answer says nothing about whether
-    // it exists.
-    if (!parsed.data.otp) {
-      return NextResponse.json({ error: "otp-required" }, { status: 401 });
-    }
-    // Same answer as a wrong code: an unknown reference must not be
-    // distinguishable from a real one with the wrong OTP.
-    if (!row) return NextResponse.json({ error: "wrong" }, { status: 401 });
+  if (!row) return NextResponse.json({ error: "wrong" }, { status: 401 });
 
-    const check = await verifyOtp(bookingSubject(row.id), parsed.data.otp);
-    if (!check.ok) {
-      const status = check.reason === "too-many-attempts" ? 429 : 401;
-      return NextResponse.json({ error: check.reason }, { status });
-    }
+  const refusal = await refuseBookingAction(row, parsed.data.otp);
+  if (refusal) {
+    return NextResponse.json({ error: refusal.error }, { status: refusal.status });
   }
 
   const spentOn = await claimedWindows([row.id]);
