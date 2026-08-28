@@ -18,6 +18,7 @@ import {
   designs,
   removalTypes,
   services,
+  staff,
   ticketCounters,
   type Localized,
 } from "@/lib/db/schema";
@@ -374,18 +375,47 @@ export async function bookingSummaries(
       // mis-price here the way there would be with a stored image of a receipt.
       serviceImage: services.image,
       branchName: branches.name,
+      technicianName: staff.name,
     })
     .from(bookings)
     .leftJoin(services, eq(services.id, bookings.serviceId))
     .leftJoin(branches, eq(branches.id, bookings.branchId))
+    .leftJoin(staff, eq(staff.id, bookings.technicianId))
     .where(byCode ? eq(bookings.code, lookup.code) : eq(bookings.customerId, lookup.customerId))
     .orderBy(desc(bookings.startsAt))
     .limit(byCode ? 1 : 50);
 
-  const [spentOn, { cancel_cutoff_hours: cutoff }] = await Promise.all([
-    claimedWindows(rows.map((r) => r.id)),
+  const bookingIds = rows.map((r) => r.id);
+
+  const [spentOn, { cancel_cutoff_hours: cutoff }, addonRows] = await Promise.all([
+    claimedWindows(bookingIds),
     getSettings(["cancel_cutoff_hours"]),
+    bookingIds.length
+      ? db
+          .select({
+            bookingId: bookingAddons.bookingId,
+            name: bookingAddons.name,
+            addonName: addons.name,
+            image: addons.image,
+          })
+          .from(bookingAddons)
+          .innerJoin(addons, eq(addons.id, bookingAddons.addonId))
+          .where(inArray(bookingAddons.bookingId, bookingIds))
+      : Promise.resolve([]),
   ]);
+
+  // Group addons by booking.
+  const addonsByBooking = new Map<string, { name: Localized | null; image: string | null }[]>();
+  for (const ar of addonRows) {
+    const item = {
+      name: ar.name ?? ar.addonName ?? null,
+      image: mediaUrl(ar.image),
+    };
+    const list = addonsByBooking.get(ar.bookingId);
+    if (list) list.push(item);
+    else addonsByBooking.set(ar.bookingId, [item]);
+  }
+
   const now = new Date();
 
   return rows.map((r) => {
@@ -423,7 +453,9 @@ export async function bookingSummaries(
       branchId: r.branchId,
       durationMin: Math.round((r.endsAt.getTime() - r.startsAt.getTime()) / 60_000),
       serviceImage: mediaUrl(r.serviceImage),
+      addons: addonsByBooking.get(r.id) ?? [],
       branchName: r.branchName,
+      technicianName: r.technicianName ?? null,
     };
   });
 }

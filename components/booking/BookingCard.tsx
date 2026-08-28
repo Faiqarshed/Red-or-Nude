@@ -28,6 +28,62 @@ import { pick } from "@/lib/localized";
 import { formatDateLabel, type BookingSummary } from "@/lib/booking";
 import { localTime } from "@/lib/time";
 
+/** Shared backdrop for all dialogs in BookingCard. */
+function Backdrop({
+  onClose,
+  children,
+  className = "",
+}: {
+  onClose: () => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  // Hold the page still underneath, and close on Escape.
+  //
+  // Without the first, the wheel scrolls the booking list behind the dialog and
+  // leaves a second scrollbar down the side of the screen. Without the second,
+  // the only way out of a full-screen overlay is to find the button — which on
+  // a short screen may be the part that had to scroll.
+  //
+  // Assumes one of these is open at a time, which is true here: the gate closes
+  // as the outcome opens. Two at once would restore the body on the first
+  // unmount.
+  useEffect(() => {
+    // Both elements: which one actually scrolls depends on the layout, and
+    // pinning only <body> leaves the page moving under the dialog here.
+    const html = document.documentElement;
+    const previous = { html: html.style.overflow, body: document.body.style.overflow };
+    html.style.overflow = "hidden";
+    document.body.style.overflow = "hidden";
+
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => {
+      html.style.overflow = previous.html;
+      document.body.style.overflow = previous.body;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      {/* A column capped at the viewport, so a long booking scrolls *inside*
+          the card instead of growing past the top and bottom of the screen.
+          `dvh` rather than `vh` because mobile browser chrome moves. */}
+      <div
+        className={`flex max-h-[calc(100dvh-2rem)] w-full max-w-[420px] flex-col overflow-hidden rounded-[24px] bg-white text-start shadow-[0_40px_100px_rgba(0,0,0,0.25)] ${className}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
 
 type RefillDetails = {
   daysLeft: number;
@@ -99,16 +155,12 @@ export default function BookingCard({
   const [gate, setGate] = useState<
     { kind: "cancel" } | { kind: "reschedule"; startsAt: string } | null
   >(null);
-  /**
-   * The details dialog. Opened by tapping the card, and again by a cancellation
-   * or a move — the same screen either way, because "what does my booking say
-   * now" is the same question before and after a change. `outcome` is the line
-   * that appears above it when the second route was taken.
-   *
-   * It stays open across the parent's refetch, so the numbers under the banner
-   * are the new ones rather than a snapshot of what was just replaced.
-   */
-  const [details, setDetails] = useState<{ outcome?: string } | null>(null);
+  /** The booking details dialog. Opened by tapping the card. */
+  const [details, setDetails] = useState(false);
+  /** Success message after a reschedule or cancel. Shown in its own modal. */
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  /** Whether the cancel confirmation dialog is open. */
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   /**
    * Post a change. Returns a message to show, or null when it worked, because
@@ -134,14 +186,15 @@ export default function BookingCard({
         // A cancelled booking is gone either way; `refunded: false` only means
         // the money needs a human, and saying so beats a silent "cancelled".
         setGate(null);
-        setDetails({
-          outcome:
-            what === "cancel"
-              ? data.refunded
-                ? h.cancelled
-                : h.cancelledNoRefund
-              : h.rescheduled,
-        });
+        setConfirmCancel(false);
+        setDetails(false);
+        setSuccessMsg(
+          what === "cancel"
+            ? data.refunded
+              ? h.cancelled
+              : h.cancelledNoRefund
+            : h.rescheduled,
+        );
         onChanged();
         return null;
       }
@@ -163,13 +216,16 @@ export default function BookingCard({
   };
 
   const onCancelClick = () => {
-    // The one destructive thing a customer can do to their own booking, and it
-    // takes their money with it — so it asks first. `confirm` is the browser's,
-    // deliberately: a bespoke modal here would be a second dialog to maintain
-    // for a question with two answers.
-    if (busy || !window.confirm(h.cancelConfirm)) return;
+    if (busy) return;
+    setConfirmCancel(true);
+  };
+
+  const onCancelConfirmed = () => {
     if (signedIn) runNow(() => submit("cancel", { code: row.code }));
-    else setGate({ kind: "cancel" });
+    else {
+      setConfirmCancel(false);
+      setGate({ kind: "cancel" });
+    }
   };
 
   const onSlotPicked = (startsAt: string) => {
@@ -193,11 +249,11 @@ export default function BookingCard({
       <div
         role="button"
         tabIndex={0}
-        onClick={() => setDetails({})}
+        onClick={() => setDetails(true)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setDetails({});
+            setDetails(true);
           }
         }}
         aria-label={h.detailsOpen}
@@ -313,120 +369,191 @@ export default function BookingCard({
         />
       )}
 
+      {/* ── Booking details popup ── */}
       {details && (
-        <div
-          className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setDetails(null)}
-        >
-          <div
-            className="w-full max-w-[420px] overflow-hidden rounded-[24px] bg-white text-start shadow-[0_40px_100px_rgba(0,0,0,0.25)]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Only after a change, and above everything else, because it is
-                the answer to the question that opened this. */}
-            {details.outcome && (
-              <p
-                role="status"
-                className="bg-[#eaf5ee] px-7 py-4 text-[13px] font-semibold text-[#2f7a4d]"
-              >
-                {details.outcome}
-              </p>
-            )}
-
-            {row.serviceImage && (
-              // eslint-disable-next-line @next/next/no-img-element -- the URL is
-              // whatever the media store returned; next/image would need every
-              // one of those hosts declared up front.
+        <Backdrop onClose={() => setDetails(false)} className="overflow-hidden">
+          {/* Main Service Image Header */}
+          {row.serviceImage && (
+            <div className="relative h-36 w-full shrink-0 overflow-hidden bg-black/[0.04] sm:h-44">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={row.serviceImage}
                 alt=""
-                className="h-40 w-full object-cover"
+                className="h-full w-full object-cover"
                 loading="lazy"
               />
-            )}
+              <div className="absolute start-4 top-4 rounded-full bg-black/60 px-3 py-1 text-[11px] font-semibold text-white backdrop-blur-md">
+                {h.serviceLabel}
+              </div>
+            </div>
+          )}
 
-            <div className="p-7">
-              <h3 className="font-display text-xl font-extrabold text-ink">
-                {row.serviceName ? pick(row.serviceName, lang) : h.detailsTitle}
-              </h3>
+          {/* min-h-0 is load-bearing: a flex child defaults to min-height:auto,
+              which refuses to shrink below its content and would push the close
+              button off the bottom instead of scrolling. */}
+          <div className="min-h-0 flex-1 overflow-y-auto px-7 pt-7">
+            <h3 className="font-display text-xl font-extrabold text-ink">
+              {row.serviceName ? pick(row.serviceName, lang) : h.detailsTitle}
+            </h3>
 
-              <dl className="mt-5 space-y-3">
-                {[
-                  [h.whenLabel, `${formatDateLabel(row.startsAt.slice(0, 10), lang)} · ${localTime(row.startsAt)}`],
-                  [h.branchLabel, row.branchName ? pick(row.branchName, lang) : null],
-                  [h.durationLabel, h.durationMin.replace("{n}", String(row.durationMin))],
-                  [h.ticket, row.ticketNo],
-                  [h.statusLabel, h.statuses[row.status] ?? row.status],
-                  [h.referenceLabel, row.code],
-                ]
-                  .filter(([, value]) => value)
-                  .map(([label, value]) => (
-                    <div key={label as string} className="flex items-baseline justify-between gap-4">
-                      <dt className="text-[13px] text-ink/55">{label}</dt>
-                      <dd className="text-[13px] font-semibold text-ink">{value}</dd>
+            {/* Dedicated Add-ons section with clear image thumbnails & names */}
+            {row.addons.length > 0 && (
+              <div className="mt-4 rounded-[16px] bg-[#FAF8F5] p-3.5 ring-1 ring-black/[0.05]">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-[12px] font-bold text-ink/70">{h.addonsLabel}</span>
+                  <span className="rounded-full bg-black/[0.06] px-2 py-0.5 text-[10px] font-semibold text-ink/60">
+                    {row.addons.length}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {row.addons.map((addon, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-2.5 rounded-[12px] bg-white px-2.5 py-1.5 shadow-sm ring-1 ring-black/[0.04]"
+                    >
+                      {addon.image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={addon.image}
+                          alt=""
+                          className="h-8 w-8 rounded-[8px] object-cover ring-1 ring-black/[0.08]"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="grid h-8 w-8 place-items-center rounded-[8px] bg-red/10 text-xs font-bold text-red">
+                          +
+                        </div>
+                      )}
+                      <span className="text-[13px] font-semibold text-ink">
+                        {addon.name ? pick(addon.name, lang) : ""}
+                      </span>
                     </div>
                   ))}
-
-                <div className="flex items-baseline justify-between gap-4 border-t border-black/[0.06] pt-3">
-                  <dt className="text-[13px] text-ink/55">{h.totalLabel}</dt>
-                  <dd className="flex items-center gap-1 font-display text-base font-extrabold text-red">
-                    <Riyal className="h-4 w-4" />
-                    {row.totalSar}
-                  </dd>
                 </div>
-              </dl>
+              </div>
+            )}
 
-              {row.canCancel && (
-                <p className="mt-4 text-[11px] text-ink/40">
-                  {h.changeBy} {formatDateLabel(row.cancelBy.slice(0, 10), lang)}
-                </p>
-              )}
+            <dl className="mt-5 space-y-3">
+              {[
+                [h.whenLabel, `${formatDateLabel(row.startsAt.slice(0, 10), lang)} · ${localTime(row.startsAt)}`],
+                [h.branchLabel, row.branchName ? pick(row.branchName, lang) : null],
+                [h.technicianLabel, row.technicianName || h.notAssignedYet],
+                [h.durationLabel, h.durationMin.replace("{n}", String(row.durationMin))],
+                [h.ticket, row.ticketNo],
+                [h.statusLabel, h.statuses[row.status] ?? row.status],
+              ]
+                .filter(([, value]) => value)
+                .map(([label, value]) => (
+                  <div key={label as string} className="flex items-baseline justify-between gap-4">
+                    <dt className="text-[13px] text-ink/55">{label}</dt>
+                    <dd className="text-[13px] font-semibold text-ink">{value}</dd>
+                  </div>
+                ))}
 
-              <button
-                type="button"
-                onClick={() => setDetails(null)}
-                className="mt-6 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
-              >
-                {c.payment.close}
-              </button>
-            </div>
+              <div className="flex items-baseline justify-between gap-4 border-t border-black/[0.06] pt-3">
+                <dt className="text-[13px] text-ink/55">{h.totalLabel}</dt>
+                <dd className="flex items-center gap-1 font-display text-base font-extrabold text-red">
+                  <Riyal className="h-4 w-4" />
+                  {row.totalSar}
+                </dd>
+              </div>
+            </dl>
+
+            {row.canCancel && (
+              <p className="mt-4 pb-7 text-[11px] text-ink/40">
+                {h.changeBy} {formatDateLabel(row.cancelBy.slice(0, 10), lang)}
+              </p>
+            )}
           </div>
-        </div>
+
+          {/* Outside the scroll area, so the way out is always on screen. */}
+          <div className="shrink-0 border-t border-black/[0.06] p-5">
+            <button
+              type="button"
+              onClick={() => setDetails(false)}
+              className="w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
+            >
+              {c.payment.close}
+            </button>
+          </div>
+        </Backdrop>
+      )}
+
+      {/* ── Success modal (after reschedule / cancel) ── */}
+      {successMsg && (
+        <Backdrop onClose={() => setSuccessMsg(null)}>
+          <div className="flex flex-col items-center px-7 py-10 text-center">
+            {/* Green checkmark */}
+            <div className="grid h-16 w-16 place-items-center rounded-full bg-[#eaf5ee]">
+              <svg viewBox="0 0 24 24" width={32} height={32} fill="none" stroke="#2f7a4d" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            </div>
+            <p className="mt-5 text-[15px] font-semibold text-[#2f7a4d]">{successMsg}</p>
+            <button
+              type="button"
+              onClick={() => setSuccessMsg(null)}
+              className="mt-8 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
+            >
+              {h.successDone}
+            </button>
+          </div>
+        </Backdrop>
+      )}
+
+      {/* ── Cancel confirmation modal ── */}
+      {confirmCancel && (
+        <Backdrop onClose={() => setConfirmCancel(false)}>
+          <div className="flex flex-col items-center px-7 py-10 text-center">
+            {/* Warning icon */}
+            <div className="grid h-16 w-16 place-items-center rounded-full bg-red/[0.08]">
+              <svg viewBox="0 0 24 24" width={32} height={32} fill="none" stroke="#B80007" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            </div>
+            <p className="mt-5 text-[15px] font-semibold text-ink">{h.cancelConfirm}</p>
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={onCancelConfirmed}
+              className="mt-8 w-full rounded-[12px] bg-red-grad py-3 text-center text-sm font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {busy === "cancel" ? h.cancelling : h.cancel}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmCancel(false)}
+              className="mt-3 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
+            >
+              {h.cancelKeep}
+            </button>
+          </div>
+        </Backdrop>
       )}
 
       {/* A guest confirms the change with a code sent to the booking's own
           address. Knowing the reference opens the booking; it does not end it. */}
       {gate && (
-        <div
-          className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setGate(null)}
-        >
-          <div
-            className="w-full max-w-[420px] rounded-[24px] bg-white p-7 text-start shadow-[0_40px_100px_rgba(0,0,0,0.25)]"
-            onClick={(e) => e.stopPropagation()}
+        <Backdrop onClose={() => setGate(null)} className="p-7">
+          <OtpSteps
+            code={row.code}
+            intro={h.verifyIntroChange}
+            onSubmit={(otp) =>
+              gate.kind === "cancel"
+                ? submit("cancel", { code: row.code }, otp)
+                : submit("reschedule", { code: row.code, startsAt: gate.startsAt }, otp)
+            }
+          />
+          <button
+            type="button"
+            onClick={() => setGate(null)}
+            className="mt-5 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
           >
-            <OtpSteps
-              code={row.code}
-              intro={h.verifyIntroChange}
-              onSubmit={(otp) =>
-                gate.kind === "cancel"
-                  ? submit("cancel", { code: row.code }, otp)
-                  : submit("reschedule", { code: row.code, startsAt: gate.startsAt }, otp)
-              }
-            />
-            <button
-              type="button"
-              onClick={() => setGate(null)}
-              className="mt-5 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
-            >
-              {c.payment.close}
-            </button>
-          </div>
-        </div>
+            {c.payment.close}
+          </button>
+        </Backdrop>
       )}
     </article>
   );

@@ -156,6 +156,11 @@ export function formatTime(slot: string, d: DateStrings): string {
  * is where that promise is kept. Adding a field here widens what a leaked
  * reference is worth; do it deliberately or not at all.
  */
+export type BookingAddonSummary = {
+  name: Localized | null;
+  image: string | null;
+};
+
 export type BookingSummary = {
   code: string;
   startsAt: string;
@@ -184,6 +189,10 @@ export type BookingSummary = {
   // name, phone, email, station or notes. See lib/bookings.ts.
   /** Live catalogue image for the service, or null if it has none. */
   serviceImage: string | null;
+  /** Add-ons attached to this booking, with names and catalogue images. */
+  addons: BookingAddonSummary[];
   /** Which salon, by name rather than by id. */
   branchName: Localized | null;
+  /** Assigned technician's display name, or null when not yet assigned. */
+  technicianName: string | null;
 };

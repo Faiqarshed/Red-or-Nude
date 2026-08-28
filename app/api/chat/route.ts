@@ -276,10 +276,17 @@ async function runTool(
 }
 
 /**
- * Drop what only a screen can use. An image URL and a branch id are tokens the
- * model pays for and can do nothing with, and on the free tier that ceiling is
- * low enough to care about.
+ * Drop what only a screen can use, and what nobody agreed to send.
+ *
+ * Image URLs and a branch id are tokens the model pays for and can do nothing
+ * with, on a tier where that ceiling is low. The technician's name is a
+ * separate matter: it is a member of staff's, not the customer's, and the free
+ * tier trains on what it is sent and allows human review of it. The assistant
+ * has no reason to name her, so it is not told.
  */
-function forModel({ serviceImage, branchId, ...rest }: BookingSummary) {
-  return rest;
+function forModel({ serviceImage, branchId, addons, technicianName, ...rest }: BookingSummary) {
+  return {
+    ...rest,
+    addons: addons.map((a) => a.name).filter(Boolean),
+  };
 }
