@@ -5,12 +5,12 @@
 // from the `bookings_station_slot_unique` index, from `reserveStations`, and
 // from the availability engine's conflict scan, so cancelling *is* releasing.
 //
-// Auth is the booking reference alone, deliberately. It arrives in the
-// customer's own inbox, and a refund always returns to the card that paid, so
-// the worst a leaked reference buys is a nuisance cancellation — not money. The
-// guards are the throttle below and an audit row, not an OTP round-trip on every
-// cancel. If that ever stops being true, wrapping this in `verifyOtp` the way
-// ../refill/route.ts does is a few lines; lib/otp.ts is already built.
+// Auth is no longer the booking reference alone. A reference is forwardable and
+// stays valid in an inbox forever, so it now proves only that you know which
+// booking you mean — not that it is yours. mayActOnBooking() wants one of two
+// real credentials: a session that owns the row, or the short-lived ticket a
+// guest gets by spending a code at POST /api/my-bookings. The throttle below and
+// the audit row remain, but they are no longer the only guards.
 
 import { NextResponse } from "next/server";
 import { and, asc, eq, inArray } from "drizzle-orm";
@@ -23,6 +23,7 @@ import { clientIp, throttled } from "@/lib/throttle";
 import { refundBookings } from "@/lib/payments/refund";
 import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
+import { mayActOnBooking } from "@/lib/account/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -48,9 +49,12 @@ export async function POST(request: Request) {
   const code = parsed.data.code.toUpperCase();
 
   const [anchor] = await db.select().from(bookings).where(eq(bookings.code, code)).limit(1);
-  // Same opaque "no" the lookup endpoint gives, so a caller walking the code
-  // space learns nothing from the difference.
-  if (!anchor) return NextResponse.json({ error: "not-found" }, { status: 404 });
+  // One answer for "no such reference" and for "not yours". Splitting them would
+  // hand a caller walking the code space a way to confirm a hit without ever
+  // holding the credential — the oracle the code at lookup exists to close.
+  if (!anchor || !(await mayActOnBooking(anchor))) {
+    return NextResponse.json({ error: "wrong" }, { status: 401 });
+  }
 
   const { cancel_cutoff_hours: cutoff } = await getSettings(["cancel_cutoff_hours"]);
   const refusal = cancelRefusal(anchor, cutoff);

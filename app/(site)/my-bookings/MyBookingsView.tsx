@@ -5,6 +5,7 @@ import { useState } from "react";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import BookingCard, { RefillDialog } from "@/components/booking/BookingCard";
+import OtpSteps, { otpErrorMessage } from "@/components/booking/OtpSteps";
 import { useI18n } from "@/lib/i18n";
 import type { BookingSummary } from "@/lib/booking";
 
@@ -28,33 +29,53 @@ export default function MyBookingsView() {
   const [error, setError] = useState<string | null>(null);
   /** The reference whose refill is being unlocked, if the dialog is open. */
   const [verifying, setVerifying] = useState<string | null>(null);
+  /** The reference is known; the server wants a code from its inbox. */
+  const [needsCode, setNeedsCode] = useState(false);
 
-  const lookup = async (reference: string) => {
+  /**
+   * Open the booking. `otp` is absent on the first attempt and on every
+   * re-read afterwards, because the ticket set by a successful verification
+   * rides along in a cookie for half an hour.
+   *
+   * Returns a message for OtpSteps to render when a code was spent and refused,
+   * and null otherwise — the plain lookup path reports through `error` instead.
+   */
+  const lookup = async (reference: string, otp?: string): Promise<string | null> => {
     const trimmed = reference.trim();
-    if (!trimmed || loading) return;
+    if (!trimmed) return null;
 
     setLoading(true);
-    setError(null);
+    if (!otp) setError(null);
     try {
       const res = await fetch("/api/my-bookings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: trimmed }),
+        body: JSON.stringify(otp ? { code: trimmed, otp } : { code: trimmed }),
       });
+      const data = await res.json().catch(() => ({}));
 
       if (res.ok) {
-        const data = await res.json();
         setRows(data.bookings as BookingSummary[]);
-        return;
+        setNeedsCode(false);
+        return null;
       }
 
       setRows(null);
-      if (res.status === 404) setError(h.notFound);
-      else if (res.status === 429) setError(h.tooMany);
-      else setError(h.failed);
+      // Not a failure — the expected answer for a guest arriving with nothing
+      // but a reference. Move to the code step; it says nothing about whether
+      // the reference is real.
+      if (data.error === "otp-required") {
+        setNeedsCode(true);
+        return null;
+      }
+      if (otp) return otpErrorMessage(data.error, h);
+      setError(res.status === 429 ? h.tooMany : h.failed);
+      return null;
     } catch {
       setRows(null);
+      if (otp) return h.failed;
       setError(h.failed);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -69,6 +90,7 @@ export default function MyBookingsView() {
     setRows(null);
     setCode("");
     setError(null);
+    setNeedsCode(false);
   };
 
   return (
@@ -133,6 +155,16 @@ export default function MyBookingsView() {
           >
             {error}
           </p>
+        )}
+
+        {needsCode && !rows && (
+          <div className="mt-6 rounded-[20px] border border-black/[0.06] bg-white p-6 text-start">
+            <OtpSteps
+              code={code}
+              intro={h.verifyIntroLookup}
+              onSubmit={(otp) => lookup(code, otp)}
+            />
+          </div>
         )}
 
         {rows && (

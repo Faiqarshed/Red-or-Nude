@@ -11,16 +11,15 @@
 // into a form, or a session cookie — and not in what a booking is or what may
 // be done to it. So this component knows nothing about either.
 //
-// ponytail: the cancel / reschedule / refill routes still authenticate on the
-// booking reference even for a signed-in customer, which is why the refill
-// dialog below still emails a code to someone who is already signed in.
-// Accepting the session as an alternative credential is tidier, but it means a
-// second auth path through three routes for no behaviour the customer can see.
-// Add it if that OTP step ever shows up as friction.
+// It also knows nothing about which credential got them here. Cancel, move and
+// refill all post the reference and let the server decide, because the server
+// is the only side that can see the session cookie and the guest ticket — see
+// mayActOnBooking() in lib/account/guard.ts.
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ScheduleModal from "@/components/booking/ScheduleModal";
+import OtpSteps, { otpErrorMessage } from "@/components/booking/OtpSteps";
 import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
@@ -47,13 +46,19 @@ const STATUS_TONE: Record<string, string> = {
 /**
  * Turn an API refusal into something the customer can act on.
  *
- * The three reasons are kept apart on purpose: telling someone who already
- * cancelled that their window has closed sends them looking for a deadline
- * problem they do not have. See lib/cancellation.ts.
+ * The reasons are kept apart on purpose: telling someone who already cancelled
+ * that their window has closed sends them looking for a deadline problem they
+ * do not have. See lib/cancellation.ts.
  */
 function refusalMessage(
   data: { error?: string; cutoffHours?: number },
-  h: { windowClosed: string; alreadyCancelled: string; notCancellable: string; failed: string },
+  h: {
+    windowClosed: string;
+    alreadyCancelled: string;
+    notCancellable: string;
+    sessionExpired: string;
+    failed: string;
+  },
 ): string {
   switch (data.error) {
     case "window-closed":
@@ -62,6 +67,11 @@ function refusalMessage(
       return h.alreadyCancelled;
     case "not-cancellable":
       return h.notCancellable;
+    // The credential went stale — most often a guest whose half-hour ticket
+    // lapsed while they browsed the calendar. "Try again" would be a lie; the
+    // way back is another lookup.
+    case "wrong":
+      return h.sessionExpired;
     default:
       return h.failed;
   }
@@ -262,73 +272,57 @@ export default function BookingCard({
 }
 
 /**
- * Two steps: ask for a code, then spend it.
+ * The refill offer, behind a check that the asker owns the booking.
  *
- * The refill details never travel with the booking listing — they are fetched
- * only after the code verifies, so the reference on its own reveals nothing
- * about the offer. See app/api/my-bookings/refill/route.ts.
+ * The details never travel with the booking listing — they are fetched only
+ * after the server accepts a credential, so a reference on its own reveals
+ * nothing about the offer. See app/api/my-bookings/refill/route.ts.
+ *
+ * The two code steps live in OtpSteps, shared with the guest lookup. A guest
+ * who reached their booking by spending a code minutes ago is already carrying
+ * the ticket, so the usual path through here is the one that never renders
+ * them: the first request succeeds and the offer appears.
  */
 export function RefillDialog({ code, onClose }: { code: string; onClose: () => void }) {
   const { c, lang } = useI18n();
   const h = c.history;
 
-  const [step, setStep] = useState<"ask" | "enter">("ask");
-  const [sentTo, setSentTo] = useState<string | null>(null);
-  const [otp, setOtp] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [details, setDetails] = useState<RefillDetails | null>(null);
+  const [needsCode, setNeedsCode] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
 
-  const request = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/my-bookings/otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(res.status === 429 ? h.tooMany : h.verifyMailFailed);
-        return;
-      }
-      setSentTo(data.sentTo ?? null);
-      setStep("enter");
-    } catch {
-      setError(h.verifyMailFailed);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const verify = async () => {
-    if (busy || otp.length !== 6) return;
-    setBusy(true);
-    setError(null);
+  /** Ask for the offer. `otp` is absent on the first, cookie-only attempt. */
+  const load = async (otp?: string): Promise<string | null> => {
     try {
       const res = await fetch("/api/my-bookings/refill", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, otp }),
+        body: JSON.stringify(otp ? { code, otp } : { code }),
       });
       const data = await res.json().catch(() => ({}));
 
       if (res.ok) {
         setDetails(data.refill as RefillDetails);
-        return;
+        return null;
       }
-      if (data.error === "too-many-attempts") setError(h.verifyTooMany);
-      else if (data.error === "no-code" || data.error === "expired") setError(h.verifyExpired);
-      else setError(h.verifyWrong);
-      setOtp("");
+      // No cookie to go on. Fall back to the code, which is the path a
+      // forwarded link or an expired ticket lands on.
+      if (data.error === "otp-required") {
+        setNeedsCode(true);
+        return null;
+      }
+      return otpErrorMessage(data.error, h);
     } catch {
-      setError(h.failed);
-    } finally {
-      setBusy(false);
+      return h.failed;
     }
   };
+
+  // First attempt on open, using whatever cookie the browser already has.
+  useEffect(() => {
+    void load().then(setProblem);
+    // Once, for this booking. `load` is stable enough for that intent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code]);
 
   const countdown = details
     ? details.daysLeft <= 1
@@ -348,7 +342,6 @@ export function RefillDialog({ code, onClose }: { code: string; onClose: () => v
         onClick={(e) => e.stopPropagation()}
       >
         {details ? (
-          // ---- verified: the offer itself --------------------------------
           details.daysLeft > 0 ? (
             <>
               <h3 className="font-display text-xl font-extrabold text-ink">{h.refillBadge}</h3>
@@ -381,76 +374,23 @@ export function RefillDialog({ code, onClose }: { code: string; onClose: () => v
               )}
             </>
           ) : (
-            // The window closed between listing and verifying. Rare, but the
+            // The window closed between listing and asking. Rare, but the
             // server is the authority and it just said no.
             <p className="text-sm text-ink/60">{h.refillGone}</p>
           )
-        ) : step === "ask" ? (
-          // ---- step 1: request a code ------------------------------------
-          <>
-            <h3 className="font-display text-xl font-extrabold text-ink">{h.verifyTitle}</h3>
-            <p className="mt-2 text-sm text-ink/55">{h.verifyIntro}</p>
-            <button
-              type="button"
-              onClick={request}
-              disabled={busy}
-              className={`mt-6 w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
-                busy ? "cursor-not-allowed bg-black/[0.06] text-ink/40" : "bg-red-grad text-white hover:opacity-90"
-              }`}
-            >
-              {busy ? h.verifySending : h.verifySend}
-            </button>
-          </>
+        ) : needsCode ? (
+          <OtpSteps
+            code={code}
+            intro={h.verifyIntroRefill}
+            onSubmit={(otp) => load(otp)}
+          />
         ) : (
-          // ---- step 2: spend it ------------------------------------------
-          <>
-            <h3 className="font-display text-xl font-extrabold text-ink">{h.verifyTitle}</h3>
-            <p className="mt-2 text-sm text-ink/55">
-              {h.verifySentTo} <span dir="ltr">{sentTo ?? "—"}</span>
-            </p>
-
-            <label className="mt-5 block">
-              <span className="mb-1.5 block text-[12px] text-ink/55">{h.verifyCodeLabel}</span>
-              <input
-                value={otp}
-                onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                onKeyDown={(e) => e.key === "Enter" && void verify()}
-                dir="ltr"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                placeholder="000000"
-                className="w-full rounded-[12px] border border-black/[0.08] px-4 py-3 text-center text-lg font-bold tracking-[0.4em] text-ink outline-none placeholder:text-ink/20 focus:border-red/40"
-              />
-            </label>
-
-            <button
-              type="button"
-              onClick={verify}
-              disabled={busy || otp.length !== 6}
-              className={`mt-4 w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
-                busy || otp.length !== 6
-                  ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
-                  : "bg-red-grad text-white hover:opacity-90"
-              }`}
-            >
-              {busy ? h.verifyChecking : h.verifySubmit}
-            </button>
-
-            <button
-              type="button"
-              onClick={request}
-              disabled={busy}
-              className="mt-3 w-full text-center text-[12px] text-ink/45 underline underline-offset-4 hover:text-red"
-            >
-              {h.verifyResend}
-            </button>
-          </>
+          <p className="text-sm text-ink/60">{h.loading}</p>
         )}
 
-        {error && (
+        {problem && (
           <p role="alert" className="mt-4 rounded-[12px] bg-red/[0.08] px-4 py-3 text-xs text-red">
-            {error}
+            {problem}
           </p>
         )}
 

@@ -20,6 +20,7 @@ import { getSettings } from "@/lib/settings";
 import { clientIp, throttled } from "@/lib/throttle";
 import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
+import { mayActOnBooking } from "@/lib/account/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -47,7 +48,10 @@ export async function POST(request: Request) {
   const startsAt = new Date(parsed.data.startsAt);
 
   const [before] = await db.select().from(bookings).where(eq(bookings.code, code)).limit(1);
-  if (!before) return NextResponse.json({ error: "not-found" }, { status: 404 });
+  // Same credential and the same single answer as cancelling — see ../cancel.
+  if (!before || !(await mayActOnBooking(before))) {
+    return NextResponse.json({ error: "wrong" }, { status: 401 });
+  }
 
   const { cancel_cutoff_hours: cutoff, booking_lead_time_min: leadMin } = await getSettings([
     "cancel_cutoff_hours",

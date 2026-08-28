@@ -6,7 +6,7 @@ import { cookies } from "next/headers";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { customers } from "@/lib/db/schema";
-import { ACCOUNT_COOKIE, readSession } from "./session";
+import { ACCOUNT_COOKIE, BOOKING_COOKIE, readBookingTicket, readSession } from "./session";
 
 export type SessionCustomer = {
   id: string;
@@ -52,3 +52,41 @@ export async function currentCustomer(): Promise<SessionCustomer | null> {
   };
 }
 
+
+/**
+ * Whether this request is allowed to act on a booking — cancel it, move it, or
+ * read its refill offer.
+ *
+ * Two credentials, one rule, written once because cancel and reschedule both
+ * need it and a rule that disagrees with itself across two routes is how a
+ * booking becomes cancellable from one URL and not the other:
+ *
+ *   • a signed-in customer, *if the booking is theirs*. The session proves who
+ *     you are and nothing more — without the equality any signed-in customer
+ *     could cancel any booking whose reference they knew, which would be weaker
+ *     than the guest path it replaced, not stronger. It is also the predicate
+ *     /account lists by, so the invariant is: every card on that screen is
+ *     actionable, and nothing else is.
+ *
+ *   • a guest holding the ticket minted at POST /api/my-bookings, which they
+ *     got by spending a code sent to the booking's own inbox. Scoped to one
+ *     booking id, so a ticket for one appointment does not open another.
+ *
+ * A group shares one customerId — createBookings() writes the booker's id to
+ * every member — so ownership of the anchor is ownership of the group, and
+ * cancelling as a unit needs no second check.
+ *
+ * A booking whose customer row was deleted (`customerId` is nullable) satisfies
+ * neither credential and needs a receptionist. Correct: there is nothing left
+ * to prove ownership with.
+ */
+export async function mayActOnBooking(booking: {
+  id: string;
+  customerId: string | null;
+}): Promise<boolean> {
+  const customer = await currentCustomer();
+  if (customer) return booking.customerId === customer.id;
+
+  const ticketFor = await readBookingTicket(cookies().get(BOOKING_COOKIE)?.value);
+  return ticketFor === booking.id;
+}
