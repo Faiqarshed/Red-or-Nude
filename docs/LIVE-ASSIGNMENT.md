@@ -9,6 +9,10 @@ runnable, in order.
 Read [DAY-START-ASSIGNMENT.md](DAY-START-ASSIGNMENT.md) first. This is a layer
 on top of it, and reuses its rule wholesale.
 
+Part 2 below is the runnable half — two `npm` scripts and a browser. The
+click-through covering this branch as a whole is
+[MANUAL-TESTING.md](MANUAL-TESTING.md) §6.
+
 ---
 
 # Part 1 — Walkthrough
