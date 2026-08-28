@@ -19,7 +19,7 @@
 // not block a customer standing at the desk.
 
 import "server-only";
-import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, lte } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, lte, notInArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, staff, staffTimeOff, stations, customers } from "@/lib/db/schema";
 import { sendMail } from "@/lib/email";
@@ -238,6 +238,11 @@ export async function assignDay(
     // Already spoken for. Counted toward the spread, and their spans block the
     // technician who holds them — a manual 10am assignment must not be handed a
     // second customer at 10:15 by this job.
+    //
+    // Cancelled and no-show rows are not "spoken for": the technician named on
+    // one is standing free. Without this filter a cancellation would hold her
+    // hour hostage for the rest of the day — invisible while this only ran at
+    // dawn, and wrong the moment it runs after a customer cancels.
     db
       .select({
         id: bookings.technicianId,
@@ -245,7 +250,13 @@ export async function assignDay(
         endsAt: bookings.endsAt,
       })
       .from(bookings)
-      .where(and(inTheDay, isNotNull(bookings.technicianId))),
+      .where(
+        and(
+          inTheDay,
+          isNotNull(bookings.technicianId),
+          notInArray(bookings.status, ["cancelled", "no_show"]),
+        ),
+      ),
 
     db
       .select({ id: staff.id })
@@ -302,6 +313,42 @@ export async function assignDay(
   }
 
   return { assigned, unassigned: open.length - assigned };
+}
+
+/**
+ * Is this appointment on the day the salon is running right now?
+ *
+ * Split out for the same reason chooseTechnician is: it is the whole of the rule
+ * deciding when live assignment happens, so scripts/check-roles.ts can walk it
+ * across a Riyadh midnight without a database.
+ */
+export function isToday(day: Date, now: Date = new Date()): boolean {
+  return riyadhDateKey(day) === riyadhDateKey(now);
+}
+
+/**
+ * Deal today's floor again, because something on it just changed — a booking
+ * paid for at noon, a cancellation, a reschedule, a technician sent home.
+ *
+ * One shared function rather than four narrow ones, because assignDay only ever
+ * fills empty rows: it cannot take a customer off anyone, undo what a
+ * receptionist chose, or do anything twice.
+ *
+ * **Today only.** An assignment made days ahead cannot see who will be on leave
+ * by then, and filling the row is precisely what stops the dawn run looking at
+ * it again — so an early guess would stick.
+ *
+ * Never throws. A booking without a technician is a line on the front desk's
+ * screen, not a failed request.
+ */
+export async function assignIfToday(branchId: string, day: Date): Promise<void> {
+  if (!isToday(day)) return;
+
+  try {
+    await assignDay(branchId);
+  } catch (err) {
+    console.error(`[assign] live run failed for branch ${branchId}`, err);
+  }
 }
 
 /**

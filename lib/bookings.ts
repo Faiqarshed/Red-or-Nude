@@ -32,6 +32,7 @@ import { quotePromo, type PromoRefusal } from "@/lib/promo";
 import { quoteReward, spendPoints } from "@/lib/loyalty";
 import type { RewardRefusal } from "@/lib/rewards";
 import { formatTicketNo } from "@/lib/tickets";
+import { assignIfToday } from "@/lib/assign";
 import { mediaUrl } from "@/lib/storage";
 import type { BookingSummary } from "@/lib/booking";
 
@@ -974,6 +975,12 @@ export async function rescheduleBooking(input: {
             startsAt: input.startsAt,
             endsAt: new Date(input.startsAt.getTime() + durations[i]),
             stationId: stationIds[i],
+            // The technician was free at the old time; at the new one she may
+            // already have someone. Emptying the row hands the booking back to
+            // the automation below, which is the only thing that checks. Keeping
+            // a name that is now double-booked would look like a decision and be
+            // a clash.
+            technicianId: null,
             updatedAt: new Date(),
           })
           .where(eq(bookings.id, member.id));
@@ -983,6 +990,12 @@ export async function rescheduleBooking(input: {
     });
 
     if (!moved) return { ok: false, error: "slot-taken" };
+
+    // Re-staffed straight away when the move lands on today. A move to a later
+    // day deliberately stays empty until that morning's run, which is the only
+    // one that can see who will be in.
+    await assignIfToday(anchor.branchId, input.startsAt);
+
     return { ok: true, startsAt: input.startsAt, stationIds: moved };
   } catch (err) {
     if (isSlotConflict(err)) return { ok: false, error: "slot-taken" };

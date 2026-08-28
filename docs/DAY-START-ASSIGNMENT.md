@@ -75,19 +75,25 @@ code rather than by convention:
 3. **Any row, any time.** The dropdown is on every live row of the day, not just
    the checked-in ones, so the desk can move a technician before the customer
    arrives.
-4. **Someone leaves — Today's team.** Marking a technician out and handing her
-   customers on is its own screen, §7 below. Nothing is redistributed
-   automatically: she knows which of her customers can wait, and the software
-   does not.
+4. **Someone leaves — Today's team.** Marking a technician out is its own
+   screen, §7 below. Her waiting customers *are* redistributed, immediately —
+   see [LIVE-ASSIGNMENT.md](LIVE-ASSIGNMENT.md) §5 — but anyone already in her
+   chair stays with her, and every name the run writes is one a receptionist can
+   overrule afterwards.
 
 To turn the automation off entirely, drop the entry from `vercel.json` — the
 salon goes back to assigning at check-in exactly as it did before.
 
-**Un-assigning is not on offer.** An empty technician means one thing — *this
-booking arrived after the morning run* — and it is the only state the screen
-cannot produce by hand. A receptionist clearing a row would forge that signal,
-so `assignTechnician` only ever moves a booking **to** somebody. Whatever arrives
-later in the day is picked up by the desk, or by the check-in picker.
+**Un-assigning is not on offer from the drawer.** A receptionist clearing a row
+by hand would forge a signal she does not mean, so `assignTechnician` only ever
+moves a booking **to** somebody. The two places that *do* empty a row —
+rescheduling and sending a technician home — both re-deal it in the same breath,
+so it is never left dangling.
+
+**Whatever arrives after this run** is picked up within seconds rather than at
+check-in: see [LIVE-ASSIGNMENT.md](LIVE-ASSIGNMENT.md), which re-runs `assignDay`
+whenever the day changes underneath it. The desk and the check-in picker remain
+the fallback behind both.
 
 Every automatic write is audited like a manual one. `recordAudit` already
 accepts a null actor id for mutations with no staff member behind them, so the

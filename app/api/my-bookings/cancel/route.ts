@@ -24,6 +24,7 @@ import { refundBookings } from "@/lib/payments/refund";
 import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
 import { refuseBookingAction } from "@/lib/booking-auth";
+import { assignIfToday } from "@/lib/assign";
 import { OTP_LENGTH } from "@/lib/otp";
 
 export const dynamic = "force-dynamic";
@@ -135,6 +136,11 @@ export async function POST(request: Request) {
   );
 
   await notifyCustomer(anchor.customerId, "booking-cancelled", { count: cancelled.length });
+
+  // The chair came free and so did whoever was holding this hour. Anything left
+  // unassigned today may now be staffable, so run the day again — it only fills
+  // empty rows, so nobody loses a customer over someone else's cancellation.
+  await assignIfToday(anchor.branchId, anchor.startsAt);
 
   return NextResponse.json({
     ok: true,
