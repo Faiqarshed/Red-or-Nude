@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useState } from "react";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
-import BookingCard, { RefillDialog, type HistoryRow } from "@/components/booking/BookingCard";
+import BookingCard, { RefillDialog } from "@/components/booking/BookingCard";
 import { useI18n } from "@/lib/i18n";
+import type { BookingSummary } from "@/lib/booking";
 
 // The refill button lives in BookingCard and nowhere else — that is the whole
 // point of the feature: it is not a catalogue item, it is something a past
@@ -22,7 +23,7 @@ export default function MyBookingsView() {
   const h = c.history;
 
   const [code, setCode] = useState("");
-  const [rows, setRows] = useState<HistoryRow[] | null>(null);
+  const [rows, setRows] = useState<BookingSummary[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** The reference whose refill is being unlocked, if the dialog is open. */
@@ -43,7 +44,7 @@ export default function MyBookingsView() {
 
       if (res.ok) {
         const data = await res.json();
-        setRows(data.bookings as HistoryRow[]);
+        setRows(data.bookings as BookingSummary[]);
         return;
       }
 

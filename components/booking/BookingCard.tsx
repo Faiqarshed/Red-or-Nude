@@ -24,32 +24,8 @@ import ScheduleModal from "@/components/booking/ScheduleModal";
 import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
-import { formatDateLabel } from "@/lib/booking";
-import type { bookingStatus } from "@/lib/db/schema";
-import type { Localized } from "@/lib/localized";
+import { formatDateLabel, type BookingSummary } from "@/lib/booking";
 
-export type HistoryRow = {
-  code: string;
-  startsAt: string;
-  status: (typeof bookingStatus.enumValues)[number];
-  ticketNo: string | null;
-  serviceName: Localized | null;
-  totalSar: number;
-  isRefill: boolean;
-  /** Whether a refill is on offer. The details are behind an emailed code. */
-  hasRefill: boolean;
-  /**
-   * Whether the 3-hour window is still open (brief §2.6). Decided by the server
-   * from lib/cancellation.ts, never re-derived here — a button that offers what
-   * the API refuses is worse than no button.
-   */
-  canCancel: boolean;
-  /** ISO UTC deadline, shown so a closed window explains itself. */
-  cancelBy: string;
-  /** What the reschedule picker needs, and nothing more. */
-  branchId: string;
-  durationMin: number;
-};
 
 type RefillDetails = {
   daysLeft: number;
@@ -97,7 +73,7 @@ export default function BookingCard({
   onOpenRefill,
   onChanged,
 }: {
-  row: HistoryRow;
+  row: BookingSummary;
   lang: "ar" | "en";
   onOpenRefill: () => void;
   onChanged: () => void;

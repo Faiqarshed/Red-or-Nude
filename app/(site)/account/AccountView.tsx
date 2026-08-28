@@ -15,9 +15,10 @@ import { useEffect, useState } from "react";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import PhoneField from "@/components/PhoneField";
-import BookingCard, { RefillDialog, type HistoryRow } from "@/components/booking/BookingCard";
+import BookingCard, { RefillDialog } from "@/components/booking/BookingCard";
 import { Lock, Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
+import type { BookingSummary } from "@/lib/booking";
 import { isValidSaudiMobile, toNationalDigits, toStoredPhone } from "@/lib/phone";
 import { REWARDS } from "@/lib/rewards";
 
@@ -35,7 +36,7 @@ export default function AccountView({
 }: {
   customer?: Customer;
   balance?: number;
-  history?: HistoryRow[];
+  history?: BookingSummary[];
 }) {
   return customer ? (
     <SignedIn customer={customer} balance={balance} history={history} />
@@ -53,7 +54,7 @@ function SignedIn({
 }: {
   customer: Customer;
   balance: number;
-  history: HistoryRow[];
+  history: BookingSummary[];
 }) {
   const { c, lang } = useI18n();
   const a = c.account;
