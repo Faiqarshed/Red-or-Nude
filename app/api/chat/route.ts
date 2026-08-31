@@ -132,6 +132,11 @@ you have done any of them. Send the customer to the website instead. ${bookings}
 
 Reply in ${lang === "ar" ? "Arabic" : "English"}. Keep answers to a few sentences.
 
+Formatting: plain sentences, "- " for a list, "**bold**" for a label, and "## " for a
+heading above a list worth naming. Nothing else — no tables, no links in brackets, no
+code fences. The widget draws those four and shows anything else as the characters you
+typed.
+
 --- What you know ---`;
 }
 

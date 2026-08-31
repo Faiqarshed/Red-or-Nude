@@ -18,6 +18,76 @@ import { useI18n } from "@/lib/i18n";
 
 type Turn = { role: "user" | "model"; text: string };
 
+/** `**bold**`, and the rest as it was written. */
+function inline(text: string): React.ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.length > 4 && part.startsWith("**") && part.endsWith("**") ? (
+      <strong key={i} className="font-semibold">
+        {part.slice(2, -2)}
+      </strong>
+    ) : (
+      part
+    ),
+  );
+}
+
+/**
+ * The little the assistant is allowed to format: a heading, a bullet list, a
+ * bold label, a paragraph. Everything else is text.
+ *
+ * Not a markdown library. The reply is a few sentences and a short list, and
+ * `react-markdown` brings a whole parser toolchain to draw three shapes. The
+ * prompt in app/api/chat/route.ts asks for exactly these three, so what the
+ * model writes and what this draws stay one decision rather than two that drift
+ * — and anything it writes anyway degrades to a plain line rather than to
+ * literal asterisks in a customer's face.
+ *
+ * Built as elements, never `dangerouslySetInnerHTML`. The text is model output
+ * and model output is data, on a page where a booking reference has just been
+ * read out.
+ */
+function Formatted({ text }: { text: string }) {
+  const out: React.ReactNode[] = [];
+  let bullets: string[] = [];
+
+  const flush = () => {
+    if (bullets.length === 0) return;
+    out.push(
+      <ul key={out.length} className="list-outside list-disc space-y-1 ps-4">
+        {bullets.map((b, i) => (
+          <li key={i}>{inline(b)}</li>
+        ))}
+      </ul>,
+    );
+    bullets = [];
+  };
+
+  for (const line of text.trim().split("\n")) {
+    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+    if (bullet) {
+      bullets.push(bullet[1]);
+      continue;
+    }
+
+    flush();
+    // A heading in a chat bubble is a bold line; anything larger shouts.
+    const heading = /^\s*#{1,6}\s+(.*)$/.exec(line);
+    if (heading) {
+      out.push(
+        <p key={out.length} className="font-semibold">
+          {inline(heading[1])}
+        </p>,
+      );
+      continue;
+    }
+
+    if (line.trim()) out.push(<p key={out.length}>{inline(line)}</p>);
+  }
+
+  flush();
+  return <>{out}</>;
+}
+
 export default function ChatWidget() {
   const { c, lang, dir } = useI18n();
   const t = c.chat;
@@ -105,18 +175,25 @@ export default function ChatWidget() {
           </>
         )}
 
-        {turns.map((turn, i) => (
-          <p
-            key={i}
-            className={
-              turn.role === "user"
-                ? "ms-auto w-fit max-w-[85%] whitespace-pre-wrap rounded-[14px] bg-red-grad px-4 py-2.5 text-sm text-white"
-                : "w-fit max-w-[85%] whitespace-pre-wrap rounded-[14px] bg-black/[0.04] px-4 py-2.5 text-sm text-ink"
-            }
-          >
-            {turn.text}
-          </p>
-        ))}
+        {turns.map((turn, i) =>
+          turn.role === "user" ? (
+            // Not formatted. A customer's own words are shown as typed — nobody
+            // means a list when they open a line with a dash.
+            <p
+              key={i}
+              className="ms-auto w-fit max-w-[85%] whitespace-pre-wrap rounded-[14px] bg-red-grad px-4 py-2.5 text-sm text-white"
+            >
+              {turn.text}
+            </p>
+          ) : (
+            <div
+              key={i}
+              className="w-fit max-w-[85%] space-y-2 rounded-[14px] bg-black/[0.04] px-4 py-2.5 text-sm leading-relaxed text-ink"
+            >
+              <Formatted text={turn.text} />
+            </div>
+          ),
+        )}
 
         {busy && <p className="text-xs text-ink/40">{t.thinking}</p>}
         {error && (
