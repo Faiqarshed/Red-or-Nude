@@ -18,10 +18,11 @@
 import "server-only";
 import { asc, eq, gte } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { branchHours, branches, closures, faqs, services } from "@/lib/db/schema";
+import { addons, branchHours, branches, closures, faqs, removalTypes, services } from "@/lib/db/schema";
 import { pick } from "@/lib/localized";
 import { halalasToSar } from "@/lib/money";
 import { closureDays } from "@/lib/time";
+import type { Localized } from "@/lib/db/schema";
 import type { Lang } from "@/lib/i18n";
 
 /** weekday 0 = Saturday, matching branch_hours and the site's calendar. */
@@ -37,13 +38,30 @@ const DAYS = [
 
 export async function knowledgeBlock(lang: Lang): Promise<string> {
   const now = new Date();
-  const [faqRows, serviceRows, branchRows, hourRows, closureRows] = await Promise.all([
-    db.select().from(faqs).where(eq(faqs.active, true)).orderBy(asc(faqs.sort)),
-    db.select().from(services).where(eq(services.active, true)).orderBy(asc(services.sort)),
-    db.select().from(branches).where(eq(branches.active, true)).orderBy(asc(branches.sort)),
-    db.select().from(branchHours).orderBy(asc(branchHours.weekday)),
-    db.select().from(closures).where(gte(closures.endsAt, now)).orderBy(asc(closures.startsAt)),
-  ]);
+  const [faqRows, serviceRows, addonRows, removalRows, branchRows, hourRows, closureRows] =
+    await Promise.all([
+      db.select().from(faqs).where(eq(faqs.active, true)).orderBy(asc(faqs.sort)),
+      db.select().from(services).where(eq(services.active, true)).orderBy(asc(services.sort)),
+      db.select().from(addons).where(eq(addons.active, true)).orderBy(asc(addons.sort)),
+      db
+        .select()
+        .from(removalTypes)
+        .where(eq(removalTypes.active, true))
+        .orderBy(asc(removalTypes.sort)),
+      db.select().from(branches).where(eq(branches.active, true)).orderBy(asc(branches.sort)),
+      db.select().from(branchHours).orderBy(asc(branchHours.weekday)),
+      db.select().from(closures).where(gte(closures.endsAt, now)).orderBy(asc(closures.startsAt)),
+    ]);
+
+  /** Add-ons and removals differ from a service only in what they are called. */
+  const priced = (rows: { name: Localized; priceHalalas: number; durationMin: number }[]) =>
+    rows
+      .map(
+        (r) =>
+          `- ${pick(r.name, lang)} — ${halalasToSar(r.priceHalalas)} SAR` +
+          (r.durationMin ? `, ${r.durationMin} min` : ""),
+      )
+      .join("\n");
 
   const sections: string[] = [];
 
@@ -73,6 +91,18 @@ export async function knowledgeBlock(lang: Lang): Promise<string> {
           })
           .join("\n"),
     );
+  }
+
+  // Priced exactly like a service, and asked about just as often: "how much is
+  // removal?" used to get "I do not have that information" while the price sat
+  // one table over. Designs stay out — they carry an image and no price, so
+  // there is nothing a text answer can usefully say about one.
+  if (addonRows.length) {
+    sections.push("## Add-ons (can be added to any service)\n" + priced(addonRows));
+  }
+
+  if (removalRows.length) {
+    sections.push("## Removal of existing nails\n" + priced(removalRows));
   }
 
   if (branchRows.length) {

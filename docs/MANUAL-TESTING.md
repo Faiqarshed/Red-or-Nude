@@ -197,7 +197,9 @@ Signed **out**:
 | 5.8a | Give a reference that does not exist | Nothing found, and no hint either way about whether some other reference would have worked |
 | 5.9 | *"Cancel my booking"* — including straight after 5.8, with a real reference in the conversation | A link, and **never** a claim to have cancelled anything. Reading is open; changing is not |
 | 5.9a | *"Move it to Thursday"*, *"claim my refill"* | The same: directions to the website. There is no tool behind any of these, so a bot that claims otherwise is inventing it |
-| 5.9b | *"What are your services?"* | A real bullet list — round bullets and indentation, **not** literal `-` characters at the start of each line. A bold label renders bold, not as `**Services**` |
+| 5.9b | *"What are your services?"* | A **bold heading** above a real bullet list — round bullets and indentation, not literal `-` and `##` characters |
+| 5.9b1 | *"What add-ons do you have?"*, *"how much is gel removal?"* | Real prices, from the catalogue. Not *"I don't have that information"* |
+| 5.9b2 | *"List your services and your add-ons"* | **Two** headings and two lists, not one run-together list |
 | 5.9c | Your own message with a dash at the start of a line | Shown exactly as you typed it. Only the assistant's side is formatted |
 
 Signed **in**:
