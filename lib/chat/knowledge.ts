@@ -21,6 +21,7 @@ import { db } from "@/lib/db";
 import { branchHours, branches, closures, faqs, services } from "@/lib/db/schema";
 import { pick } from "@/lib/localized";
 import { halalasToSar } from "@/lib/money";
+import { closureDays } from "@/lib/time";
 import type { Lang } from "@/lib/i18n";
 
 /** weekday 0 = Saturday, matching branch_hours and the site's calendar. */
@@ -106,10 +107,11 @@ export async function knowledgeBlock(lang: Lang): Promise<string> {
           .map((c) => {
             const where = c.branchId ? (byId.get(c.branchId) ?? "one branch") : "all branches";
             const reason = pick(c.reason, lang);
-            return (
-              `- ${c.startsAt.toISOString().slice(0, 10)} to ` +
-              `${c.endsAt.toISOString().slice(0, 10)}, ${where}${reason ? `: ${reason}` : ""}`
-            );
+            // Riyadh days, not UTC ones. A closure the salon entered as 20–22
+            // March is stored from 19 March 21:00 UTC, and an assistant reading
+            // that back raw tells a customer the salon shuts on the 19th.
+            const { from, to } = closureDays(c.startsAt, c.endsAt);
+            return `- ${from} to ${to}, ${where}${reason ? `: ${reason}` : ""}`;
           })
           .join("\n"),
     );

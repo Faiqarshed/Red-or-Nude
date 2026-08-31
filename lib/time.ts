@@ -20,6 +20,26 @@ export function riyadhDateKey(day: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: TIMEZONE }).format(day);
 }
 
+/**
+ * The Riyadh days a closure covers, both ends inclusive — what the admin typed.
+ *
+ * The inverse of how `addClosure` stores one: local midnight, to local midnight
+ * on the day *after* the last closed day. Reversing that by hand invites two
+ * separate mistakes, and the codebase had made both. Truncating a `+03:00`
+ * timestamp in UTC lands a day early, because 20 March 00:00 Riyadh is 19 March
+ * 21:00 UTC; printing `endsAt` as given lands a day late, because it is
+ * exclusive. On the end they happen to cancel, which is worse than either —
+ * it leaves a wrong line looking right.
+ *
+ * So it lives here once, and everything that shows a closure reads it.
+ */
+export function closureDays(startsAt: Date, endsAt: Date): { from: string; to: string } {
+  return {
+    from: riyadhDateKey(startsAt),
+    to: riyadhDateKey(new Date(endsAt.getTime() - 24 * HOUR_MS)),
+  };
+}
+
 /** Riyadh wall clock, HH:MM, from an ISO string. */
 export function localTime(iso: string): string {
   return new Date(new Date(iso).getTime() + UTC_OFFSET_HOURS * HOUR_MS)

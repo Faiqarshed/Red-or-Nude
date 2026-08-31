@@ -18,6 +18,7 @@ import {
   validateExpiry,
 } from "@/lib/card";
 import { refillDaysLeft, refillWindowEnd } from "@/lib/refill";
+import { closureDays } from "@/lib/time";
 import {
   formatNational,
   toNationalDigits,
@@ -195,5 +196,37 @@ assert.ok(refillDaysLeft({ ...served, refillDays: 30 }, today) > 0, "offer is op
 assert.ok(new Date("2026-10-05T10:00:00Z") > end, "an October slot is past the window");
 assert.ok(new Date("2026-08-25T10:00:00Z") <= end, "a slot inside the window is fine");
 console.log("  refill: window bounds the appointment date, not just the booking time ✓");
+
+// -- closures: the days the admin typed come back out ------------------------
+//
+// addClosure stores a Riyadh closure half-open: local midnight, to local
+// midnight on the day AFTER the last closed day. Reversing that by hand has two
+// separate ways to be wrong, and both were live. Truncating the +03:00
+// timestamp in UTC lands a day early; printing the exclusive end lands a day
+// late. On the end they cancel out, which is how a wrong line went on looking
+// right.
+
+// 20-22 March 2026, exactly as addClosure writes it.
+const eidStart = new Date("2026-03-20T00:00:00+03:00");
+const eidEnd = new Date("2026-03-23T00:00:00+03:00");
+
+assert.equal(
+  eidStart.toISOString(),
+  "2026-03-19T21:00:00.000Z",
+  "the stored instant really is on the previous UTC day",
+);
+assert.deepEqual(
+  closureDays(eidStart, eidEnd),
+  { from: "2026-03-20", to: "2026-03-22" },
+  "a closure reads back as the days it was entered as",
+);
+
+// One day, where an exclusive end is easiest to get wrong.
+assert.deepEqual(
+  closureDays(new Date("2026-03-20T00:00:00+03:00"), new Date("2026-03-21T00:00:00+03:00")),
+  { from: "2026-03-20", to: "2026-03-20" },
+  "a one-day closure starts and ends on that day",
+);
+console.log("  closures: a stored range reads back as the days the admin typed ✓");
 
 console.log("\nAll field boundary checks passed.");

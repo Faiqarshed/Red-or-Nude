@@ -8,6 +8,7 @@ import { Badge, Button, Card, CardHeader, Field, Input, PageHeader } from "@/com
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
+import { closureDays } from "@/lib/time";
 import type { Localized } from "@/lib/db/schema";
 import {
   addClosure,
@@ -232,11 +233,17 @@ export default function AvailabilityView({
             <p className="px-5 py-6 text-center text-xs text-ink/40">{t.availability.noClosures}</p>
           ) : (
             <ul className="divide-y divide-black/[0.05]">
-              {closures.map((c) => (
+              {closures.map((c) => {
+                // The days as they were typed into the form above. Both ends
+                // have to come back through closureDays: the stored range is
+                // half-open and in Riyadh time, so slicing the ISO string
+                // showed a closure entered as 20–22 March as 19 → 21.
+                const { from, to } = closureDays(new Date(c.startsAt), new Date(c.endsAt));
+                return (
                 <li key={c.id} className="flex items-center gap-3 px-5 py-3">
                   <div className="flex-1 text-start">
                     <p className="text-sm text-ink" dir="ltr">
-                      {c.startsAt.slice(0, 10)} → {new Date(new Date(c.endsAt).getTime() - 86400000).toISOString().slice(0, 10)}
+                      {from} → {to}
                     </p>
                     {c.reason ? (
                       <p className="text-[11px] text-ink/45">{pick(c.reason, lang)}</p>
@@ -251,7 +258,8 @@ export default function AvailabilityView({
                     <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
                   </button>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
           <div className="space-y-3 border-t border-black/[0.06] p-4">
