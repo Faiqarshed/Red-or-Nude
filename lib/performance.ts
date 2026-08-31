@@ -25,6 +25,31 @@ export function isPeriodKey(value: unknown): value is PeriodKey {
   return value === "today" || value === "7" || value === "30";
 }
 
+/**
+ * The window a period covers, ending at the close of today.
+ *
+ * Exported because a technician's history list and the stat tiles above it are
+ * two readings of one set of services. If they computed their own windows, the
+ * day they disagreed would show "12 services" over a list of eleven, and the
+ * number nobody could reproduce is the one people stop trusting.
+ */
+export function periodRange(period: PeriodKey): { start: Date; end: Date } {
+  const { start: todayStart, end } = riyadhDayRange();
+  return { start: new Date(todayStart.getTime() - PERIOD_DAYS[period] * 86_400_000), end };
+}
+
+/**
+ * What counts as a service performed: she started it and she finished it.
+ *
+ * The same predicate the stats use, so the list and the count agree by
+ * construction. Note it is *not* `status = 'completed'` — that is reception
+ * closing the ticket, which happens later and sometimes not until the next
+ * morning. Her work is done when she says it is.
+ */
+export function performedFilter() {
+  return and(isNotNull(bookings.startedAt), isNotNull(bookings.finishedAt));
+}
+
 export type TechnicianStats = {
   id: string;
   name: string;
@@ -49,8 +74,7 @@ export async function loadTechnicianStats(opts: {
   branchId?: string | null;
   technicianId?: string | null;
 }): Promise<TechnicianStats[]> {
-  const { start: todayStart, end } = riyadhDayRange();
-  const start = new Date(todayStart.getTime() - PERIOD_DAYS[opts.period] * 86_400_000);
+  const { start, end } = periodRange(opts.period);
 
   const rows = await db
     .select({
@@ -71,8 +95,7 @@ export async function loadTechnicianStats(opts: {
         gte(bookings.startsAt, start),
         lt(bookings.startsAt, end),
         // A service nobody started or finished has no duration to report on.
-        isNotNull(bookings.startedAt),
-        isNotNull(bookings.finishedAt),
+        performedFilter(),
       ),
     )
     .orderBy(asc(staff.name));

@@ -361,9 +361,19 @@ Gaps added along the way, both of which the static site never had:
 - **Customer name and mobile at payment.** An appointment needs someone to
   belong to; `POST /api/bookings` validates Saudi mobile format.
 
-Not yet built here: drag-to-reschedule (the `rescheduleBooking` action exists and
-is audited, but the calendar doesn't yet drive it), technician assignment, and
-the ⌘K "find booking by phone" palette.
+**Rescheduling** is driven from the booking drawer: "Change time" opens
+`RescheduleDialog`, which reads real slots from `/api/availability` and calls the
+`rescheduleBooking` action. It is gated on `bookings.reschedule`, so technicians
+do not see it. For a long while the action existed and was audited with nothing
+calling it — granting the capability to admin changed nothing visible until this
+button was built, which is the sort of gap a capability matrix hides well.
+
+Note it asks the availability endpoint with `walkIn=1`: staff are not held to the
+customer's booking lead time, the same exemption the walk-in drawer takes.
+
+Not yet built here: drag-to-reschedule on the calendar itself (the dialog covers
+the same ground, one booking at a time), and the ⌘K "find booking by phone"
+palette.
 
 **P2 — Catalog + Media. ✅ shipped (designs still pending).** Media library with
 uploads behind a storage driver, and full CRUD for services, add-ons and removal

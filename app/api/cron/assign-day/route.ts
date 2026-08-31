@@ -1,4 +1,8 @@
-// The day's technician assignments, made before the salon opens (brief §3.1).
+// The morning job: close yesterday, then deal out today (brief §3.1).
+//
+// Two things, in that order. It sweeps unchecked-in appointments to `no_show`,
+// which otherwise only happens when a human opens a screen — so a quiet night
+// left them reading `confirmed` indefinitely. Then it assigns the day.
 //
 // Schedule this for early morning in vercel.json:
 //   { "crons": [{ "path": "/api/cron/assign-day", "schedule": "0 4 * * *" }] }
@@ -20,6 +24,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { branches } from "@/lib/db/schema";
 import { assignDay } from "@/lib/assign";
+import { sweepNoShows } from "@/lib/bookings";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +49,20 @@ export async function GET(request: Request) {
   // so there is nothing to balance across them, and one branch's empty floor
   // must not stall another's.
   for (const branch of rows) {
+    // Close yesterday before opening today.
+    //
+    // sweepNoShows otherwise only runs when a human opens the bookings screen or
+    // the availability API — its own note says so. That is fine while someone is
+    // at the desk, and no use at all overnight: a day that ends with unchecked-in
+    // appointments leaves them reading `confirmed` until somebody happens to
+    // look. Running it here is the only thing in this system that is guaranteed
+    // to happen every morning whether anyone opens the panel or not.
+    //
+    // Safe alongside the assignment below. At 07:00 Riyadh the only bookings
+    // past their grace period are yesterday's, so this cannot touch the day
+    // assignDay is about to deal out.
+    await sweepNoShows(branch.id);
+
     const result = await assignDay(branch.id);
     assigned += result.assigned;
     unassigned += result.unassigned;

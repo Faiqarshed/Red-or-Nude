@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, isNotNull, isNull, lt } from "drizzle-orm";
+import { count, and, asc, eq, gte, inArray, isNotNull, isNull, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   addons,
@@ -6,14 +6,18 @@ import {
   bookings,
   branches,
   customers,
+  designs,
   removalTypes,
   reviews,
   services,
+  staff,
   stations,
 } from "@/lib/db/schema";
+import { mediaUrl } from "@/lib/storage";
+import { getSettings } from "@/lib/settings";
 import { requirePage } from "@/lib/auth/guard";
 import { sweepNoShows } from "@/lib/bookings";
-import { scopedBranchId } from "@/lib/auth/rbac";
+import { can, scopedBranchId } from "@/lib/auth/rbac";
 import { halalasToSar } from "@/lib/money";
 import { localToUtc, utcToLocalDate } from "@/lib/availability";
 import { riyadhDayRange } from "@/lib/time";
@@ -42,17 +46,19 @@ export default async function BookingsPage({
     : utcToLocalDate(riyadhDayRange().start);
 
   if (!branchId) {
-    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShows={[]} catalog={{ services: [], addons: [], removals: [] }} canManage={false} branchId="" />;
+    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} catalog={{ services: [], addons: [], removals: [] }} canManage={false} canReschedule={false} checkinEarlyMin={0} branchId="" />;
   }
 
   // Release chairs nobody checked in to, before reading the day back — otherwise
   // the receptionist is looking at a grid that still shows them as occupied.
   await sweepNoShows(branchId);
 
+  const { checkin_early_min: checkinEarlyMin } = await getSettings(["checkin_early_min"]);
+
   const dayStart = localToUtc(date, "00:00");
   const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
 
-  const [stationRows, rows, noShowRows, addonLinks, serviceRows, addonRows, removalRows] = await Promise.all([
+  const [stationRows, rows, [noShowCount], addonLinks, serviceRows, addonRows, removalRows] = await Promise.all([
     db
       .select()
       .from(stations)
@@ -83,35 +89,42 @@ export default async function BookingsPage({
         reviewComment: reviews.comment,
         reviewSubmittedAt: reviews.submittedAt,
         reviewInvitedAt: reviews.invitedAt,
+        // The picture, from the live catalogue. `serviceName` above stays the
+        // denormalised name-as-sold; only the image follows the catalogue.
+        designImage: designs.image,
+        serviceImage: services.image,
+        // Who is doing it. The front desk knew this all along, from its own
+        // per-row dropdown; this screen — the one the CEO and admin actually
+        // live on, and the only one that can look at any date or branch — never
+        // asked for it, so "who is with whom" was unanswerable from here.
+        technicianName: staff.name,
       })
       .from(bookings)
       .leftJoin(customers, eq(bookings.customerId, customers.id))
       .leftJoin(reviews, eq(reviews.bookingId, bookings.id))
+      .leftJoin(designs, eq(designs.id, bookings.designId))
+      .leftJoin(services, eq(services.id, bookings.serviceId))
+      .leftJoin(staff, eq(staff.id, bookings.technicianId))
       .where(
         and(eq(bookings.branchId, branchId), gte(bookings.startsAt, dayStart), lt(bookings.startsAt, dayEnd)),
       )
       .orderBy(asc(bookings.startsAt)),
-    // Every unresolved flag for this branch, on any date — the strip is not
-    // scoped to the day being viewed, or a Friday no-show would vanish the
-    // moment someone clicked to Monday.
+    // Just how many are outstanding. The rows themselves are /admin/no-shows'
+    // job now, and this screen only has to say that the backlog is there.
+    //
+    // Scoped by role rather than by the branch being browsed, so the figure
+    // matches the one on that page: an unresolved flag does not belong to
+    // whichever day or branch somebody last clicked.
     db
-      .select({
-        id: bookings.id,
-        startsAt: bookings.startsAt,
-        serviceName: bookings.serviceName,
-        customerName: customers.name,
-        customerPhone: customers.phone,
-      })
+      .select({ n: count() })
       .from(bookings)
-      .leftJoin(customers, eq(bookings.customerId, customers.id))
       .where(
         and(
-          eq(bookings.branchId, branchId),
+          pinned ? eq(bookings.branchId, pinned) : undefined,
           isNotNull(bookings.noShowAt),
           isNull(bookings.noShowResolvedAt),
         ),
-      )
-      .orderBy(asc(bookings.startsAt)),
+      ),
     db
       .select({ bookingId: bookingAddons.bookingId, name: bookingAddons.name })
       .from(bookingAddons),
@@ -152,6 +165,13 @@ export default async function BookingsPage({
       branches={pinned ? [] : branchRows.map((b) => ({ id: b.id, name: b.name }))}
       stations={stationRows.map((s) => ({ id: s.id, label: s.label }))}
       canManage={user.role !== "technician"}
+      // Read from the matrix rather than another role list: this is the one
+      // capability the salon has moved, and it should only have to move once.
+      canReschedule={can(user.role, "bookings.reschedule")}
+      // So the drawer can say how long until check-in unlocks, rather than only
+      // that it hasn't. The setting is the salon's, not the row's, so it travels
+      // once instead of on every booking.
+      checkinEarlyMin={checkinEarlyMin}
       catalog={{
         services: serviceRows.map((s) => ({
           id: s.id,
@@ -172,13 +192,7 @@ export default async function BookingsPage({
           durationMin: r.durationMin,
         })),
       }}
-      noShows={noShowRows.map((r) => ({
-        id: r.id,
-        startsAt: r.startsAt.toISOString(),
-        serviceName: r.serviceName,
-        customerName: r.customerName,
-        customerPhone: r.customerPhone,
-      }))}
+      noShowCount={noShowCount?.n ?? 0}
       bookings={rows.map(
         (r): BookingRow => ({
           id: r.id,
@@ -196,6 +210,8 @@ export default async function BookingsPage({
           customerPhone: r.customerPhone,
           refillOfCode: r.refillOfBookingId ? (parentCodes.get(r.refillOfBookingId) ?? null) : null,
           noShowNote: r.noShowNote,
+          imageUrl: mediaUrl(r.designImage ?? r.serviceImage),
+          technicianName: r.technicianName,
           // Null means no invitation exists at all — which for a completed
           // booking is worth saying out loud, since one should have been sent.
           review: r.reviewInvitedAt

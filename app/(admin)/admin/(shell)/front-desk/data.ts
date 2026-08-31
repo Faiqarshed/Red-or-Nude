@@ -7,9 +7,10 @@
 import "server-only";
 import { and, asc, eq, gte, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, customers, staff, stations, type Localized } from "@/lib/db/schema";
+import { bookings, customers, designs, services, staff, stations, type Localized } from "@/lib/db/schema";
 import { riyadhDayRange } from "@/lib/time";
 import { offOn } from "@/lib/assign";
+import { mediaUrl } from "@/lib/storage";
 
 export type FrontDeskRow = {
   id: string;
@@ -18,12 +19,20 @@ export type FrontDeskRow = {
   /** Needed to tell whether two of the day's bookings collide. */
   endsAt: string;
   status: string;
+  /**
+   * The technician's own two timestamps, so the desk can show what the service
+   * actually took. `startedAt` is her pressing Start, `finishedAt` her pressing
+   * Finish — neither is the ticket being closed, which happens here and later.
+   */
+  startedAt: string | null;
   finishedAt: string | null;
   serviceName: Localized | null;
   stationLabel: string | null;
   customerName: string | null;
   technicianId: string | null;
   technicianName: string | null;
+  /** Design if she picked one, else the service's own picture. May be null. */
+  imageUrl: string | null;
 };
 
 export type TechnicianOption = {
@@ -56,17 +65,26 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
         startsAt: bookings.startsAt,
         endsAt: bookings.endsAt,
         status: bookings.status,
+        startedAt: bookings.startedAt,
         finishedAt: bookings.finishedAt,
         serviceName: bookings.serviceName,
         stationLabel: stations.label,
         customerName: customers.name,
         technicianId: bookings.technicianId,
         technicianName: staff.name,
+        // The row's *name* stays denormalised on the booking — that is the name
+        // as sold, and it must not change under a finished appointment when the
+        // catalogue is edited. The picture has no such duty, so it comes from
+        // the live catalogue rows via two more joins.
+        designImage: designs.image,
+        serviceImage: services.image,
       })
       .from(bookings)
       .leftJoin(stations, eq(stations.id, bookings.stationId))
       .leftJoin(customers, eq(customers.id, bookings.customerId))
       .leftJoin(staff, eq(staff.id, bookings.technicianId))
+      .leftJoin(designs, eq(designs.id, bookings.designId))
+      .leftJoin(services, eq(services.id, bookings.serviceId))
       .where(
         and(
           eq(bookings.branchId, branchId),
@@ -106,11 +124,16 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
   }
 
   return {
-    rows: rows.map((r) => ({
+    rows: rows.map(({ designImage, serviceImage, ...r }) => ({
       ...r,
       startsAt: r.startsAt.toISOString(),
       endsAt: r.endsAt.toISOString(),
+      startedAt: r.startedAt?.toISOString() ?? null,
       finishedAt: r.finishedAt?.toISOString() ?? null,
+      // Destructured out above rather than spread through: the two raw storage
+      // keys are a server detail, and the client only ever needs the resolved
+      // URL. Spreading would ship both to the browser unused.
+      imageUrl: mediaUrl(designImage ?? serviceImage),
     })),
     technicians: technicians.map((tech) => ({ ...tech, off: off.has(tech.id) })),
     stats,

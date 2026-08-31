@@ -1,15 +1,15 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, List, Plus } from "lucide-react";
-import { Badge, Button, Card, EmptyState, PageHeader, scoreTone } from "@/components/admin/ui";
+import { Badge, Button, Card, EmptyState, PageHeader, Thumb, scoreTone } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
-import { UTC_OFFSET_HOURS, localTime } from "@/lib/time";
+import { UTC_OFFSET_HOURS, localTime, riyadhDateKey } from "@/lib/time";
 import { pick } from "@/lib/localized";
 import type { Localized } from "@/lib/db/schema";
-import { resolveNoShow } from "./actions";
 import BookingDrawer from "./BookingDrawer";
 import WalkInDrawer from "./WalkInDrawer";
 
@@ -53,6 +53,13 @@ export type BookingRow = {
   noShowNote?: string | null;
   /** Null when no invitation was ever created for this booking. */
   review?: BookingReview | null;
+  /** Design if she picked one, else the service's picture. Often null. */
+  imageUrl?: string | null;
+  /**
+   * Who is doing it. Null is a real state, not missing data: the morning run
+   * hasn't reached a future booking yet, and a walk-in is picked at check-in.
+   */
+  technicianName?: string | null;
 };
 
 /**
@@ -60,14 +67,6 @@ export type BookingRow = {
  * which nobody has dealt with yet. Not date-scoped: a Friday no-show is still
  * waiting on Monday, which is the whole point of calling it unresolved.
  */
-export type NoShowRow = {
-  id: string;
-  startsAt: string;
-  serviceName: Localized | null;
-  customerName: string | null;
-  customerPhone: string | null;
-};
-
 export type CatalogOption = {
   id: string;
   name: Localized;
@@ -154,76 +153,77 @@ function GridScore({ review }: { review: BookingReview | null }) {
  * an unresolved flag that disappears when the receptionist changes the date is
  * not a flag, it is a rumour.
  */
-function NoShowStrip({ rows }: { rows: NoShowRow[] }) {
-  const { t, lang } = useAdminI18n();
-  const router = useRouter();
-  const [busy, setBusy] = useState<string | null>(null);
-  const [, startTransition] = useTransition();
+/** Cancelled and no-show rows per page. Enough to scan, few enough to scroll. */
+const DROPPED_PER_PAGE = 10;
 
-  const resolve = (row: NoShowRow) => {
-    // window.prompt, like the cancellation reason in BookingDrawer — the house
-    // way to take one short string from staff. Dismissing it still resolves the
-    // row, with no note: the note is optional and a cancelled prompt means
-    // "nothing to add", not "changed my mind".
-    const note = window.prompt(t.bookings.noShowResolvePrompt) ?? undefined;
-    setBusy(row.id);
-    startTransition(async () => {
-      const res = await resolveNoShow({ id: row.id, note });
-      setBusy(null);
-      if (res.ok) router.refresh();
-    });
-  };
+/**
+ * The day as a table, whichever set of rows it is being asked about.
+ *
+ * One component for the booked tab and the cancelled one so the two can never
+ * drift into looking like different screens — the difference between them is
+ * which rows they are handed, and it should stay only that.
+ */
+function BookingTable({
+  rows,
+  empty,
+  onSelect,
+}: {
+  rows: BookingRow[];
+  empty: string;
+  onSelect: (b: BookingRow) => void;
+}) {
+  const { t, lang } = useAdminI18n();
+
+  if (rows.length === 0) {
+    return <EmptyState title={empty} icon={<CalendarDays className="h-8 w-8" strokeWidth={1.25} />} />;
+  }
 
   return (
-    <div
-      role="status"
-      className="mb-4 rounded-2xl border border-[#e8c98a] bg-[#fdf6e7] p-4"
-    >
-      <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#b7791f]" strokeWidth={2} />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-[#8a5a09]">
-            {t.bookings.noShowTitle} ({rows.length})
-          </p>
-          <p className="mt-0.5 text-xs text-[#8a5a09]/75">{t.bookings.noShowHint}</p>
-
-          <ul className="mt-3 space-y-2">
-            {rows.map((r) => (
-              <li
-                key={r.id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-white/70 px-3 py-2"
-              >
-                <span className="text-xs tabular-nums text-ink/55" dir="ltr">
-                  {riyadhParts(r.startsAt).date} {riyadhParts(r.startsAt).time}
-                </span>
-                <span className="text-sm font-medium text-ink">
-                  {r.customerName || t.common.none}
-                </span>
-                {r.customerPhone && (
-                  <a
-                    href={`tel:${r.customerPhone}`}
-                    dir="ltr"
-                    className="text-xs text-ink/55 underline underline-offset-2 hover:text-red"
-                  >
-                    {r.customerPhone}
-                  </a>
-                )}
-                {r.serviceName && (
-                  <span className="text-xs text-ink/45">{pick(r.serviceName, lang)}</span>
-                )}
-                <button
-                  onClick={() => resolve(r)}
-                  disabled={busy !== null}
-                  className="ms-auto rounded-lg bg-[#b7791f] px-3 py-1.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
-                >
-                  {busy === r.id ? t.common.saving : t.bookings.noShowResolve}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-    </div>
+    <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-sm">
+                <thead>
+                  <tr className="border-b border-black/[0.06] bg-black/[0.015]">
+                    {[t.bookings.time, t.bookings.customer, t.bookings.service, t.bookings.status, t.bookings.total].map(
+                      (h) => (
+                        <th
+                          key={h}
+                          className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45"
+                        >
+                          {h}
+                        </th>
+                      ),
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((b) => (
+                    <tr
+                      key={b.id}
+                      onClick={() => onSelect(b)}
+                      className="cursor-pointer border-b border-black/[0.04] last:border-0 hover:bg-black/[0.015]"
+                    >
+                      <td className="whitespace-nowrap px-4 py-3 text-start tabular-nums text-ink" dir="ltr">
+                        {localTime(b.startsAt)}
+                      </td>
+                      <td className="px-4 py-3 text-start">
+                        <span className="block text-ink">{b.customerName || "—"}</span>
+                        <span className="block text-[11px] text-ink/45" dir="ltr">
+                          {b.customerPhone}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-start text-ink/70">{pick(b.serviceName, lang)}</td>
+                      <td className="px-4 py-3 text-start">
+                        <Badge tone={STATUS_TONE[b.status]}>{t.bookings.statuses[b.status]}</Badge>
+                      </td>
+                      <td className="px-4 py-3 text-start font-semibold tabular-nums text-ink">
+                        {b.totalSar.toLocaleString("en-US")}
+                        <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
   );
 }
 
@@ -233,9 +233,11 @@ export default function BookingsView({
   branches,
   stations,
   bookings,
-  noShows,
+  noShowCount,
   catalog,
   canManage,
+  canReschedule,
+  checkinEarlyMin,
 }: {
   date: string;
   branchId: string;
@@ -243,9 +245,15 @@ export default function BookingsView({
   stations: { id: string; label: string }[];
   bookings: BookingRow[];
   /** Unresolved no-shows across every date, not just the one being viewed. */
-  noShows: NoShowRow[];
+  /** Unresolved no-show flags for this role's branches, on any date. */
+  noShowCount: number;
   catalog: { services: CatalogOption[]; addons: CatalogOption[]; removals: CatalogOption[] };
   canManage: boolean;
+  /** `bookings.reschedule`. Separate from canManage — a technician has neither,
+   *  but the two came apart so admin could hold one without the other. */
+  canReschedule: boolean;
+  /** `checkin_early_min` — how many minutes before her slot check-in unlocks. */
+  checkinEarlyMin: number;
 }) {
   const { t, lang } = useAdminI18n();
   const router = useRouter();
@@ -253,8 +261,14 @@ export default function BookingsView({
   const [, startTransition] = useTransition();
 
   const [view, setView] = useState<"day" | "list">("day");
+  const [tab, setTab] = useState<"booked" | "dropped">("booked");
+  const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<BookingRow | null>(null);
   const [walkIn, setWalkIn] = useState(false);
+
+  // The salon's today, not the browser's: a receptionist on a laptop still set
+  // to another timezone must not be sent to yesterday's board.
+  const todayKey = riyadhDateKey(new Date());
 
   const go = (next: { date?: string; branch?: string }) => {
     const sp = new URLSearchParams(params.toString());
@@ -265,6 +279,27 @@ export default function BookingsView({
 
   const hours = Array.from({ length: DAY_END_HOUR - DAY_START_HOUR }, (_, i) => DAY_START_HOUR + i);
   const active = bookings.filter((b) => b.status !== "cancelled" && b.status !== "no_show");
+
+  /**
+   * Cancelled and no-show, kept out of the day.
+   *
+   * They were mixed into the same table as everything else, which made a busy
+   * day read as a bad one: eleven rows, four of them struck-through, and the
+   * receptionist scanning past the ones that are not happening. They are still
+   * the day's record and still openable — a no-show is what a refund argument
+   * turns on — so they move to their own tab rather than out of the screen.
+   *
+   * The calendar has never shown them: a cancelled booking holds no chair. That
+   * is also why this tab has no day view to switch to.
+   */
+  const dropped = bookings.filter((b) => b.status === "cancelled" || b.status === "no_show");
+
+  // Clamped rather than reset from an effect: changing the date re-renders this
+  // component with a shorter list and a page number that no longer exists, and
+  // clamping answers that without a second render to correct itself.
+  const pageCount = Math.max(1, Math.ceil(dropped.length / DROPPED_PER_PAGE));
+  const safePage = Math.min(page, pageCount);
+  const pageRows = dropped.slice((safePage - 1) * DROPPED_PER_PAGE, safePage * DROPPED_PER_PAGE);
 
   /**
    * What a block says on hover, in the one place the grid has no room to print.
@@ -282,6 +317,7 @@ export default function BookingsView({
       `${localTime(b.startsAt)} – ${localTime(b.endsAt)}`,
       b.customerName || b.customerPhone || b.code,
       pick(b.serviceName, lang),
+      `${t.frontDesk.technician}: ${b.technicianName ?? t.frontDesk.unassignedShort}`,
       `${t.bookings.status}: ${t.bookings.statuses[b.status]}`,
       b.status === "pending" ? t.bookings.pendingHint : null,
       `${t.bookings.total}: ${b.totalSar.toLocaleString("en-US")} ${t.common.riyal}`,
@@ -296,7 +332,7 @@ export default function BookingsView({
     <>
       <PageHeader
         title={t.bookings.title}
-        subtitle={`${bookings.length} ${t.bookings.onThisDay}`}
+        subtitle={`${active.length} ${t.bookings.onThisDay}`}
         action={
           canManage ? (
             <Button onClick={() => setWalkIn(true)}>
@@ -307,7 +343,26 @@ export default function BookingsView({
         }
       />
 
-      {canManage && noShows.length > 0 && <NoShowStrip rows={noShows} />}
+      {/* A pointer, not the queue itself. Eighteen unresolved flags used to be
+          listed here in full and pushed the day off the bottom of the screen —
+          they live at /admin/no-shows now. The line stays because the desk has
+          to learn the backlog exists without going looking for it. */}
+      {canManage && noShowCount > 0 ? (
+        <Link
+          href="/admin/no-shows"
+          className="mb-4 flex items-center gap-2.5 rounded-2xl border border-[#e8c98a] bg-[#fdf6e7] px-4 py-3 transition-colors hover:bg-[#fbf0d9]"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0 text-[#b7791f]" strokeWidth={2} />
+          <span className="text-sm font-semibold text-[#8a5a09]">{t.bookings.noShowTitle}</span>
+          <span className="rounded-full bg-[#b7791f]/20 px-2 py-0.5 text-xs font-semibold tabular-nums text-[#8a5a09]">
+            {noShowCount}
+          </span>
+          <span className="ms-auto flex items-center gap-1 text-xs font-medium text-[#8a5a09]">
+            {t.bookings.noShowReview}
+            <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" strokeWidth={2} />
+          </span>
+        </Link>
+      ) : null}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1 rounded-xl border border-black/[0.06] bg-white p-1">
@@ -318,9 +373,32 @@ export default function BookingsView({
           >
             <ChevronLeft className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
           </button>
-          <span className="min-w-[110px] px-2 text-center text-sm font-medium tabular-nums text-ink" dir="ltr">
-            {date}
-          </span>
+          {/* A real date input, not the plain text this used to be. The arrows
+              are fine for "yesterday" and useless for "the 14th of next month",
+              which is most of what the desk is asked on the phone. Native, so
+              it opens the platform's own calendar and keeps the keyboard path
+              for anyone who would rather type.
+
+              `showPicker()` on click because browsers only open the calendar
+              from the small icon otherwise, and the whole control looks
+              clickable. It is guarded: Firefox has no such method, and Safari
+              throws if the call isn't from a user gesture. */}
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => e.target.value && go({ date: e.target.value })}
+            onClick={(e) => {
+              const el = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
+              try {
+                el.showPicker?.();
+              } catch {
+                /* not supported here, or not a trusted gesture — the icon still works */
+              }
+            }}
+            aria-label={t.bookings.date}
+            className="min-w-[130px] cursor-pointer rounded-lg bg-transparent px-2 text-center text-sm font-medium tabular-nums text-ink outline-none focus:bg-black/[0.03]"
+            dir="ltr"
+          />
           <button
             onClick={() => go({ date: shiftDate(date, 1) })}
             className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]"
@@ -329,6 +407,14 @@ export default function BookingsView({
             <ChevronRight className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
           </button>
         </div>
+
+        {/* The way back. Jumping a month ahead is now one click, so returning
+            should not be thirty — and hidden while it would do nothing. */}
+        {date !== todayKey ? (
+          <Button variant="secondary" size="sm" onClick={() => go({ date: todayKey })}>
+            {t.bookings.jumpToday}
+          </Button>
+        ) : null}
 
         {branches.length > 1 && (
           <select
@@ -344,6 +430,7 @@ export default function BookingsView({
           </select>
         )}
 
+        {tab === "booked" ? (
         <div className="ms-auto flex gap-1 rounded-xl border border-black/[0.06] bg-white p-1">
           {(["day", "list"] as const).map((v) => (
             <button
@@ -359,11 +446,79 @@ export default function BookingsView({
             </button>
           ))}
         </div>
+        ) : null}
+      </div>
+
+      {/* The tabs sit at the start, under the date toolbar and above the thing
+          they switch: they choose what the card below shows, not what the date
+          controls above them do. */}
+      <div className="mb-4 flex">
+        <div className="flex gap-1 rounded-xl border border-black/[0.06] bg-white p-1">
+          {(["booked", "dropped"] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => {
+                setTab(k);
+                setPage(1);
+              }}
+              className={cn(
+                "flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                tab === k ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]",
+              )}
+            >
+              {k === "booked" ? t.bookings.tabBooked : t.bookings.tabDropped}
+              <span
+                className={cn(
+                  "rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
+                  tab === k ? "bg-red/10 text-red" : "bg-black/[0.05] text-ink/50",
+                )}
+              >
+                {k === "booked" ? active.length : dropped.length}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {stations.length === 0 ? (
         <Card>
           <EmptyState title={t.bookings.noStations} body={t.bookings.noStationsBody} />
+        </Card>
+      ) : tab === "dropped" ? (
+        <Card className="overflow-hidden">
+          <BookingTable rows={pageRows} empty={t.bookings.droppedEmpty} onSelect={setSelected} />
+          {dropped.length > DROPPED_PER_PAGE ? (
+            <div className="flex items-center justify-between gap-3 border-t border-black/[0.06] px-4 py-3">
+              <p className="text-xs tabular-nums text-ink/50">
+                {t.bookings.pageOf(
+                  (safePage - 1) * DROPPED_PER_PAGE + 1,
+                  Math.min(safePage * DROPPED_PER_PAGE, dropped.length),
+                  dropped.length,
+                )}
+              </p>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage(safePage - 1)}
+                  disabled={safePage <= 1}
+                  aria-label={t.bookings.prevPage}
+                  className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 transition-colors hover:bg-black/[0.04] disabled:text-ink/20 disabled:hover:bg-transparent"
+                >
+                  <ChevronLeft className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
+                </button>
+                <span className="px-1 text-xs tabular-nums text-ink/60">
+                  {safePage} / {pageCount}
+                </span>
+                <button
+                  onClick={() => setPage(safePage + 1)}
+                  disabled={safePage >= pageCount}
+                  aria-label={t.bookings.nextPage}
+                  className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 transition-colors hover:bg-black/[0.04] disabled:text-ink/20 disabled:hover:bg-transparent"
+                >
+                  <ChevronRight className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
+                </button>
+              </div>
+            </div>
+          ) : null}
         </Card>
       ) : view === "day" ? (
         <Card className="overflow-hidden">
@@ -451,61 +606,16 @@ export default function BookingsView({
         </Card>
       ) : (
         <Card className="overflow-hidden">
-          {bookings.length === 0 ? (
-            <EmptyState title={t.bookings.empty} icon={<CalendarDays className="h-8 w-8" strokeWidth={1.25} />} />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-sm">
-                <thead>
-                  <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                    {[t.bookings.time, t.bookings.customer, t.bookings.service, t.bookings.status, t.bookings.total].map(
-                      (h) => (
-                        <th
-                          key={h}
-                          className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45"
-                        >
-                          {h}
-                        </th>
-                      ),
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {bookings.map((b) => (
-                    <tr
-                      key={b.id}
-                      onClick={() => setSelected(b)}
-                      className="cursor-pointer border-b border-black/[0.04] last:border-0 hover:bg-black/[0.015]"
-                    >
-                      <td className="whitespace-nowrap px-4 py-3 text-start tabular-nums text-ink" dir="ltr">
-                        {localTime(b.startsAt)}
-                      </td>
-                      <td className="px-4 py-3 text-start">
-                        <span className="block text-ink">{b.customerName || "—"}</span>
-                        <span className="block text-[11px] text-ink/45" dir="ltr">
-                          {b.customerPhone}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-start text-ink/70">{pick(b.serviceName, lang)}</td>
-                      <td className="px-4 py-3 text-start">
-                        <Badge tone={STATUS_TONE[b.status]}>{t.bookings.statuses[b.status]}</Badge>
-                      </td>
-                      <td className="px-4 py-3 text-start font-semibold tabular-nums text-ink">
-                        {b.totalSar.toLocaleString("en-US")}
-                        <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <BookingTable rows={active} empty={t.bookings.empty} onSelect={setSelected} />
         </Card>
       )}
 
       <BookingDrawer
         booking={selected}
         canManage={canManage}
+        canReschedule={canReschedule}
+        checkinEarlyMin={checkinEarlyMin}
+        branchId={branchId}
         onClose={() => setSelected(null)}
         onChanged={() => {
           setSelected(null);

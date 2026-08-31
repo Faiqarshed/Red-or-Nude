@@ -12,7 +12,7 @@ export type Capability =
   | "bookings.view"
   | "bookings.manage"
   | "bookings.checkin" // the front desk: ticket lookup, check in, close the ticket
-  | "bookings.reschedule" // moving an appointment — deliberately NOT admin, see below
+  | "bookings.reschedule" // moving an appointment — its own capability, see below
   | "bookings.own" // technicians: their own bookings, status changes only
   | "availability.manage"
   | "catalog.manage"
@@ -65,6 +65,12 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "bookings.view",
     "bookings.manage",
     "bookings.checkin",
+    // Brief §3.3 says "Admin cannot change a booking's timing", and this was
+    // deliberately absent for that reason. The salon overrode it on 2026-08-28:
+    // an admin covering the desk had no way to move an appointment a customer
+    // was on the phone about. Granted knowingly, not leaked — if you are
+    // reconciling against the brief, this is the line that departs from it.
+    "bookings.reschedule",
     "bookings.own",
     "availability.manage",
     // Brief §3.3: "manage the services listed on the booking site (add, edit,
@@ -82,9 +88,6 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "content.manage",
     "marketing.manage",
     "payments.view",
-    // Deliberately absent: "bookings.reschedule". Brief §3.3 — "Admin cannot
-    // change a booking's timing." It is its own capability precisely because
-    // admin needs the rest of bookings.manage.
   ],
   receptionist: [
     // No dashboard.view: /admin renders them the front desk instead, which

@@ -111,14 +111,10 @@ export async function checkInTicket(id: string, technicianId?: string | null): P
   }
   if (before.status !== "confirmed") return { ok: false, error: "not-checkable" };
 
-  // Not before her slot (brief §3.1, and `checkin_early_min` in lib/settings.ts).
-  // Checked here rather than only in the UI because this is what actually takes
-  // a technician off the floor — a disabled button is a courtesy, not a rule.
-  const { checkin_early_min: earlyMin } = await getSettings(["checkin_early_min"]);
-  if (Date.now() < before.startsAt.getTime() - earlyMin * 60_000) {
-    return { ok: false, error: "too-early" };
-  }
-
+  // The "not before her slot" rule is not repeated here. It moved to
+  // setBookingStatus, which every path into `checked_in` goes through — a
+  // disabled button is a courtesy and a check in one of two callers is not much
+  // better. `too-early` still comes back from the call below, unchanged.
   if (technicianId) await assignTechnician(id, technicianId);
 
   return setBookingStatus(id, "checked_in");
@@ -142,12 +138,30 @@ export async function closeTicket(id: string): Promise<Result> {
  * Only ever *to* somebody. An empty technician is how the floor says "this
  * booking arrived after the morning run", so clearing one by hand would forge
  * that signal — the screen offers no way to, and neither does this.
+ *
+ * And only while there is still work to move:
+ *
+ * - Once the technician has pressed Finish the row records who did the service,
+ *   and /admin/performance reads her timings straight off it, so a reassignment
+ *   after the fact would credit the minutes to someone who was never at the
+ *   chair.
+ * - A `no_show` has nothing to hand anybody. The customer never came, the chair
+ *   has already been released by sweepNoShows, and what she needs is a new
+ *   appointment — naming a technician on it would only put a fictional booking
+ *   on that technician's day.
+ *
+ * The screen greys the dropdown out at the same moments, but that is the
+ * courtesy; this is the rule.
  */
 export async function assignTechnician(id: string, technicianId: string): Promise<Result> {
   const actor = await requireCan("bookings.checkin");
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  if (before.status === "no_show") return { ok: false, error: "no-show" };
+  if (before.finishedAt || before.status === "completed" || before.status === "cancelled") {
+    return { ok: false, error: "already-finished" };
+  }
 
   await db
     .update(bookings)

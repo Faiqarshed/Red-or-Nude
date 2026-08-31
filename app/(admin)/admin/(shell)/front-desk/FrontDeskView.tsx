@@ -8,11 +8,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Card, EmptyState, PageHeader, StatCard, Badge, Button } from "@/components/admin/ui";
+import { Card, EmptyState, PageHeader, Badge, Button, Thumb } from "@/components/admin/ui";
 import { STATUS_TONE, type BookingStatus } from "../bookings/BookingsView";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
-import { localTime } from "@/lib/time";
+import { formatCountdown, formatDuration, localTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import { busyDuring } from "@/lib/slots";
 import type { FrontDeskData, FrontDeskRow, TechnicianOption } from "./data";
@@ -27,6 +27,62 @@ import {
 /** The technician has pressed Done and the ticket is still open. */
 function readyToClose(r: FrontDeskRow): boolean {
   return !!r.finishedAt && r.status !== "completed";
+}
+
+/** How far ahead the desk is actually preparing. */
+const ARRIVING_WINDOW_MS = 30 * 60_000;
+
+type Lane = "arriving" | "late" | "service" | "ready";
+
+/**
+ * Which lane a row belongs in, or null for the rest of the day.
+ *
+ * The lanes are the receptionist's next four actions in the order she takes
+ * them, not a breakdown of statuses — she is standing up, glancing between
+ * customers, and "who do I deal with next" is the only question the top of this
+ * screen should answer. Everything already settled — cancelled, no-show, a
+ * closed ticket, an appointment at six — is in no lane on purpose: that is the
+ * day's record, and the record is the list underneath.
+ */
+function laneOf(r: FrontDeskRow, now: number): Lane | null {
+  if (readyToClose(r)) return "ready";
+  if (r.status === "checked_in" || r.status === "in_progress") return "service";
+  if (r.status !== "confirmed") return null;
+
+  const starts = new Date(r.startsAt).getTime();
+  if (starts < now) return "late";
+  return starts - now <= ARRIVING_WINDOW_MS ? "arriving" : null;
+}
+
+const LANE_STYLE = {
+  arriving: { dot: "bg-[#b7791f]", head: "bg-[#b7791f]/[0.08]", text: "text-[#8a5a06]", card: "" },
+  late: { dot: "bg-red", head: "bg-red/[0.06]", text: "text-red", card: "border-red/25" },
+  service: { dot: "bg-sky", head: "bg-sky/10", text: "text-[#2c6a88]", card: "" },
+  ready: { dot: "bg-[#1f7a4d]", head: "bg-[#1f7a4d]/[0.08]", text: "text-[#1f7a4d]", card: "border-[#1f7a4d]/25" },
+} as const;
+
+/**
+ * Whose technician can no longer be changed, and why.
+ *
+ * Two different reasons, kept apart because the desk needs different things from
+ * them:
+ *
+ * - **done** — she pressed Finish, so the row is now a record of who did the
+ *   work. Reassigning would move a completed service onto someone who never
+ *   touched it, and /admin/performance reads its timings per technician from
+ *   exactly these rows. Keyed on `finishedAt` rather than the status, because
+ *   those part company on purpose: the technician finishes, and the ticket stays
+ *   open until reception closes it.
+ * - **no-show** — nobody came. There is no work to give anybody, and the answer
+ *   is a new appointment rather than a different technician, so the message says
+ *   so instead of leaving the desk to guess.
+ *
+ * Null means the row is still editable.
+ */
+function techLockReason(r: FrontDeskRow): "done" | "no-show" | null {
+  if (r.status === "no_show") return "no-show";
+  if (r.finishedAt || r.status === "completed" || r.status === "cancelled") return "done";
+  return null;
 }
 
 export default function FrontDeskView({
@@ -68,6 +124,10 @@ export default function FrontDeskView({
   const tooEarly = (booking: TicketMatch) =>
     now < new Date(booking.checkInOpensAt).getTime();
 
+  /** How long the desk still has to wait, worded for whoever is reading. */
+  const opensIn = (booking: TicketMatch) =>
+    formatCountdown(new Date(booking.checkInOpensAt).getTime() - now, lang);
+
   async function search(e?: React.FormEvent) {
     e?.preventDefault();
     setError(null);
@@ -93,11 +153,10 @@ export default function FrontDeskView({
       setMatch(res.booking);
       return;
     }
-    // She is here before her slot. Shown rather than hidden, with the time she
-    // can be checked in, so the receptionist can tell her something useful.
-    if (tooEarly(res.booking)) {
-      setError(`${f.tooEarly} ${localTime(res.booking.checkInOpensAt)}`);
-    }
+    // No setError for "she's early" any more. That froze a countdown into state
+    // at the moment of the search, so a desk that waited would still be reading
+    // "in 24 minutes" twenty-four minutes later. It is derived below instead,
+    // off the same `now` that ticks the button, and stays true on its own.
     setMatch(res.booking);
   }
 
@@ -113,7 +172,7 @@ export default function FrontDeskView({
         res.error === "already-checked-in"
           ? f.alreadyIn
           : res.error === "too-early"
-            ? `${f.tooEarly} ${localTime(match.checkInOpensAt)}`
+            ? `${f.tooEarly} ${localTime(match.checkInOpensAt)} · ${opensIn(match)}`
             : f.failed,
       );
       return;
@@ -123,6 +182,31 @@ export default function FrontDeskView({
     setMatch(null);
     setTicket("");
     inputRef.current?.focus();
+    router.refresh();
+  }
+
+  /**
+   * Check in from a lane, without going through the ticket box.
+   *
+   * The same server action the ticket box calls, so the same rules apply — the
+   * "not before her slot" window included. No button is disabled ahead of it:
+   * the server owns that rule, and a refusal here is a sentence she can read
+   * rather than a control that silently does nothing.
+   */
+  async function doCheckInRow(id: string) {
+    setBusy(true);
+    setError(null);
+    const res = await checkInTicket(id);
+    setBusy(false);
+    if (!res.ok) {
+      setError(
+        res.error === "already-checked-in"
+          ? f.alreadyIn
+          : res.error === "too-early"
+            ? f.notCheckable
+            : f.failed,
+      );
+    }
     router.refresh();
   }
 
@@ -143,7 +227,18 @@ export default function FrontDeskView({
     setBusy(true);
     const res = await assignTechnician(id, technicianId);
     setBusy(false);
-    if (!res.ok) setError(f.failed);
+    // "Already finished" is the one a person can make sense of: she finished
+    // between this page's last refresh and the click. Saying so beats "try
+    // again", which invites exactly the retry that will fail the same way.
+    if (!res.ok) {
+      setError(
+        res.error === "no-show"
+          ? f.techNoShow
+          : res.error === "already-finished"
+            ? f.techLocked
+            : f.failed,
+      );
+    }
     router.refresh();
   }
 
@@ -151,21 +246,55 @@ export default function FrontDeskView({
   // TicketMatch carries the start but not the end.
   const matchRow = match ? (data.rows.find((r) => r.id === match.id) ?? null) : null;
 
-  // Ready-to-close first: it is the only row that needs a decision from her.
-  const rows = [...data.rows].sort((a, b) => {
-    const diff = Number(readyToClose(b)) - Number(readyToClose(a));
-    return diff !== 0 ? diff : a.startsAt.localeCompare(b.startsAt);
-  });
+  // Split the day into the four lanes and the remainder. Chronological within
+  // each: the lane already says how urgent it is, so ordering by anything else
+  // inside one would be a second, quieter opinion about the same thing.
+  const byLane: Record<Lane, FrontDeskRow[]> = { arriving: [], late: [], service: [], ready: [] };
+  const rest: FrontDeskRow[] = [];
+  for (const r of [...data.rows].sort((a, b) => a.startsAt.localeCompare(b.startsAt))) {
+    const lane = laneOf(r, now);
+    if (lane) byLane[lane].push(r);
+    else rest.push(r);
+  }
 
   return (
     <>
       <PageHeader title={f.title} subtitle={f.subtitle} />
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label={f.statCompleted} value={data.stats.finished} />
-        <StatCard label={f.statInService} value={data.stats.inService} />
-        <StatCard label={f.statWaiting} value={data.stats.waiting} />
-        <StatCard label={f.statUpcoming} value={data.stats.upcoming} />
+      {/* The four lanes, before the ticket box: what is in front of her beats
+          what she might look up. Counts live on the lane headings rather than
+          in a row of tiles above them — the same four numbers, said once. */}
+      <div className="mb-6 grid gap-4 xl:grid-cols-2">
+        {(["arriving", "late", "service", "ready"] as const).map((lane) => (
+          <LaneCard
+            key={lane}
+            lane={lane}
+            title={
+              lane === "arriving"
+                ? f.laneArriving
+                : lane === "late"
+                  ? f.laneLate
+                  : lane === "service"
+                    ? f.laneInService
+                    : f.laneReady
+            }
+            rows={byLane[lane]}
+            empty={f.laneEmpty}
+          >
+            {(r) => (
+              <LaneRow
+                r={r}
+                lane={lane}
+                now={now}
+                f={f}
+                lang={lang}
+                busy={busy}
+                onCheckIn={() => doCheckInRow(r.id)}
+                onClose={() => doClose(r.id)}
+              />
+            )}
+          </LaneCard>
+        ))}
       </div>
 
       <Card className="mb-6 p-5">
@@ -199,16 +328,31 @@ export default function FrontDeskView({
         {match && match.status === "confirmed" ? (
           <div className="mt-4 rounded-2xl border border-black/10 bg-cream/60 p-4 text-start">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="font-display text-lg font-bold text-ink">
-                  {match.customerName ?? "—"}
-                </p>
-                <p className="text-sm text-ink/60">
-                  {pick(match.serviceName, lang)} · {localTime(match.startsAt)}
-                </p>
+              <div className="flex items-center gap-3">
+                {/* From the day's rows rather than the ticket lookup: findTicket
+                    is scoped to today at this branch, which is the same set, so
+                    the picture comes free instead of widening TicketMatch. */}
+                <Thumb src={matchRow?.imageUrl} size="md" />
+                <div>
+                  <p className="font-display text-lg font-bold text-ink">
+                    {match.customerName ?? "—"}
+                  </p>
+                  <p className="text-sm text-ink/60">
+                    {pick(match.serviceName, lang)} · {localTime(match.startsAt)}
+                  </p>
+                </div>
               </div>
               <Badge tone="info">{match.ticketNo}</Badge>
             </div>
+
+            {/* Derived, not stored — see the note in search(). Re-rendered every
+                20s with `now`, so the number counts down on its own. */}
+            {tooEarly(match) ? (
+              <p className="mt-3 rounded-xl bg-[#b7791f]/12 px-3 py-2 text-start text-xs text-[#8a5a06]">
+                {f.tooEarly} <span dir="ltr">{localTime(match.checkInOpensAt)}</span> ·{" "}
+                {opensIn(match)}
+              </p>
+            ) : null}
 
             <div className="mt-4 flex flex-wrap items-end gap-3">
               <div className="min-w-[180px] flex-1">
@@ -232,7 +376,10 @@ export default function FrontDeskView({
                 disabled={busy || tooEarly(match)}
                 className="h-12 px-8 text-base"
               >
-                {f.checkIn}
+                {/* The wait goes on the button, not only in the notice above:
+                    this is what the receptionist is looking at when she wonders
+                    why she cannot press it. */}
+                {tooEarly(match) ? `${f.checkIn} · ${opensIn(match)}` : f.checkIn}
               </Button>
             </div>
           </div>
@@ -244,12 +391,13 @@ export default function FrontDeskView({
           <p className="text-sm font-semibold text-ink">{f.today}</p>
         </div>
 
-        {rows.length === 0 ? (
+        {rest.length === 0 ? (
           <EmptyState title={t.common.none} />
         ) : (
           <ul className="divide-y divide-black/[0.06]">
-            {rows.map((r) => {
+            {rest.map((r) => {
               const ready = readyToClose(r);
+              const lockReason = techLockReason(r);
               return (
                 <li
                   key={r.id}
@@ -265,6 +413,8 @@ export default function FrontDeskView({
                     {localTime(r.startsAt)}
                   </span>
 
+                  <Thumb src={r.imageUrl} size="sm" />
+
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-ink">
                       {r.customerName ?? "—"}
@@ -273,15 +423,41 @@ export default function FrontDeskView({
                       {pick(r.serviceName, lang)}
                       {r.stationLabel ? ` · ${r.stationLabel}` : ""}
                     </span>
+
+                    {/* What the technician's own clock says. Finished is the
+                        settled figure — start to finish, not counting however
+                        long the ticket then sat waiting to be closed. Still
+                        running, it counts up off the same `now` as everything
+                        else here, so the desk can see a service overrunning
+                        while there is still time to do something about it. */}
+                    {r.startedAt ? (
+                      <span
+                        className={cn(
+                          "mt-0.5 block text-[11px] tabular-nums",
+                          r.finishedAt ? "text-ink/45" : "text-sky",
+                        )}
+                      >
+                        {r.finishedAt
+                          ? `${f.took} ${formatDuration(new Date(r.finishedAt).getTime() - new Date(r.startedAt).getTime(), lang)}`
+                          : `${f.running} ${formatDuration(now - new Date(r.startedAt).getTime(), lang)}`}
+                      </span>
+                    ) : null}
                   </span>
 
                   {/* On every row of the day, not only the ones already checked
                       in: the morning run assigns before anyone arrives, so the
                       desk has to be able to move a technician beforehand too.
-                      A closed ticket is history and stays read-only. */}
-                  {r.status === "completed" || r.status === "cancelled" ? (
-                    <span className="w-36 shrink-0 truncate text-xs text-ink/50">
-                      {r.technicianName ?? ""}
+                      Once the work is done — or nobody turned up for it — the
+                      name is a record, not a setting. See techLockReason. */}
+                  {lockReason ? (
+                    <span
+                      className="w-36 shrink-0 truncate text-xs text-ink/50"
+                      title={lockReason === "no-show" ? f.techNoShow : f.techLocked}
+                    >
+                      {/* A no-show has no technician worth naming: whoever was
+                          pencilled in never served anyone. Saying so beats a
+                          name that reads like a record of work done. */}
+                      {lockReason === "no-show" ? f.techNoShowShort : (r.technicianName ?? "")}
                     </span>
                   ) : (
                     <TechSelect
@@ -381,5 +557,147 @@ export function TechSelect({
           );
         })}
     </select>
+  );
+}
+
+/** One lane: a coloured heading, a count, and its rows. */
+function LaneCard({
+  lane,
+  title,
+  rows,
+  empty,
+  children,
+}: {
+  lane: Lane;
+  title: string;
+  rows: FrontDeskRow[];
+  empty: string;
+  children: (r: FrontDeskRow) => React.ReactNode;
+}) {
+  const style = LANE_STYLE[lane];
+
+  return (
+    <Card className={cn("overflow-hidden", style.card)}>
+      <div className={cn("flex items-center gap-2 border-b border-black/[0.06] px-4 py-3", style.head)}>
+        <span className={cn("h-2 w-2 shrink-0 rounded-full", style.dot)} />
+        <h2 className={cn("text-[11px] font-bold uppercase tracking-wider", style.text)}>{title}</h2>
+        <span className={cn("ms-auto text-xs font-semibold tabular-nums", style.text)}>
+          {rows.length}
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="px-4 py-7 text-center text-xs text-ink/40">{empty}</p>
+      ) : (
+        <ul className="divide-y divide-black/[0.04]">
+          {rows.map((r) => (
+            <li key={r.id}>{children(r)}</li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * A row inside a lane.
+ *
+ * Bigger than the list below it and carrying at most one button, because this
+ * is read at arm's length and pressed with a thumb. The technician is named but
+ * not editable here — changing her is a considered act and lives in the full
+ * day list, where there is room for the dropdown and no queue at the counter.
+ */
+function LaneRow({
+  r,
+  lane,
+  now,
+  f,
+  lang,
+  busy,
+  onCheckIn,
+  onClose,
+}: {
+  r: FrontDeskRow;
+  lane: Lane;
+  now: number;
+  f: ReturnType<typeof useAdminI18n>["t"]["frontDesk"];
+  lang: "ar" | "en";
+  busy: boolean;
+  onCheckIn: () => void;
+  onClose: () => void;
+}) {
+  const startedAt = new Date(r.startsAt).getTime();
+  const lateMin = Math.max(0, Math.round((now - startedAt) / 60_000));
+  const expectedMin = Math.max(0, Math.round((new Date(r.endsAt).getTime() - startedAt) / 60_000));
+
+  const runningMs = r.startedAt ? now - new Date(r.startedAt).getTime() : null;
+  const runningMin = runningMs === null ? null : Math.max(0, Math.round(runningMs / 60_000));
+  const overMin = runningMin !== null && expectedMin > 0 ? runningMin - expectedMin : 0;
+
+  const tookMs =
+    r.startedAt && r.finishedAt
+      ? new Date(r.finishedAt).getTime() - new Date(r.startedAt).getTime()
+      : null;
+
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 text-start">
+      <Thumb src={r.imageUrl} size="sm" />
+
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[15px] font-semibold text-ink">
+          {r.customerName ?? "—"}
+        </span>
+        <span className="block truncate text-[13px] tabular-nums text-ink/55">
+          {[pick(r.serviceName, lang), localTime(r.startsAt), r.technicianName]
+            .filter(Boolean)
+            .join(" · ")}
+        </span>
+
+        {/* Late is the one lane where the wait itself is the news, so it gets a
+            line of its own rather than sitting in the run of grey text. */}
+        {lane === "late" ? (
+          <span className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-red/10 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-red">
+            {f.minutesLate(lateMin)}
+          </span>
+        ) : null}
+      </span>
+
+      {r.ticketNo && (lane === "arriving" || lane === "late") ? (
+        <Badge tone="neutral" className="shrink-0 tabular-nums">
+          {r.ticketNo}
+        </Badge>
+      ) : null}
+
+      {lane === "service" ? (
+        <span className="shrink-0 text-end tabular-nums">
+          <span
+            className={cn(
+              "block text-[17px] font-semibold",
+              overMin > 0 ? "text-red" : "text-[#2c6a88]",
+            )}
+          >
+            {runningMin === null ? "—" : formatDuration(runningMin * 60_000, lang)}
+          </span>
+          <span className={cn("block text-[11px]", overMin > 0 ? "text-red" : "text-ink/45")}>
+            {overMin > 0 ? f.overBy(overMin) : f.ofAbout(expectedMin)}
+          </span>
+        </span>
+      ) : lane === "ready" ? (
+        <>
+          {tookMs !== null ? (
+            <span className="hidden shrink-0 text-end text-[11px] tabular-nums text-ink/45 sm:block">
+              {f.took} {formatDuration(tookMs, lang)}
+            </span>
+          ) : null}
+          <Button onClick={onClose} disabled={busy} className="h-11 shrink-0 px-5 text-sm">
+            {f.close}
+          </Button>
+        </>
+      ) : (
+        <Button onClick={onCheckIn} disabled={busy} className="h-11 shrink-0 px-5 text-sm">
+          {f.checkIn}
+        </Button>
+      )}
+    </div>
   );
 }
