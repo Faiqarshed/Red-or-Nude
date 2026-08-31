@@ -19,10 +19,10 @@
 import { config } from "dotenv";
 config({ path: ".env.local" });
 import assert from "node:assert";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, staff, staffTimeOff, auditLog } from "@/lib/db/schema";
-import { assignDay, assignIfToday } from "@/lib/assign";
+import { assignDay, assignIfToday, releaseToday } from "@/lib/assign";
 import { riyadhDayRange, riyadhDateKey } from "@/lib/time";
 
 const made: string[] = [];
@@ -132,7 +132,76 @@ async function main() {
   assert.notStrictEqual(after, before, "5. …and never the technician who went home");
   console.log(`5. technician sent home       ${before.slice(0, 8)} → ${after!.slice(0, 8)}   PASS`);
 
-  console.log("\ncheck:assign — five live checks passed against Postgres");
+  // 6. one dealer per branch. Two runs reading the floor at the same moment
+  //    both see the same technician free and both hand her a customer, so the
+  //    read and the write have to be one stretch nobody else can get into.
+  //
+  //    Asserted by what the run *sees*, not by how long it takes — a stopwatch
+  //    against a remote database measures the network, not the lock. This holds
+  //    the branch by hand, starts a run, and only then commits a new booking. A
+  //    run that waited its turn reads the floor afterwards and finds it; a run
+  //    that walked straight past read a second earlier and never will. Comment
+  //    out lockBranch in lib/assign/index.ts and this fails.
+  const started: Promise<unknown>[] = [];
+  const late: string[] = [];
+
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${BRANCH}))`);
+    started.push(assignDay(BRANCH));
+
+    // Long enough that an unlocked run is certainly past its own read.
+    await new Promise((r) => setTimeout(r, 1000));
+
+    const [row] = await tx
+      .insert(bookings)
+      .values({
+        code: `ZZ-lock-${Math.random().toString(36).slice(2, 7)}`,
+        branchId: BRANCH,
+        status: "confirmed",
+        ...at(19),
+      })
+      .returning({ id: bookings.id });
+    made.push(row.id);
+    late.push(row.id);
+  });
+
+  await started[0];
+  assert.ok(await techOf(late[0]), "6. a second run waits, then deals what the first could not see");
+  console.log("6. two runs at once           the second waited        PASS");
+  // 7. she goes home while a customer is running late. His appointment started
+  //    twenty minutes ago and he has not checked in, so his row still says
+  //    `confirmed` with her name on it. Releasing only what starts in the
+  //    *future* leaves exactly him behind — and nothing comes back for the row,
+  //    because assignDay only fills empty ones. He walks in and is sent to
+  //    somebody who left the building.
+  //
+  //    "Not yet started" is the status, never the clock. Put a
+  //    `gte(bookings.startsAt, new Date())` back into releaseToday and the
+  //    first assertion fails.
+  const past = new Date(Math.max(start.getTime(), Date.now() - 30 * 60_000));
+  const running = await put("late", {
+    startsAt: past,
+    endsAt: new Date(past.getTime() + 45 * 60_000),
+  });
+  await assignDay(BRANCH);
+  const onHer = (await techOf(running))!;
+
+  // Someone she has actually started, handed to her by name. Hers either way.
+  const seated = await put("seat", at(22));
+  await db
+    .update(bookings)
+    .set({ technicianId: onHer, status: "checked_in" })
+    .where(eq(bookings.id, seated));
+
+  const letGo = await releaseToday(onHer);
+
+  assert.strictEqual(await techOf(running), null, "7. a late customer's booking is released too");
+  assert.ok(letGo.includes(running), "7. ...and is reported as released");
+  assert.strictEqual(await techOf(seated), onHer, "7. the customer already with her stays hers");
+  console.log(`7. sent home, one running late  released ${letGo.length}            PASS`);
+
+
+  console.log("\ncheck:assign — seven live checks passed against Postgres");
 }
 
 async function cleanup() {

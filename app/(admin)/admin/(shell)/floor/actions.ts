@@ -12,13 +12,13 @@
 // capability that governs staff records applies.
 
 import { revalidatePath } from "next/cache";
-import { and, eq, gte, lt, lte } from "drizzle-orm";
+import { and, eq, gte, lte } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, staff, staffTimeOff } from "@/lib/db/schema";
+import { staff, staffTimeOff } from "@/lib/db/schema";
 import { requireCan, type SessionStaff } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
-import { assignIfToday } from "@/lib/assign";
-import { riyadhDateKey, riyadhDayRange } from "@/lib/time";
+import { assignIfToday, releaseToday } from "@/lib/assign";
+import { riyadhDateKey } from "@/lib/time";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
@@ -79,36 +79,40 @@ export async function sendHome(staffId: string): Promise<Result> {
     )
     .limit(1);
 
-  // What she is still owed today: confirmed, not yet started, from this moment
-  // to closing. `checked_in` and `in_progress` are excluded on purpose — that
-  // customer is already with her, and moving them would be a lie on a screen.
-  const { end } = riyadhDayRange();
-  const released = await db
-    .update(bookings)
-    .set({ technicianId: null, updatedAt: new Date() })
-    .where(
-      and(
-        eq(bookings.technicianId, staffId),
-        eq(bookings.status, "confirmed"),
-        gte(bookings.startsAt, new Date()),
-        lt(bookings.startsAt, end),
-      ),
-    )
-    .returning({ id: bookings.id });
+  // What she is still owed today: everything confirmed she has not started.
+  // `checked_in` and `in_progress` stay hers on purpose — that customer is
+  // already with her, and moving them would be a lie on a screen. See
+  // releaseToday for why the rule is the status and not the clock.
+  const released = await releaseToday(staffId);
 
   // Pressed twice, or already on leave from Staff — either way she is out, and
   // a second row would only need deleting twice to bring her back. The release
   // above still ran, so a second press cannot leave customers stranded on her.
-  if (!existing) {
-    const [row] = await db
-      .insert(staffTimeOff)
-      .values({ staffId, startsOn: day, endsOn: day, reason: "sent home" })
-      .returning({ id: staffTimeOff.id });
+  const timeOffId =
+    existing?.id ??
+    (
+      await db
+        .insert(staffTimeOff)
+        .values({ staffId, startsOn: day, endsOn: day, reason: "sent home" })
+        .returning({ id: staffTimeOff.id })
+    )[0].id;
 
+  // Audited whenever the floor actually moved — not only when this press was
+  // the one that wrote the time-off row.
+  //
+  // A technician already covered by leave from Staff still has her waiting
+  // customers taken off her here, and nesting the audit inside the insert meant
+  // five appointments could change hands leaving nothing behind to say who did
+  // it or why. The question the trail has to answer is "who moved these?", and
+  // that is the release, not the row.
+  //
+  // Silent only when nothing happened: pressed twice, second press, no rows
+  // left to release. There is no change to record.
+  if (released.length || !existing) {
     await recordAudit(actor, {
       action: "send-home",
       entity: "staff_time_off",
-      entityId: row.id,
+      entityId: timeOffId,
       diff: {
         staffId: { from: null, to: staffId },
         day: { from: null, to: day },

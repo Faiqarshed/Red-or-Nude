@@ -154,19 +154,35 @@ time-off row.
 **`checked_in` and `in_progress` are deliberately excluded.** That customer is
 sitting in front of her right now, and moving them would put a lie on a screen.
 
+That status filter is the *whole* of "not yet started" — `releaseToday` releases
+her whole day, not the rest of it. An extra clock check reads as if it says the
+same thing and does not: a customer stuck in traffic has a start time in the
+past and no check-in, so a `startsAt >= now` bound skips exactly him. His row
+keeps the name of somebody who has left, and `assignDay` will not revisit it
+either, because it only fills rows that are empty. Check 7 in `check:assign` is
+that clause.
+
 A second press still releases, even though it skips writing a duplicate
 time-off row — otherwise a technician already on leave from the Staff screen
 could be "sent home" with her customers left stranded on her.
 
 ## 6. Rescheduling
 
-`rescheduleBooking` now sets `technician_id = NULL` inside the same transaction
-that moves the time and the chair, then calls `assignIfToday` for the new date.
+`rescheduleBooking` sets `technician_id = NULL` inside the same transaction that
+moves the time and the chair, then calls `assignIfToday` for the new date.
 
 Keeping the old technician was not an option: she was free at 2 p.m., and there
 is nothing whatsoever to say she is free at 5 p.m. A name that is now
 double-booked *looks* like a decision and *is* a clash. Emptying the row hands
 it to the only thing that actually checks.
+
+Nothing here guards a booking past `confirmed`, because nothing can move one.
+The customer's route refuses anything outside `pending`/`confirmed`
+(`lib/cancellation.ts`), and the admin's `rescheduleBooking` action — which has
+no status check on purpose — has no button on it: no screen imports it. If that
+button is ever added, this line empties the technician on a finished booking and
+never fills it back, taking with it the name the reviews feature reads. Add the
+status guard on the same commit as the button.
 
 A move to a later day empties the row and leaves it empty — which is correct,
 and is that morning's run's job.
@@ -276,6 +292,27 @@ holding a technician hostage:
 ```
 
 Put the clause back. This is the whole reason `check:assign` exists.
+
+Check 6 is the same trick for the branch lock. `assignDay` reads the floor,
+decides "Sara is free at 4", and only re-checks that the *booking* is still
+empty when it writes — so two runs firing at once both pass their own check and
+both give Sara a customer. Harmless while this was a dawn cron; live the moment
+`assignIfToday` started firing on every payment. A `pg_advisory_xact_lock` per
+branch, held for the transaction, is what serialises them; it is a lock in
+Postgres and not in memory because on serverless every request can be its own
+process.
+
+```bash
+# in lib/assign/index.ts, comment out the lockBranch call in assignDay
+npm run check:assign
+```
+
+Expected — the run does not wait its turn, so it reads the floor before the
+test's booking exists and never sees it:
+
+```
+6. a second run waits, then deals what the first could not see
+```
 
 ## 4. By hand — a booking paid for after 07:00
 
