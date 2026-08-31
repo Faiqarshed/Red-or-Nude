@@ -133,7 +133,12 @@ And the one that must fail:
 
 | # | Do | Expect |
 |---|---|---|
-| 3.15 | Signed in as customer A, look up customer **B's** reference at `/my-bookings`, press **Cancel** | A code is demanded, and it goes to **B's** address. Your session does not open B's booking |
+| 3.15 | **Signed out**, look up somebody else's reference at `/my-bookings` and press **Cancel** | The booking is readable — that is the design, a reference opens a booking — but the code is demanded and sent to **that booking's** address, not yours. Knowing the reference does not end the appointment |
+
+> Not "signed in as A, look up B". A signed-in customer is redirected from
+> `/my-bookings` to `/account` (`app/(site)/my-bookings/page.tsx`), so there is
+> no such screen to run it on. Their equivalent is §5.11: the signed-in chat tool
+> takes no arguments at all, so no conversation can name another customer.
 
 ## 4. Cancel and reschedule, with their pop-ups
 
@@ -144,9 +149,12 @@ And the one that must fail:
 | 4.3 | Press **Done** | Pop-up closes; the card now reads **Cancelled** |
 | 4.4 | Reload | Still cancelled |
 | 4.5 | Cancel the same booking again | *"This booking is already cancelled."* |
+| 4.5a | **Signed in**, open `/account` in two tabs. Sign out in tab A. In tab B — which still believes you are signed in — press **Cancel booking** and confirm | The **code dialog** opens and sends a code to the booking's own address. Never *"that code isn't right"*, which would name a code you were never asked for |
 | 4.6 | Cancel a booking starting within the cutoff | Refused, **and told the deadline you missed** |
+| 4.6a | **Signed in**, open `/account` in two tabs. Cancel the booking in tab A. In tab B — which still shows **Cancel booking**, because that was decided when it loaded — press it and confirm | The confirmation closes and *"This booking is already cancelled"* is readable on the card. It must not be painted behind the overlay, leaving the button armed and the screen silent |
 | 4.7 | Cancel a booking already in progress | *"This booking is in progress or finished — please speak to the branch."* |
 | 4.8 | Cancel one booking of a **pair** | Both are cancelled. One bill, one discount, one decision |
+| 4.8a | On a phone held **sideways** (or a window ~400px tall), open the guest code dialog and type a wrong code so the error banner appears | The dialog **scrolls**: **Resend code** and **Close** are both reachable. Repeat on the *are you sure?* confirmation. Escape and the backdrop are not the answer — a way out has to be visible |
 
 Reschedule:
 
@@ -175,7 +183,8 @@ Bottom of any site page — **Ask us**. Not on `/admin`; check that too.
 | 5.1 | *"How much is a manicure?"* | A price in SAR, matching the catalogue |
 | 5.2 | *"What time do you open on Saturday?"* | Real hours for a real branch |
 | 5.3 | *"Where are you?"* | The branch address and phone |
-| 5.4 | *"Are you open on Eid?"* | Knows about closures — does not cheerfully say yes |
+| 5.4 | Add a closure for **20–22 March** in `/admin/availability`, then ask *"are you open on the 19th?"* | **Yes, open.** The assistant must name 20–22, not 19–21 — a Riyadh closure read back in UTC starts a day early |
+| 5.4a | Look at that closure in `/admin/availability` | The list reads `2026-03-20 → 2026-03-22` — the same days you typed |
 | 5.5 | *"What's the capital of France?"* | Declines, offers the branch phone number |
 | 5.6 | *"How much is a haircut?"* (not on the menu) | Says it doesn't know. **Does not invent a price** |
 
@@ -183,9 +192,13 @@ Signed **out**:
 
 | # | Ask | Expect |
 |---|---|---|
-| 5.7 | *"What's the status of my booking?"* | A link to `/my-bookings`. It does **not** ask for your reference and look it up |
-| 5.8 | *"My reference is RON-4F2K, when is it?"* | Still a link. It must not read the booking |
-| 5.9 | *"Cancel my booking"* | A link, and **never** a claim to have cancelled anything |
+| 5.7 | *"What's the status of my booking?"* | It **asks for your reference**, and mentions `/my-bookings` |
+| 5.8 | *"My reference is RON-4F2K, when is it?"* | It reads that booking back — service, date, time, status. Exactly what typing the reference into `/my-bookings` gives, and no more: no phone, no email, no technician's name |
+| 5.8a | Give a reference that does not exist | Nothing found, and no hint either way about whether some other reference would have worked |
+| 5.9 | *"Cancel my booking"* — including straight after 5.8, with a real reference in the conversation | A link, and **never** a claim to have cancelled anything. Reading is open; changing is not |
+| 5.9a | *"Move it to Thursday"*, *"claim my refill"* | The same: directions to the website. There is no tool behind any of these, so a bot that claims otherwise is inventing it |
+| 5.9b | *"What are your services?"* | A real bullet list — round bullets and indentation, **not** literal `-` characters at the start of each line. A bold label renders bold, not as `**Services**` |
+| 5.9c | Your own message with a dash at the start of a line | Shown exactly as you typed it. Only the assistant's side is formatted |
 
 Signed **in**:
 
@@ -260,9 +273,11 @@ Pick a technician with one customer **in progress** and two or more merely
 | 6.12 | `/admin/floor` → **Send home** | |
 | 6.13 | Her confirmed later bookings | Now show **other** technicians |
 | 6.14 | The customer already with her | **Still hers.** Moving them would be a lie on a screen |
+| 6.14a | A booking of hers whose time has **already passed** and who never checked in | Released and re-dealt like the rest. He is the one most likely to walk in and find his technician gone |
 | 6.15 | Both technician dropdowns | She is greyed out |
 | 6.16 | `/admin/audit` | One `send-home` row whose diff carries `released` — how many were handed on |
-| 6.17 | Press **Send home** again | No error, no duplicate row, nothing stranded |
+| 6.17 | Press **Send home** again | No error, no duplicate row, nothing stranded — and **no second audit row**, because nothing changed |
+| 6.17a | In Staff, give a *different* technician leave covering today. On a `/admin/floor` tab opened **before** that, press **Send home** on her | Her waiting bookings move to others **and** `/admin/audit` gets a `send-home` row with the `released` count. The trail must not go quiet just because a leave row already existed |
 | 6.18 | Press **Bring back** | She is available again. Her old customers do **not** return to her — they belong to whoever has them now |
 | 6.19 | Try **Send home** on another branch's technician | Refused |
 
