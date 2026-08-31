@@ -70,13 +70,17 @@ function Formatted({ text }: { text: string }) {
     }
 
     flush();
-    // A heading in a chat bubble is a bold line — a bubble is 280px wide and
-    // anything larger shouts. Nudged off whatever precedes it so two headed
-    // lists in one reply read as two, not as one long run.
+    // The site's own heading treatment, one step up from the 14px body — bold
+    // alone at the same size and colour as the text under it does not read as a
+    // heading at all. Nudged off whatever precedes it so two headed lists in one
+    // reply read as two, not as one long run.
     const heading = /^\s*#{1,6}\s+(.*)$/.exec(line);
     if (heading) {
       out.push(
-        <p key={out.length} className="pt-1 font-bold text-ink first:pt-0">
+        <p
+          key={out.length}
+          className="pt-2 font-display text-base font-extrabold text-ink first:pt-0"
+        >
           {inline(heading[1])}
         </p>,
       );
