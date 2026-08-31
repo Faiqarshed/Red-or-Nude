@@ -3,10 +3,10 @@
 import { useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, List, Plus } from "lucide-react";
-import { Badge, Button, Card, EmptyState, PageHeader, scoreTone } from "@/components/admin/ui";
+import { Badge, Button, Card, EmptyState, PageHeader, Thumb, scoreTone } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
-import { UTC_OFFSET_HOURS, localTime } from "@/lib/time";
+import { UTC_OFFSET_HOURS, localTime, riyadhDateKey } from "@/lib/time";
 import { pick } from "@/lib/localized";
 import type { Localized } from "@/lib/db/schema";
 import { resolveNoShow } from "./actions";
@@ -53,6 +53,13 @@ export type BookingRow = {
   noShowNote?: string | null;
   /** Null when no invitation was ever created for this booking. */
   review?: BookingReview | null;
+  /** Design if she picked one, else the service's picture. Often null. */
+  imageUrl?: string | null;
+  /**
+   * Who is doing it. Null is a real state, not missing data: the morning run
+   * hasn't reached a future booking yet, and a walk-in is picked at check-in.
+   */
+  technicianName?: string | null;
 };
 
 /**
@@ -236,6 +243,8 @@ export default function BookingsView({
   noShows,
   catalog,
   canManage,
+  canReschedule,
+  checkinEarlyMin,
 }: {
   date: string;
   branchId: string;
@@ -246,6 +255,11 @@ export default function BookingsView({
   noShows: NoShowRow[];
   catalog: { services: CatalogOption[]; addons: CatalogOption[]; removals: CatalogOption[] };
   canManage: boolean;
+  /** `bookings.reschedule`. Separate from canManage — a technician has neither,
+   *  but the two came apart so admin could hold one without the other. */
+  canReschedule: boolean;
+  /** `checkin_early_min` — how many minutes before her slot check-in unlocks. */
+  checkinEarlyMin: number;
 }) {
   const { t, lang } = useAdminI18n();
   const router = useRouter();
@@ -255,6 +269,10 @@ export default function BookingsView({
   const [view, setView] = useState<"day" | "list">("day");
   const [selected, setSelected] = useState<BookingRow | null>(null);
   const [walkIn, setWalkIn] = useState(false);
+
+  // The salon's today, not the browser's: a receptionist on a laptop still set
+  // to another timezone must not be sent to yesterday's board.
+  const todayKey = riyadhDateKey(new Date());
 
   const go = (next: { date?: string; branch?: string }) => {
     const sp = new URLSearchParams(params.toString());
@@ -282,6 +300,7 @@ export default function BookingsView({
       `${localTime(b.startsAt)} – ${localTime(b.endsAt)}`,
       b.customerName || b.customerPhone || b.code,
       pick(b.serviceName, lang),
+      `${t.frontDesk.technician}: ${b.technicianName ?? t.frontDesk.unassignedShort}`,
       `${t.bookings.status}: ${t.bookings.statuses[b.status]}`,
       b.status === "pending" ? t.bookings.pendingHint : null,
       `${t.bookings.total}: ${b.totalSar.toLocaleString("en-US")} ${t.common.riyal}`,
@@ -318,9 +337,32 @@ export default function BookingsView({
           >
             <ChevronLeft className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
           </button>
-          <span className="min-w-[110px] px-2 text-center text-sm font-medium tabular-nums text-ink" dir="ltr">
-            {date}
-          </span>
+          {/* A real date input, not the plain text this used to be. The arrows
+              are fine for "yesterday" and useless for "the 14th of next month",
+              which is most of what the desk is asked on the phone. Native, so
+              it opens the platform's own calendar and keeps the keyboard path
+              for anyone who would rather type.
+
+              `showPicker()` on click because browsers only open the calendar
+              from the small icon otherwise, and the whole control looks
+              clickable. It is guarded: Firefox has no such method, and Safari
+              throws if the call isn't from a user gesture. */}
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => e.target.value && go({ date: e.target.value })}
+            onClick={(e) => {
+              const el = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
+              try {
+                el.showPicker?.();
+              } catch {
+                /* not supported here, or not a trusted gesture — the icon still works */
+              }
+            }}
+            aria-label={t.bookings.date}
+            className="min-w-[130px] cursor-pointer rounded-lg bg-transparent px-2 text-center text-sm font-medium tabular-nums text-ink outline-none focus:bg-black/[0.03]"
+            dir="ltr"
+          />
           <button
             onClick={() => go({ date: shiftDate(date, 1) })}
             className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]"
@@ -329,6 +371,14 @@ export default function BookingsView({
             <ChevronRight className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
           </button>
         </div>
+
+        {/* The way back. Jumping a month ahead is now one click, so returning
+            should not be thirty — and hidden while it would do nothing. */}
+        {date !== todayKey ? (
+          <Button variant="secondary" size="sm" onClick={() => go({ date: todayKey })}>
+            {t.bookings.jumpToday}
+          </Button>
+        ) : null}
 
         {branches.length > 1 && (
           <select
@@ -458,7 +508,7 @@ export default function BookingsView({
               <table className="w-full min-w-[720px] text-sm">
                 <thead>
                   <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                    {[t.bookings.time, t.bookings.customer, t.bookings.service, t.bookings.status, t.bookings.total].map(
+                    {[t.bookings.time, t.bookings.customer, t.bookings.service, t.frontDesk.technician, t.bookings.status, t.bookings.total].map(
                       (h) => (
                         <th
                           key={h}
@@ -486,7 +536,27 @@ export default function BookingsView({
                           {b.customerPhone}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-start text-ink/70">{pick(b.serviceName, lang)}</td>
+                      {/* Beside the service name rather than in a column of its
+                          own: a new column would push this table past its
+                          min-width and start it scrolling on a laptop. The
+                          calendar blocks above get none — they can be 22px tall,
+                          which is smaller than any useful thumbnail. */}
+                      <td className="px-4 py-3 text-start text-ink/70">
+                        <span className="flex items-center gap-2.5">
+                          <Thumb src={b.imageUrl} size="sm" />
+                          <span className="min-w-0 truncate">{pick(b.serviceName, lang)}</span>
+                        </span>
+                      </td>
+                      {/* Unassigned is said out loud rather than left blank: an
+                          empty cell reads as "we forgot to load it", and on a
+                          future date it is the correct and expected answer. */}
+                      <td className="whitespace-nowrap px-4 py-3 text-start">
+                        {b.technicianName ? (
+                          <span className="text-ink/70">{b.technicianName}</span>
+                        ) : (
+                          <span className="text-ink/35">{t.frontDesk.unassignedShort}</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-start">
                         <Badge tone={STATUS_TONE[b.status]}>{t.bookings.statuses[b.status]}</Badge>
                       </td>
@@ -506,6 +576,9 @@ export default function BookingsView({
       <BookingDrawer
         booking={selected}
         canManage={canManage}
+        canReschedule={canReschedule}
+        checkinEarlyMin={checkinEarlyMin}
+        branchId={branchId}
         onClose={() => setSelected(null)}
         onChanged={() => {
           setSelected(null);

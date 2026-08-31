@@ -18,7 +18,7 @@ import { formatSAR } from "@/lib/money";
 import { asc } from "drizzle-orm";
 import DashboardView from "./DashboardView";
 import MyDayView from "./my-day/MyDayView";
-import { loadMyDay } from "./my-day/data";
+import { loadMyDay, loadMyHistory } from "./my-day/data";
 import { isPeriodKey, loadTechnicianStats } from "@/lib/performance";
 import FrontDeskView from "./front-desk/FrontDeskView";
 import { loadFrontDesk } from "./front-desk/data";
@@ -36,12 +36,24 @@ export default async function AdminHomePage({
     // Her own numbers, over the period she picked — the same function the CEO's
     // performance screen calls, narrowed to one person. She sees nobody else's.
     const period = isPeriodKey(searchParams.period) ? searchParams.period : "today";
-    const [bookings, stats] = await Promise.all([
-      loadMyDay(user.id),
+
+    // Today is a board she works from — Start and Finish live on those cards.
+    // The longer periods are a record of work already done, so they load the
+    // history instead. Loading both would fetch a list the screen won't render.
+    const [bookings, history, stats] = await Promise.all([
+      period === "today" ? loadMyDay(user.id) : Promise.resolve([]),
+      period === "today" ? Promise.resolve([]) : loadMyHistory(user.id, period),
       loadTechnicianStats({ period, technicianId: user.id }),
     ]);
 
-    return <MyDayView bookings={bookings} stats={stats[0] ?? null} period={period} />;
+    return (
+      <MyDayView
+        bookings={bookings}
+        history={history}
+        stats={stats[0] ?? null}
+        period={period}
+      />
+    );
   }
 
   if (user.role === "receptionist") {

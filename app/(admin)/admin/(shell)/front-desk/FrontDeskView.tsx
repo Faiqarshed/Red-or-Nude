@@ -8,11 +8,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Card, EmptyState, PageHeader, StatCard, Badge, Button } from "@/components/admin/ui";
+import { Card, EmptyState, PageHeader, StatCard, Badge, Button, Thumb } from "@/components/admin/ui";
 import { STATUS_TONE, type BookingStatus } from "../bookings/BookingsView";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
-import { localTime } from "@/lib/time";
+import { formatCountdown, formatDuration, localTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import { busyDuring } from "@/lib/slots";
 import type { FrontDeskData, FrontDeskRow, TechnicianOption } from "./data";
@@ -27,6 +27,30 @@ import {
 /** The technician has pressed Done and the ticket is still open. */
 function readyToClose(r: FrontDeskRow): boolean {
   return !!r.finishedAt && r.status !== "completed";
+}
+
+/**
+ * Whose technician can no longer be changed, and why.
+ *
+ * Two different reasons, kept apart because the desk needs different things from
+ * them:
+ *
+ * - **done** — she pressed Finish, so the row is now a record of who did the
+ *   work. Reassigning would move a completed service onto someone who never
+ *   touched it, and /admin/performance reads its timings per technician from
+ *   exactly these rows. Keyed on `finishedAt` rather than the status, because
+ *   those part company on purpose: the technician finishes, and the ticket stays
+ *   open until reception closes it.
+ * - **no-show** — nobody came. There is no work to give anybody, and the answer
+ *   is a new appointment rather than a different technician, so the message says
+ *   so instead of leaving the desk to guess.
+ *
+ * Null means the row is still editable.
+ */
+function techLockReason(r: FrontDeskRow): "done" | "no-show" | null {
+  if (r.status === "no_show") return "no-show";
+  if (r.finishedAt || r.status === "completed" || r.status === "cancelled") return "done";
+  return null;
 }
 
 export default function FrontDeskView({
@@ -68,6 +92,10 @@ export default function FrontDeskView({
   const tooEarly = (booking: TicketMatch) =>
     now < new Date(booking.checkInOpensAt).getTime();
 
+  /** How long the desk still has to wait, worded for whoever is reading. */
+  const opensIn = (booking: TicketMatch) =>
+    formatCountdown(new Date(booking.checkInOpensAt).getTime() - now, lang);
+
   async function search(e?: React.FormEvent) {
     e?.preventDefault();
     setError(null);
@@ -93,11 +121,10 @@ export default function FrontDeskView({
       setMatch(res.booking);
       return;
     }
-    // She is here before her slot. Shown rather than hidden, with the time she
-    // can be checked in, so the receptionist can tell her something useful.
-    if (tooEarly(res.booking)) {
-      setError(`${f.tooEarly} ${localTime(res.booking.checkInOpensAt)}`);
-    }
+    // No setError for "she's early" any more. That froze a countdown into state
+    // at the moment of the search, so a desk that waited would still be reading
+    // "in 24 minutes" twenty-four minutes later. It is derived below instead,
+    // off the same `now` that ticks the button, and stays true on its own.
     setMatch(res.booking);
   }
 
@@ -113,7 +140,7 @@ export default function FrontDeskView({
         res.error === "already-checked-in"
           ? f.alreadyIn
           : res.error === "too-early"
-            ? `${f.tooEarly} ${localTime(match.checkInOpensAt)}`
+            ? `${f.tooEarly} ${localTime(match.checkInOpensAt)} · ${opensIn(match)}`
             : f.failed,
       );
       return;
@@ -143,7 +170,18 @@ export default function FrontDeskView({
     setBusy(true);
     const res = await assignTechnician(id, technicianId);
     setBusy(false);
-    if (!res.ok) setError(f.failed);
+    // "Already finished" is the one a person can make sense of: she finished
+    // between this page's last refresh and the click. Saying so beats "try
+    // again", which invites exactly the retry that will fail the same way.
+    if (!res.ok) {
+      setError(
+        res.error === "no-show"
+          ? f.techNoShow
+          : res.error === "already-finished"
+            ? f.techLocked
+            : f.failed,
+      );
+    }
     router.refresh();
   }
 
@@ -199,16 +237,31 @@ export default function FrontDeskView({
         {match && match.status === "confirmed" ? (
           <div className="mt-4 rounded-2xl border border-black/10 bg-cream/60 p-4 text-start">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="font-display text-lg font-bold text-ink">
-                  {match.customerName ?? "—"}
-                </p>
-                <p className="text-sm text-ink/60">
-                  {pick(match.serviceName, lang)} · {localTime(match.startsAt)}
-                </p>
+              <div className="flex items-center gap-3">
+                {/* From the day's rows rather than the ticket lookup: findTicket
+                    is scoped to today at this branch, which is the same set, so
+                    the picture comes free instead of widening TicketMatch. */}
+                <Thumb src={matchRow?.imageUrl} size="md" />
+                <div>
+                  <p className="font-display text-lg font-bold text-ink">
+                    {match.customerName ?? "—"}
+                  </p>
+                  <p className="text-sm text-ink/60">
+                    {pick(match.serviceName, lang)} · {localTime(match.startsAt)}
+                  </p>
+                </div>
               </div>
               <Badge tone="info">{match.ticketNo}</Badge>
             </div>
+
+            {/* Derived, not stored — see the note in search(). Re-rendered every
+                20s with `now`, so the number counts down on its own. */}
+            {tooEarly(match) ? (
+              <p className="mt-3 rounded-xl bg-[#b7791f]/12 px-3 py-2 text-start text-xs text-[#8a5a06]">
+                {f.tooEarly} <span dir="ltr">{localTime(match.checkInOpensAt)}</span> ·{" "}
+                {opensIn(match)}
+              </p>
+            ) : null}
 
             <div className="mt-4 flex flex-wrap items-end gap-3">
               <div className="min-w-[180px] flex-1">
@@ -232,7 +285,10 @@ export default function FrontDeskView({
                 disabled={busy || tooEarly(match)}
                 className="h-12 px-8 text-base"
               >
-                {f.checkIn}
+                {/* The wait goes on the button, not only in the notice above:
+                    this is what the receptionist is looking at when she wonders
+                    why she cannot press it. */}
+                {tooEarly(match) ? `${f.checkIn} · ${opensIn(match)}` : f.checkIn}
               </Button>
             </div>
           </div>
@@ -250,6 +306,7 @@ export default function FrontDeskView({
           <ul className="divide-y divide-black/[0.06]">
             {rows.map((r) => {
               const ready = readyToClose(r);
+              const lockReason = techLockReason(r);
               return (
                 <li
                   key={r.id}
@@ -265,6 +322,8 @@ export default function FrontDeskView({
                     {localTime(r.startsAt)}
                   </span>
 
+                  <Thumb src={r.imageUrl} size="sm" />
+
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-ink">
                       {r.customerName ?? "—"}
@@ -273,15 +332,41 @@ export default function FrontDeskView({
                       {pick(r.serviceName, lang)}
                       {r.stationLabel ? ` · ${r.stationLabel}` : ""}
                     </span>
+
+                    {/* What the technician's own clock says. Finished is the
+                        settled figure — start to finish, not counting however
+                        long the ticket then sat waiting to be closed. Still
+                        running, it counts up off the same `now` as everything
+                        else here, so the desk can see a service overrunning
+                        while there is still time to do something about it. */}
+                    {r.startedAt ? (
+                      <span
+                        className={cn(
+                          "mt-0.5 block text-[11px] tabular-nums",
+                          r.finishedAt ? "text-ink/45" : "text-sky",
+                        )}
+                      >
+                        {r.finishedAt
+                          ? `${f.took} ${formatDuration(new Date(r.finishedAt).getTime() - new Date(r.startedAt).getTime(), lang)}`
+                          : `${f.running} ${formatDuration(now - new Date(r.startedAt).getTime(), lang)}`}
+                      </span>
+                    ) : null}
                   </span>
 
                   {/* On every row of the day, not only the ones already checked
                       in: the morning run assigns before anyone arrives, so the
                       desk has to be able to move a technician beforehand too.
-                      A closed ticket is history and stays read-only. */}
-                  {r.status === "completed" || r.status === "cancelled" ? (
-                    <span className="w-36 shrink-0 truncate text-xs text-ink/50">
-                      {r.technicianName ?? ""}
+                      Once the work is done — or nobody turned up for it — the
+                      name is a record, not a setting. See techLockReason. */}
+                  {lockReason ? (
+                    <span
+                      className="w-36 shrink-0 truncate text-xs text-ink/50"
+                      title={lockReason === "no-show" ? f.techNoShow : f.techLocked}
+                    >
+                      {/* A no-show has no technician worth naming: whoever was
+                          pencilled in never served anyone. Saying so beats a
+                          name that reads like a record of work done. */}
+                      {lockReason === "no-show" ? f.techNoShowShort : (r.technicianName ?? "")}
                     </span>
                   ) : (
                     <TechSelect

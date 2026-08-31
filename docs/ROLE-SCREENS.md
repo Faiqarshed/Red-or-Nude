@@ -55,14 +55,22 @@ directions:
 | | before (`manager`) | after (`admin`) |
 |---|---|---|
 | Manage the service list | ❌ | ✅ `catalog.manage` |
-| Change a booking's timing | ✅ | ❌ |
+| Change a booking's timing | ✅ | ✅ — see the override below |
 
-"Admin cannot change a booking's timing" is why `bookings.reschedule` is now its
-own capability rather than part of `bookings.manage` — admin needs everything
-*else* that capability carries. It is held by the CEO and the front desk, on the
-grounds that the desk is who moves an appointment when a customer rings up. The
-brief only forbids it to admin; if the salon disagrees, it is one line in
-`lib/auth/rbac.ts`.
+"Admin cannot change a booking's timing" is why `bookings.reschedule` is a
+capability of its own rather than part of `bookings.manage` — admin needed
+everything *else* that capability carries, so the two had to come apart.
+
+**The salon overrode that clause on 2026-08-28.** An admin covering the front
+desk could not move an appointment a customer was on the phone about, and asked
+for it. `bookings.reschedule` is now held by the CEO, the front desk **and**
+admin — everyone except technicians. The split capability is what made the
+override one line rather than a refactor, and it is still what would make
+reverting it one line.
+
+This is the one place the code knowingly departs from brief §3.3. It is recorded
+here, and in `lib/auth/rbac.ts` beside the grant, so that a later reader comparing
+the two documents finds a decision rather than a bug.
 
 ## 4. One landing page, three screens
 
@@ -426,9 +434,11 @@ This is the part that matters most.
    *different* technician. ✅ Refused. The capability alone is not the
    authorisation — `my-day/actions.ts` guards on `technician_id = user.id` in the
    WHERE clause, so the row count settles it.
-2. **Admin changing a booking's timing.** As an admin, invoke
-   `rescheduleBooking`. ✅ Refused — brief §3.3. As the CEO or the receptionist,
-   the same call is allowed.
+2. **A technician changing a booking's timing.** As the technician, invoke
+   `rescheduleBooking`. ✅ Refused — `bookings.reschedule` is the one booking
+   capability they do not hold. As the CEO, the receptionist or an admin, the
+   same call is allowed (see the §3 override; admin was refused here until
+   2026-08-28).
 3. **Direct URLs.** As the technician, visit `/admin/catalog`,
    `/admin/performance` and `/admin/audit`. ✅ All refused server-side and
    redirected to `/admin` — not merely hidden from the sidebar. ✅ And the

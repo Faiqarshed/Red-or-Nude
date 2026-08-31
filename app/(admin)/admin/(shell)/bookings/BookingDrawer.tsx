@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Phone } from "lucide-react";
+import { useEffect, useState, useTransition } from "react";
+import { CalendarClock, Phone } from "lucide-react";
 import { Badge, Button, scoreTone } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
-import { localTime } from "@/lib/time";
+import { formatCountdown, localTime } from "@/lib/time";
 import { setBookingStatus } from "./actions";
+import RescheduleDialog from "./RescheduleDialog";
 import { STATUS_TONE, type BookingReview, type BookingRow, type BookingStatus } from "./BookingsView";
 
 // Which status a booking can move to next. Cancelled/no-show are terminal —
@@ -24,6 +25,17 @@ const NEXT: Record<BookingStatus, BookingStatus[]> = {
   cancelled: [],
   no_show: [],
 };
+
+/**
+ * Statuses whose appointment is still ahead of the salon and can therefore be
+ * moved. A finished, cancelled or no-show booking has no future time to change,
+ * and `pending` is an unpaid hold that may never become an appointment at all.
+ *
+ * The server does not enforce this — rescheduleBooking will happily move any row
+ * it is handed — so this is a UI judgement, not a rule. Offering the button on a
+ * closed ticket would be the confusing part, not a dangerous one.
+ */
+const MOVABLE: BookingStatus[] = ["confirmed", "checked_in"];
 
 /**
  * How the appointment went, for a ticket that has been ended.
@@ -92,19 +104,42 @@ function ScorePill({ label, value }: { label: string; value: number | null }) {
 export default function BookingDrawer({
   booking,
   canManage,
+  canReschedule,
+  checkinEarlyMin,
+  branchId,
   onClose,
   onChanged,
 }: {
   booking: BookingRow | null;
   canManage: boolean;
+  /** `bookings.reschedule` — held by everyone except technicians. */
+  canReschedule: boolean;
+  /** `checkin_early_min`, so the drawer can count down to the unlock. */
+  checkinEarlyMin: number;
+  branchId: string;
   onClose: () => void;
   onChanged: () => void;
 }) {
   const { t, lang } = useAdminI18n();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+
+  // The countdown has to move or it is worse than no countdown: a drawer left
+  // open would keep promising a wait that has already elapsed. Thirty seconds
+  // matches My Day; the button unlocks on its own within half a minute.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   if (!booking) return null;
+
+  // The same arithmetic the server does in setBookingStatus. Kept in sync by
+  // both reading `checkin_early_min` rather than by either guessing.
+  const opensAt = new Date(booking.startsAt).getTime() - checkinEarlyMin * 60_000;
+  const tooEarly = now < opensAt;
 
   const move = (status: BookingStatus) =>
     startTransition(async () => {
@@ -112,7 +147,17 @@ export default function BookingDrawer({
       const reason = status === "cancelled" ? window.prompt(t.bookings.cancelReason) ?? undefined : undefined;
       const res = await setBookingStatus(booking.id, status, reason);
       if (res.ok) onChanged();
-      else setError(t.common.error);
+      // Check-in has one refusal a person can act on — she isn't due yet — so it
+      // says when, and how long that is, rather than "something went wrong".
+      else
+        setError(
+          res.error === "too-early"
+            ? // The unlock moment, not her slot — they differ whenever
+              // checkin_early_min is non-zero, and saying the wrong one is worse
+              // than saying nothing.
+              `${t.frontDesk.tooEarly} ${localTime(new Date(opensAt).toISOString())} · ${formatCountdown(opensAt - Date.now(), lang)}`
+            : t.common.error,
+        );
     });
 
   const rows: [string, string][] = [
@@ -122,6 +167,9 @@ export default function BookingDrawer({
       : []),
     [t.bookings.time, `${localTime(booking.startsAt)} – ${localTime(booking.endsAt)}`],
     [t.bookings.service, pick(booking.serviceName, lang) || "—"],
+    // High up, beside the service rather than buried under the money: on this
+    // screen "who is doing it" is asked about as often as "what is it".
+    [t.frontDesk.technician, booking.technicianName || t.frontDesk.unassignedShort],
     [
       t.bookings.addons,
       booking.addons.length ? booking.addons.map((a) => pick(a, lang)).join("، ") : t.common.none,
@@ -206,11 +254,32 @@ export default function BookingDrawer({
                       Pressing it is the arrival record the no-show rule
                       measures, so it says so; the badge above reads "Waiting
                       for technician". The front desk has its own screen for
-                      this — /admin — and this is the fallback. */}
-                  {status === "checked_in" ? t.bookings.checkIn : t.bookings.statuses[status]}
+                      this — /admin — and this is the fallback.
+
+                      When she isn't due yet it carries the wait, so the answer
+                      to "why can't I press this" is on the thing being pressed
+                      rather than in an error that only appears after trying. */}
+                  {status === "checked_in"
+                    ? tooEarly
+                      ? `${t.bookings.checkIn} · ${formatCountdown(opensAt - now, lang)}`
+                      : t.bookings.checkIn
+                    : t.bookings.statuses[status]}
                 </button>
               ))}
             </div>
+          </div>
+        ) : null}
+
+        {/* Only while there is still an appointment to move. A completed,
+            cancelled or no-show booking is history — MOVABLE keeps this honest
+            in one place rather than in the button's disabled attribute. */}
+        {canReschedule && MOVABLE.includes(booking.status) ? (
+          <div>
+            <p className="mb-2 text-start text-xs font-medium text-ink/60">{t.bookings.time}</p>
+            <Button variant="secondary" size="sm" onClick={() => setPicking(true)}>
+              <CalendarClock className="h-4 w-4" strokeWidth={1.75} />
+              {t.bookings.reschedule}
+            </Button>
           </div>
         ) : null}
 
@@ -220,6 +289,14 @@ export default function BookingDrawer({
           </p>
         ) : null}
       </div>
+
+      <RescheduleDialog
+        open={picking}
+        booking={booking}
+        branchId={branchId}
+        onClose={() => setPicking(false)}
+        onDone={onChanged}
+      />
     </Drawer>
   );
 }

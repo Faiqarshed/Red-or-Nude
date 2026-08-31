@@ -10,6 +10,7 @@ import { recordAudit } from "@/lib/audit";
 import { createBooking, rescheduleBooking as moveBooking } from "@/lib/bookings";
 import { inviteReview } from "@/lib/reviews/invite";
 import { notifyTechnician, pickTechnician } from "@/lib/assign";
+import { getSettings } from "@/lib/settings";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
@@ -45,6 +46,21 @@ export async function setBookingStatus(
   // moves on every unrelated edit.
   const entering = (to: (typeof STATUSES)[number]) => status === to && before.status !== to;
   const now = new Date();
+
+  // Not before her slot (brief §3.1, and `checkin_early_min` in lib/settings.ts).
+  //
+  // This lives here, on the shared write path, rather than only at the front
+  // desk. checkInTicket used to be the only caller that checked, so the bookings
+  // drawer — which offers confirmed → checked_in so an admin can unstick a
+  // ticket — walked straight past the rule and took a technician off the floor
+  // hours early. Same reasoning as the technician assignment below: one write
+  // path for the status means a second caller cannot forget what it entails.
+  if (entering("checked_in")) {
+    const { checkin_early_min: earlyMin } = await getSettings(["checkin_early_min"]);
+    if (now.getTime() < before.startsAt.getTime() - earlyMin * 60_000) {
+      return { ok: false, error: "too-early" };
+    }
+  }
 
   // Someone has to take her. Only picked when the booking doesn't already name a
   // technician, so a receptionist's override — or an assignment made in advance
@@ -112,9 +128,12 @@ const rescheduleSchema = z.object({
  * Note there is no 3-hour window here. That limit is the customer's
  * (lib/cancellation.ts); the salon can move an appointment whenever it needs to.
  *
- * Gated on its own capability rather than bookings.manage, because brief §3.3
- * says an admin cannot change a booking's timing while still needing everything
- * else bookings.manage carries. See lib/auth/rbac.ts.
+ * Gated on its own capability rather than bookings.manage. Brief §3.3 withheld
+ * timing changes from admin while admin still needed everything else
+ * bookings.manage carries, which is what forced the two apart. The salon has
+ * since granted it to admin as well (see lib/auth/rbac.ts), so today the
+ * capability separates technicians from everyone else — but keeping it separate
+ * is what makes that a one-line decision either way.
  */
 export async function rescheduleBooking(input: {
   id: string;

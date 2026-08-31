@@ -23,7 +23,6 @@ import {
 import { reserveStations, utcToLocalDate } from "@/lib/availability";
 import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
-import { riyadhDayRange } from "@/lib/time";
 import { halalasToSar, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { quotePromo, type PromoRefusal } from "@/lib/promo";
 import { quoteReward, spendPoints } from "@/lib/loyalty";
@@ -411,20 +410,24 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
  * whether staff open this screen at 11am or at closing. A narrower window did
  * not protect anyone; it dropped people silently.
  *
- * The day bound stays, and does the job the lookback was wrongly credited with:
- * turning this on cannot flag months of untouched history, because history is
- * not today.
+ * **The day bound was too tight, and hid the commonest case.** It read
+ * `starts_at >= today`, so the moment a day rolled over, everything nobody
+ * checked in yesterday stopped being sweepable and stayed `confirmed` for good.
+ * Found the obvious way: a salon full of finished appointments still reading as
+ * upcoming, days later.
+ *
+ * What that bound was actually for — not flagging months of untouched history —
+ * is worth keeping, so it is now a short lookback instead of "today". Old enough
+ * and the flag stops being useful anyway: nobody chases a customer about an
+ * appointment she missed five weeks ago, and the chair was given back long since.
  *
  * `no_show_at is null` makes it idempotent: a booking already flagged keeps its
  * original timestamp however many times this runs.
  */
+const NO_SHOW_LOOKBACK_DAYS = 7;
+
 export async function sweepNoShows(branchId: string): Promise<void> {
   const { no_show_grace_min: graceMin } = await getSettings(["no_show_grace_min"]);
-
-  // Bound as an ISO string with an explicit cast: the postgres driver takes
-  // numbers in a raw template but not Date objects, which is why the sibling
-  // sweepExpiredHolds never hit this.
-  const { start: dayStart } = riyadhDayRange();
 
   await db.execute(sql`
     update ${bookings}
@@ -432,7 +435,7 @@ export async function sweepNoShows(branchId: string): Promise<void> {
      where branch_id = ${branchId}
        and status = 'confirmed'
        and no_show_at is null
-       and starts_at >= ${dayStart.toISOString()}::timestamptz
+       and starts_at >= now() - make_interval(days => ${NO_SHOW_LOOKBACK_DAYS})
        and starts_at <  now() - make_interval(mins => ${graceMin})
   `);
   // ponytail: like sweepExpiredHolds above, this only runs when someone looks —

@@ -9,6 +9,7 @@
 // red reserved for primary and destructive actions only. Dense tables need
 // neutral ground — a red-saturated admin is unreadable after an hour.
 
+import Image from "next/image";
 import { cn } from "@/lib/cn";
 
 // ------------------------------------------------------------- surfaces ----
@@ -200,29 +201,107 @@ export function Badge({
   );
 }
 
+/**
+ * `live` marks a figure that moves during the day — today's bookings, today's
+ * takings — against reference counts like "how many services exist", which
+ * change monthly and were being given exactly the same visual weight. Five
+ * identical tiles make the eye search; two loud ones and three quiet ones do not.
+ *
+ * It is emphasis only. Nothing here encodes meaning by colour alone: the label
+ * above each figure still says what it is.
+ */
 export function StatCard({
   label,
   value,
   hint,
   icon,
+  live = false,
 }: {
   label: string;
   value: React.ReactNode;
   hint?: string;
   icon?: React.ReactNode;
+  live?: boolean;
 }) {
   return (
-    <Card className="p-5">
+    <Card className={cn("p-5", live && "ring-1 ring-red/15")}>
       <div className="flex items-start justify-between gap-3">
         <div className="text-start">
           <p className="text-xs font-medium text-ink/55">{label}</p>
           {/* Tabular numerals: figures must align down a column. */}
-          <p className="mt-2 font-display text-2xl font-bold tabular-nums text-ink">{value}</p>
+          <p
+            className={cn(
+              "mt-2 font-display font-bold tabular-nums text-ink",
+              live ? "text-3xl" : "text-2xl",
+            )}
+          >
+            {value}
+          </p>
           {hint ? <p className="mt-1 text-xs text-ink/45">{hint}</p> : null}
         </div>
-        {icon ? <span className="text-ink/25">{icon}</span> : null}
+        {icon ? <span className={live ? "text-red/40" : "text-ink/25"}>{icon}</span> : null}
       </div>
     </Card>
+  );
+}
+
+// ----------------------------------------------------------------- media ----
+
+const THUMB_SIZES = {
+  sm: { box: "h-11 w-11 rounded-lg", px: 44 },
+  md: { box: "h-16 w-16 rounded-xl", px: 64 },
+  lg: { box: "h-24 w-full rounded-xl", px: 320 },
+} as const;
+
+/**
+ * A picture of the thing, wherever a row or card names one.
+ *
+ * The panel was entirely text: a technician read "Almond — Ombré" and had to
+ * picture it. Every service, design and add-on already carries an image, so the
+ * screens simply weren't asking for them.
+ *
+ * Three rules make it safe to drop anywhere:
+ *
+ * 1. **Null is normal.** A catalogue row without an image renders a tinted block
+ *    in the brand cream, not a broken-image icon and not a gap that shifts the
+ *    layout. Nothing here is required to exist.
+ * 2. **It never carries meaning alone.** Every caller keeps its text label. The
+ *    thumbnail is recognition at a glance; the words are still the record, and
+ *    they are what a screen reader gets when `alt` is empty by design.
+ * 3. **`fixed` sizing, always.** These sit in dense grids, so an image that
+ *    reflows on load would jump the row under the receptionist's finger.
+ *
+ * `src` is expected to have been through `mediaUrl` (lib/storage) already —
+ * resolving storage keys is a server concern and this is a client component.
+ */
+export function Thumb({
+  src,
+  alt,
+  size = "sm",
+  className,
+}: {
+  src?: string | null;
+  alt?: string;
+  size?: keyof typeof THUMB_SIZES;
+  className?: string;
+}) {
+  const { box, px } = THUMB_SIZES[size];
+  const shell = cn("shrink-0 overflow-hidden bg-cream ring-1 ring-black/[0.06]", box, className);
+
+  if (!src) return <div className={shell} aria-hidden />;
+
+  return (
+    <div className={shell}>
+      <Image
+        src={src}
+        alt={alt ?? ""}
+        width={px}
+        height={px}
+        // Decorative by default: the row's own text already says what this is,
+        // so an empty alt keeps a screen reader from hearing it twice.
+        className="h-full w-full object-cover"
+      />
+    </div>
   );
 }
 

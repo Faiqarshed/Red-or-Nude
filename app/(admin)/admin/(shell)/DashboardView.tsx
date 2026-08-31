@@ -36,10 +36,13 @@ export default function DashboardView({
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {/* Today and today's takings are the two that move while you watch. The
+            other three are reference counts, and stay quiet. */}
         <StatCard
           label={t.dashboard.todayBookings}
           value={stats.today}
           icon={<CalendarDays className="h-5 w-5" strokeWidth={1.5} />}
+          live
         />
         <StatCard
           label={t.dashboard.upcoming}
@@ -56,6 +59,7 @@ export default function DashboardView({
               </span>
             }
             icon={<Coins className="h-5 w-5" strokeWidth={1.5} />}
+            live
           />
         )}
         <StatCard

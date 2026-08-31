@@ -7,30 +7,121 @@
 // pressing Start. No drawer to open and nothing to filter: a technician has wet
 // hands and thirty seconds.
 //
-// The period tabs at the top change only her own figures, never the cards. The
-// cards are always today — "my day" would mean nothing otherwise.
+// The period tabs at the top change the whole screen, not only her figures.
+// "Today" is the board she works from and is always today's bookings — "my day"
+// would mean nothing otherwise. Seven and thirty days are a different question,
+// "what have I finished", so they render the history list instead: same numbers
+// above, a record rather than a board below, and nothing left to press.
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Card, EmptyState, PageHeader, StatCard, Badge } from "@/components/admin/ui";
+import { Card, CardHeader, EmptyState, PageHeader, StatCard, Badge, Thumb } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
-import { localTime } from "@/lib/time";
+import { formatDuration, localTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import type { PeriodKey, TechnicianStats } from "@/lib/performance";
-import type { MyDayBooking } from "./data";
+import type { MyDayBooking, MyPastService } from "./data";
 import { finishService, startService } from "./actions";
 
 function minutesBetween(fromIso: string, to: number): number {
   return Math.max(0, Math.round((to - new Date(fromIso).getTime()) / 60000));
 }
 
+/**
+ * What she has already finished, newest first, under a heading per day.
+ *
+ * Grouped rather than flat because thirty days is a few hundred rows, and a
+ * technician looking for "that ombré on Tuesday" navigates by day before she
+ * navigates by anything else.
+ *
+ * Read-only by construction: there is no action on a service that is over, and
+ * offering one would only raise the question of what it does.
+ */
+function HistoryList({
+  rows,
+  lang,
+  title,
+  empty,
+  took,
+}: {
+  rows: MyPastService[];
+  lang: "ar" | "en";
+  title: string;
+  empty: string;
+  took: string;
+}) {
+  if (rows.length === 0) {
+    return (
+      <Card>
+        <EmptyState title={empty} />
+      </Card>
+    );
+  }
+
+  // Already sorted newest-first by the query, so the first time a day appears
+  // is where its heading goes — no second sort, and no Map to keep in order.
+  const days: { day: string; items: MyPastService[] }[] = [];
+  for (const row of rows) {
+    const last = days[days.length - 1];
+    if (last?.day === row.day) last.items.push(row);
+    else days.push({ day: row.day, items: [row] });
+  }
+
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader title={title} subtitle={`${rows.length}`} />
+      <div>
+        {days.map(({ day, items }) => (
+          <section key={day}>
+            <h3
+              className="sticky top-0 border-b border-black/[0.06] bg-cream/95 px-4 py-2 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45 backdrop-blur"
+              dir="ltr"
+            >
+              {day}
+            </h3>
+            <ul className="divide-y divide-black/[0.04]">
+              {items.map((r) => (
+                <li key={r.id} className="flex items-center gap-3 px-4 py-3 text-start">
+                  <span className="w-12 shrink-0 text-xs tabular-nums text-ink/45" dir="ltr">
+                    {localTime(r.startsAt)}
+                  </span>
+                  <Thumb src={r.imageUrl} size="sm" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-ink">
+                      {pick(r.serviceName, lang)}
+                    </span>
+                    <span className="block truncate text-xs text-ink/50">
+                      {[r.designName ? pick(r.designName, lang) : null, r.customerName]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-end">
+                    <span className="block text-xs font-medium tabular-nums text-ink">
+                      {took} {formatDuration(r.tookMin * 60_000, lang)}
+                    </span>
+                    <span className="block text-[11px] text-ink/40">{r.ticketNo ?? "—"}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 export default function MyDayView({
   bookings,
+  history,
   stats,
   period,
 }: {
   bookings: MyDayBooking[];
+  /** Populated only for the 7- and 30-day periods; today renders the board. */
+  history: MyPastService[];
   /** Null when she has finished nothing in the period — a new hire, or a quiet week. */
   stats: TechnicianStats | null;
   period: PeriodKey;
@@ -117,7 +208,13 @@ export default function MyDayView({
         </p>
       ) : null}
 
-      {bookings.length === 0 ? (
+      {/* The tabs above change what this screen *is*, not just its numbers.
+          Today is a board she works from, so it keeps the cards with Start and
+          Finish on them. Seven and thirty days are a record of work already
+          done — there is nothing left to press, so they read as a list. */}
+      {period !== "today" ? (
+        <HistoryList rows={history} lang={lang} title={m.historyTitle} empty={m.historyEmpty} took={m.took} />
+      ) : bookings.length === 0 ? (
         <Card>
           <EmptyState title={m.empty} />
         </Card>
@@ -160,29 +257,37 @@ export default function MyDayView({
                   </div>
                 </div>
 
-                <div className="space-y-1 text-start text-sm">
-                  <p className="font-medium text-ink">{pick(b.serviceName, lang)}</p>
-                  {b.addons.length > 0 ? (
-                    <p className="text-xs text-ink/55">
-                      {b.addons.map((a) => pick(a, lang)).join(" · ")}
-                    </p>
-                  ) : null}
-                  {b.designName ? (
-                    <p className="text-xs text-ink/55">
-                      {m.design}: {pick(b.designName, lang)}
-                    </p>
-                  ) : null}
-                  {b.customerName ? (
-                    <p className="text-xs text-ink/55">
-                      {m.customer}: {b.customerName}
-                    </p>
-                  ) : null}
-                  {b.notes ? (
-                    <p className="rounded-lg bg-black/[0.03] px-2 py-1.5 text-xs text-ink/70">
-                      {b.notes}
-                    </p>
-                  ) : null}
+                {/* Picture first, then the words for it. She is looking for the
+                    shape she is about to paint, and finds it faster than she
+                    reads "Almond — Ombré". The text stays: the image narrows the
+                    card down, it does not identify it. */}
+                <div className="flex items-start gap-3 text-start text-sm">
+                  <Thumb src={b.imageUrl} size="md" />
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="font-medium text-ink">{pick(b.serviceName, lang)}</p>
+                    {b.addons.length > 0 ? (
+                      <p className="text-xs text-ink/55">
+                        {b.addons.map((a) => pick(a, lang)).join(" · ")}
+                      </p>
+                    ) : null}
+                    {b.designName ? (
+                      <p className="text-xs text-ink/55">
+                        {m.design}: {pick(b.designName, lang)}
+                      </p>
+                    ) : null}
+                    {b.customerName ? (
+                      <p className="text-xs text-ink/55">
+                        {m.customer}: {b.customerName}
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
+
+                {b.notes ? (
+                  <p className="rounded-lg bg-black/[0.03] px-2 py-1.5 text-start text-xs text-ink/70">
+                    {b.notes}
+                  </p>
+                ) : null}
 
                 {minutes !== null ? (
                   <p className="text-start text-xs text-ink/55 tabular-nums">
