@@ -19,8 +19,8 @@
 // not block a customer standing at the desk.
 
 import "server-only";
-import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, lte } from "drizzle-orm";
-import { db } from "@/lib/db";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
+import { db, type Tx } from "@/lib/db";
 import { bookings, staff, staffTimeOff, stations, customers } from "@/lib/db/schema";
 import { sendMail } from "@/lib/email";
 import { recordAudit } from "@/lib/audit";
@@ -32,6 +32,9 @@ import { renderAssignmentEmail } from "./email";
 /** Statuses that mean a technician is standing at a chair right now. */
 const BUSY = ["checked_in", "in_progress"] as const;
 
+/** The pool or one open transaction — reads take either. */
+type Reader = Pick<Tx, "select">;
+
 /**
  * Who is not in today.
  *
@@ -42,11 +45,14 @@ const BUSY = ["checked_in", "in_progress"] as const;
  * Ranges are inclusive at both ends and stored as dates, so the comparison is a
  * string one against the Riyadh calendar day — no timezone arithmetic, and no
  * midnight-UTC row silently covering the wrong day.
+ *
+ * `conn` lets assignDay read this on its own transaction, so a run holding the
+ * branch lock never needs a second connection out of the pool.
  */
-export async function offOn(day: Date = new Date()): Promise<Set<string>> {
+export async function offOn(day: Date = new Date(), conn: Reader = db): Promise<Set<string>> {
   const key = riyadhDateKey(day);
 
-  const rows = await db
+  const rows = await conn
     .select({ id: staffTimeOff.staffId })
     .from(staffTimeOff)
     .where(and(lte(staffTimeOff.startsOn, key), gte(staffTimeOff.endsOn, key)));
@@ -216,6 +222,8 @@ export function planAssignments(
  * Confirmed bookings only: a `pending` row is an unpaid hold that may never
  * become a booking, and taking a technician off the floor for one would be
  * inventing work.
+ *
+ * **One run per branch at a time.** See `lockBranch`.
  */
 export async function assignDay(
   branchId: string,
@@ -228,68 +236,20 @@ export async function assignDay(
     lt(bookings.startsAt, end),
   );
 
-  const [open, taken, technicians, off] = await Promise.all([
-    db
-      .select({ id: bookings.id, startsAt: bookings.startsAt, endsAt: bookings.endsAt })
-      .from(bookings)
-      .where(and(inTheDay, eq(bookings.status, "confirmed"), isNull(bookings.technicianId)))
-      .orderBy(asc(bookings.startsAt)),
+  // Read, plan and write are one atomic stretch: everything from here to the
+  // commit runs on `tx`, behind this branch's lock.
+  const { written, open } = await db.transaction(async (tx) => {
+    await lockBranch(tx, branchId);
+    return deal(tx, branchId, day, inTheDay);
+  });
 
-    // Already spoken for. Counted toward the spread, and their spans block the
-    // technician who holds them — a manual 10am assignment must not be handed a
-    // second customer at 10:15 by this job.
-    db
-      .select({
-        id: bookings.technicianId,
-        startsAt: bookings.startsAt,
-        endsAt: bookings.endsAt,
-      })
-      .from(bookings)
-      .where(and(inTheDay, isNotNull(bookings.technicianId))),
-
-    db
-      .select({ id: staff.id })
-      .from(staff)
-      .where(
-        and(eq(staff.active, true), eq(staff.role, "technician"), eq(staff.branchId, branchId)),
-      )
-      .orderBy(asc(staff.id)),
-
-    offOn(day),
-  ]);
-
-  const candidates = technicians.map((t) => t.id).filter((id) => !off.has(id));
-  if (open.length === 0 || candidates.length === 0) {
-    return { assigned: 0, unassigned: open.length };
-  }
-
-  const load = new Map<string, number>();
-  const held = new Map<string, { startsAt: Date; endsAt: Date }[]>();
-  for (const row of taken) {
-    if (!row.id) continue;
-    load.set(row.id, (load.get(row.id) ?? 0) + 1);
-    held.set(row.id, [...(held.get(row.id) ?? []), { startsAt: row.startsAt, endsAt: row.endsAt }]);
-  }
-
-  const plan = planAssignments(open, candidates, load, held);
-
-  let assigned = 0;
-  for (const [bookingId, technicianId] of plan) {
-    if (!technicianId) continue;
-    // `isNull` again, not just in the read: two runs firing at once must not
-    // both win. Whoever writes second updates nothing.
-    const done = await db
-      .update(bookings)
-      .set({ technicianId, updatedAt: new Date() })
-      .where(and(eq(bookings.id, bookingId), isNull(bookings.technicianId)))
-      .returning({ id: bookings.id });
-
-    if (done.length === 0) continue;
-    assigned++;
-
-    // Audited like any other assignment. `recordAudit` already takes a null
-    // actor id for mutations with no staff member behind them, so the trail
-    // shows plainly which bookings a person assigned and which the job did.
+  // Audited like any other assignment, and deliberately after the commit:
+  // `recordAudit` swallows its own failures precisely so a bad audit write can
+  // never undo a real one, and outside the lock it cannot hold the branch up.
+  // It takes a null actor id for mutations with no staff member behind them, so
+  // the trail shows plainly which bookings a person assigned and which the job
+  // did.
+  for (const [bookingId, technicianId] of written) {
     await recordAudit(
       { id: null, name: "Automatic assignment" },
       {
@@ -301,7 +261,174 @@ export async function assignDay(
     );
   }
 
-  return { assigned, unassigned: open.length - assigned };
+  return { assigned: written.length, unassigned: open - written.length };
+}
+
+/**
+ * Hold this branch's floor for the rest of the transaction.
+ *
+ * The reads below decide "Sara is free at 4"; the write only re-checks that the
+ * *booking* is still empty. So two runs firing at once both pass their own
+ * check and both hand Sara a customer — harmless while this was a once-a-day
+ * cron, and live the moment `assignIfToday` started firing on every payment.
+ *
+ * A lock in Postgres rather than one in memory: on serverless each request can
+ * be its own process, so an in-process mutex would guard nothing. `xact` means
+ * the commit releases it — including the rollback after a crash — so there is
+ * no unlock to forget.
+ */
+async function lockBranch(tx: Tx, branchId: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${branchId}))`);
+}
+
+/** The dealing itself. Split out only so assignDay reads as lock → deal → audit. */
+async function deal(
+  tx: Tx,
+  branchId: string,
+  day: Date,
+  inTheDay: ReturnType<typeof and>,
+): Promise<{ written: [string, string][]; open: number }> {
+  const [open, taken, technicians, off] = await Promise.all([
+    tx
+      .select({ id: bookings.id, startsAt: bookings.startsAt, endsAt: bookings.endsAt })
+      .from(bookings)
+      .where(and(inTheDay, eq(bookings.status, "confirmed"), isNull(bookings.technicianId)))
+      .orderBy(asc(bookings.startsAt)),
+
+    // Already spoken for. Counted toward the spread, and their spans block the
+    // technician who holds them — a manual 10am assignment must not be handed a
+    // second customer at 10:15 by this job.
+    //
+    // Cancelled and no-show rows are not "spoken for": the technician named on
+    // one is standing free. Without this filter a cancellation would hold her
+    // hour hostage for the rest of the day — invisible while this only ran at
+    // dawn, and wrong the moment it runs after a customer cancels.
+    tx
+      .select({
+        id: bookings.technicianId,
+        startsAt: bookings.startsAt,
+        endsAt: bookings.endsAt,
+      })
+      .from(bookings)
+      .where(
+        and(
+          inTheDay,
+          isNotNull(bookings.technicianId),
+          notInArray(bookings.status, ["cancelled", "no_show"]),
+        ),
+      ),
+
+    tx
+      .select({ id: staff.id })
+      .from(staff)
+      .where(
+        and(eq(staff.active, true), eq(staff.role, "technician"), eq(staff.branchId, branchId)),
+      )
+      .orderBy(asc(staff.id)),
+
+    offOn(day, tx),
+  ]);
+
+  const candidates = technicians.map((t) => t.id).filter((id) => !off.has(id));
+  if (open.length === 0 || candidates.length === 0) return { written: [], open: open.length };
+
+  const load = new Map<string, number>();
+  const held = new Map<string, { startsAt: Date; endsAt: Date }[]>();
+  for (const row of taken) {
+    if (!row.id) continue;
+    load.set(row.id, (load.get(row.id) ?? 0) + 1);
+    held.set(row.id, [...(held.get(row.id) ?? []), { startsAt: row.startsAt, endsAt: row.endsAt }]);
+  }
+
+  const plan = planAssignments(open, candidates, load, held);
+
+  const written: [string, string][] = [];
+  for (const [bookingId, technicianId] of plan) {
+    if (!technicianId) continue;
+    // `isNull` again, not just in the read: a receptionist can name someone
+    // between the read above and this write, and hers wins.
+    const done = await tx
+      .update(bookings)
+      .set({ technicianId, updatedAt: new Date() })
+      .where(and(eq(bookings.id, bookingId), isNull(bookings.technicianId)))
+      .returning({ id: bookings.id });
+
+    if (done.length) written.push([bookingId, technicianId]);
+  }
+
+  return { written, open: open.length };
+}
+
+/**
+ * Take today's unstarted work off a technician who has gone home.
+ *
+ * **Her whole day, not the rest of it.** A customer running late has a start
+ * time in the past and no check-in yet, and she is precisely the one who must
+ * not be left holding the name of somebody who has left the building — nothing
+ * comes back for that row either, because `assignDay` only fills rows that are
+ * empty, and this one is not.
+ *
+ * What "not yet started" actually means is the status: `checked_in` and
+ * `in_progress` are the customer sitting in front of her, and those stay hers.
+ * A clock reading answers a different question and gets this one wrong.
+ *
+ * Returns the ids it emptied, so the caller can say how many changed hands.
+ * Lives here rather than in the floor action so scripts/check-assign.ts can run
+ * the clause against real rows — the WHERE is the whole of the rule.
+ */
+export async function releaseToday(staffId: string): Promise<string[]> {
+  const { start, end } = riyadhDayRange();
+
+  const rows = await db
+    .update(bookings)
+    .set({ technicianId: null, updatedAt: new Date() })
+    .where(
+      and(
+        eq(bookings.technicianId, staffId),
+        eq(bookings.status, "confirmed"),
+        gte(bookings.startsAt, start),
+        lt(bookings.startsAt, end),
+      ),
+    )
+    .returning({ id: bookings.id });
+
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Is this appointment on the day the salon is running right now?
+ *
+ * Split out for the same reason chooseTechnician is: it is the whole of the rule
+ * deciding when live assignment happens, so scripts/check-roles.ts can walk it
+ * across a Riyadh midnight without a database.
+ */
+export function isToday(day: Date, now: Date = new Date()): boolean {
+  return riyadhDateKey(day) === riyadhDateKey(now);
+}
+
+/**
+ * Deal today's floor again, because something on it just changed — a booking
+ * paid for at noon, a cancellation, a reschedule, a technician sent home.
+ *
+ * One shared function rather than four narrow ones, because assignDay only ever
+ * fills empty rows: it cannot take a customer off anyone, undo what a
+ * receptionist chose, or do anything twice.
+ *
+ * **Today only.** An assignment made days ahead cannot see who will be on leave
+ * by then, and filling the row is precisely what stops the dawn run looking at
+ * it again — so an early guess would stick.
+ *
+ * Never throws. A booking without a technician is a line on the front desk's
+ * screen, not a failed request.
+ */
+export async function assignIfToday(branchId: string, day: Date): Promise<void> {
+  if (!isToday(day)) return;
+
+  try {
+    await assignDay(branchId);
+  } catch (err) {
+    console.error(`[assign] live run failed for branch ${branchId}`, err);
+  }
 }
 
 /**

@@ -5,12 +5,12 @@
 // from the `bookings_station_slot_unique` index, from `reserveStations`, and
 // from the availability engine's conflict scan, so cancelling *is* releasing.
 //
-// Auth is the booking reference alone, deliberately. It arrives in the
-// customer's own inbox, and a refund always returns to the card that paid, so
-// the worst a leaked reference buys is a nuisance cancellation — not money. The
-// guards are the throttle below and an audit row, not an OTP round-trip on every
-// cancel. If that ever stops being true, wrapping this in `verifyOtp` the way
-// ../refill/route.ts does is a few lines; lib/otp.ts is already built.
+// Auth is not the booking reference alone. A reference is forwardable and stays
+// valid in an inbox forever, so on its own it proves only that you know which
+// booking you mean — enough to read it, not enough to end it. This wants a
+// session that owns the row, or a code sent to the booking's own address; see
+// lib/booking-auth.ts. The throttle below and the audit row remain, but they
+// are no longer the only guards.
 
 import { NextResponse } from "next/server";
 import { and, asc, eq, inArray } from "drizzle-orm";
@@ -23,10 +23,20 @@ import { clientIp, throttled } from "@/lib/throttle";
 import { refundBookings } from "@/lib/payments/refund";
 import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
+import { refuseBookingAction } from "@/lib/booking-auth";
+import { assignIfToday } from "@/lib/assign";
+import { OTP_LENGTH } from "@/lib/otp";
 
 export const dynamic = "force-dynamic";
 
-const body = z.object({ code: z.string().trim().min(4).max(20) });
+const body = z.object({
+  code: z.string().trim().min(4).max(20),
+  // Absent on the first attempt: a guest is expected to be turned away once
+  // with `otp-required`, which is the screen's cue to ask for a code.
+  // A regex literal, not a template string: `\d` inside backticks is just "d",
+  // which silently makes the pattern match six letter-d's and nothing else.
+  otp: z.string().trim().length(OTP_LENGTH).regex(/^\d+$/).optional(),
+});
 
 export async function POST(request: Request) {
   // Tighter than the read endpoint: this one moves money and frees chairs, so
@@ -48,9 +58,15 @@ export async function POST(request: Request) {
   const code = parsed.data.code.toUpperCase();
 
   const [anchor] = await db.select().from(bookings).where(eq(bookings.code, code)).limit(1);
-  // Same opaque "no" the lookup endpoint gives, so a caller walking the code
-  // space learns nothing from the difference.
-  if (!anchor) return NextResponse.json({ error: "not-found" }, { status: 404 });
+  // No pretence that this hides whether the reference exists — POST
+  // /api/my-bookings answers that openly and by design. What is guarded here is
+  // the action, not the existence of the booking.
+  if (!anchor) return NextResponse.json({ error: "wrong" }, { status: 401 });
+
+  const denied = await refuseBookingAction(anchor, parsed.data.otp);
+  if (denied) {
+    return NextResponse.json({ error: denied.error }, { status: denied.status });
+  }
 
   const { cancel_cutoff_hours: cutoff } = await getSettings(["cancel_cutoff_hours"]);
   const refusal = cancelRefusal(anchor, cutoff);
@@ -120,6 +136,11 @@ export async function POST(request: Request) {
   );
 
   await notifyCustomer(anchor.customerId, "booking-cancelled", { count: cancelled.length });
+
+  // The chair came free and so did whoever was holding this hour. Anything left
+  // unassigned today may now be staffable, so run the day again — it only fills
+  // empty rows, so nobody loses a customer over someone else's cancellation.
+  await assignIfToday(anchor.branchId, anchor.startsAt);
 
   return NextResponse.json({
     ok: true,

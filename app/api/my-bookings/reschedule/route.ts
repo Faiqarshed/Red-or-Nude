@@ -20,12 +20,19 @@ import { getSettings } from "@/lib/settings";
 import { clientIp, throttled } from "@/lib/throttle";
 import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
+import { refuseBookingAction } from "@/lib/booking-auth";
+import { OTP_LENGTH } from "@/lib/otp";
 
 export const dynamic = "force-dynamic";
 
 const body = z.object({
   code: z.string().trim().min(4).max(20),
   startsAt: z.string().datetime(),
+  // Absent on the first attempt: a guest is expected to be turned away once
+  // with `otp-required`, which is the screen's cue to ask for a code.
+  // A regex literal, not a template string: `\d` inside backticks is just "d",
+  // which silently makes the pattern match six letter-d's and nothing else.
+  otp: z.string().trim().length(OTP_LENGTH).regex(/^\d+$/).optional(),
 });
 
 export async function POST(request: Request) {
@@ -47,7 +54,13 @@ export async function POST(request: Request) {
   const startsAt = new Date(parsed.data.startsAt);
 
   const [before] = await db.select().from(bookings).where(eq(bookings.code, code)).limit(1);
-  if (!before) return NextResponse.json({ error: "not-found" }, { status: 404 });
+  // Same credential as cancelling — see ../cancel.
+  if (!before) return NextResponse.json({ error: "wrong" }, { status: 401 });
+
+  const denied = await refuseBookingAction(before, parsed.data.otp);
+  if (denied) {
+    return NextResponse.json({ error: denied.error }, { status: denied.status });
+  }
 
   const { cancel_cutoff_hours: cutoff, booking_lead_time_min: leadMin } = await getSettings([
     "cancel_cutoff_hours",

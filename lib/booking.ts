@@ -11,6 +11,8 @@
 // however many it finds and posts them all to one API.
 
 import type { Content } from "./dictionary";
+import type { bookingStatus } from "@/lib/db/schema";
+import type { Localized } from "@/lib/localized";
 
 type DateStrings = Content["date"];
 
@@ -138,3 +140,54 @@ export function formatTime(slot: string, d: DateStrings): string {
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${m} ${period}`;
 }
+
+// ---- booking history --------------------------------------------------------
+
+/**
+ * A booking as the customer is allowed to see it.
+ *
+ * Lives here rather than beside the query that builds it (lib/bookings.ts, which
+ * is server-only) because both sides of the boundary need the shape: the API
+ * route and the account page produce it, BookingCard renders it. Same reason
+ * lib/localized.ts exists.
+ *
+ * What is absent is the point of it. No name, no phone, no email, no station,
+ * no notes — a reference proves someone booked, not who they are, and this type
+ * is where that promise is kept. Adding a field here widens what a leaked
+ * reference is worth; do it deliberately or not at all.
+ */
+export type BookingSummary = {
+  code: string;
+  startsAt: string;
+  status: (typeof bookingStatus.enumValues)[number];
+  ticketNo: string | null;
+  serviceName: Localized | null;
+  totalSar: number;
+  isRefill: boolean;
+  /** Whether a refill is on offer. The details are behind an emailed code. */
+  hasRefill: boolean;
+  /**
+   * Whether the 3-hour window is still open (brief §2.6). Decided by the server
+   * from lib/cancellation.ts, never re-derived here — a button that offers what
+   * the API refuses is worse than no button.
+   */
+  canCancel: boolean;
+  /** ISO UTC deadline, shown so a closed window explains itself. */
+  cancelBy: string;
+  /** What the reschedule picker needs, and nothing more. */
+  branchId: string;
+  durationMin: number;
+
+  // Catalogue detail for the booking's own screen. Safe to add here: these come
+  // from the services and branches tables, which the public site already shows
+  // to everyone. The line this type must not cross is *customer* data — no
+  // name, phone, email, station or notes. See lib/bookings.ts.
+  /** Live catalogue image for the service, or null if it has none. */
+  serviceImage: string | null;
+  /** Add-ons attached to this booking, with names and catalogue images. */
+  addons: { name: Localized | null; image: string | null }[];
+  /** Which salon, by name rather than by id. */
+  branchName: Localized | null;
+  /** Assigned technician's display name, or null when not yet assigned. */
+  technicianName: string | null;
+};

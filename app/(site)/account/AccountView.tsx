@@ -15,9 +15,11 @@ import { useEffect, useState } from "react";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import PhoneField from "@/components/PhoneField";
-import BookingCard, { RefillDialog, type HistoryRow } from "@/components/booking/BookingCard";
+import BookingCard, { RefillDialog } from "@/components/booking/BookingCard";
 import { Lock, Riyal } from "@/components/icons";
+import OtpInput from "@/components/OtpInput";
 import { useI18n } from "@/lib/i18n";
+import type { BookingSummary } from "@/lib/booking";
 import { isValidSaudiMobile, toNationalDigits, toStoredPhone } from "@/lib/phone";
 import { REWARDS } from "@/lib/rewards";
 
@@ -35,7 +37,7 @@ export default function AccountView({
 }: {
   customer?: Customer;
   balance?: number;
-  history?: HistoryRow[];
+  history?: BookingSummary[];
 }) {
   return customer ? (
     <SignedIn customer={customer} balance={balance} history={history} />
@@ -53,7 +55,7 @@ function SignedIn({
 }: {
   customer: Customer;
   balance: number;
-  history: HistoryRow[];
+  history: BookingSummary[];
 }) {
   const { c, lang } = useI18n();
   const a = c.account;
@@ -61,6 +63,21 @@ function SignedIn({
 
   const [verifying, setVerifying] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+
+  // Whether a booking can still be cancelled was decided when this page
+  // rendered, so a tab left open all afternoon keeps offering a button whose
+  // deadline has passed — and the customer only finds out by pressing it. Re-read
+  // while she is actually looking: on the minute, and the moment she comes back
+  // to the tab, which is when a page has usually gone stalest.
+  useEffect(() => {
+    const reread = () => document.visibilityState === "visible" && router.refresh();
+    const id = setInterval(reread, 60_000);
+    document.addEventListener("visibilitychange", reread);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", reread);
+    };
+  }, [router]);
 
   const signOut = async () => {
     if (signingOut) return;
@@ -560,14 +577,7 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
               <p className="mb-3 text-[13px] text-ink/60">
                 {a.codeSentTo.replace("{email}", sentTo ?? email)}
               </p>
-              <input
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                dir="ltr"
-                className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-center text-lg font-bold tracking-[0.4em] text-ink outline-none focus:border-red/40"
-              />
+              <OtpInput value={code} onChange={setCode} />
               <Submit disabled={busy || code.length !== 6} label={busy ? a.sending : a.verify} />
             </>
           )}
@@ -755,14 +765,7 @@ function SignedOut() {
               </p>
               <label className="block">
                 <span className="mb-1.5 block text-[12px] text-ink/55">{a.codeLabel}</span>
-                <input
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  dir="ltr"
-                  className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-center text-lg font-bold tracking-[0.4em] text-ink outline-none focus:border-red/40"
-                />
+                <OtpInput value={code} onChange={setCode} />
               </label>
               <Submit disabled={busy || code.length !== 6} label={busy ? a.sending : a.verify} />
 

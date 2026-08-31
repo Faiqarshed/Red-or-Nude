@@ -12,7 +12,7 @@
 
 import assert from "node:assert";
 import { can, mustHaveBranch, scopedBranchId, ROLE_LABELS } from "@/lib/auth/rbac";
-import { chooseTechnician, planAssignments, type PlannableBooking } from "@/lib/assign";
+import { chooseTechnician, isToday, planAssignments, type PlannableBooking } from "@/lib/assign";
 import { monthWindow, STAFF_CODE_PERCENT } from "@/lib/staff-codes";
 import { NAV } from "@/components/admin/nav";
 import { busyDuring, overlaps, type SlotRow } from "@/lib/slots";
@@ -317,6 +317,42 @@ assert.strictEqual(planAssignments([], ["a"]).size, 0, "an empty day plans nothi
 const callersLoad = new Map([["a", 1]]);
 planAssignments(sequentialDay(2), ["a", "b"], callersLoad);
 assert.deepStrictEqual([...callersLoad], [["a", 1]], "the caller's load map is left alone");
+
+// -- when the floor is re-dealt live -----------------------------------------
+//
+// assignIfToday is the whole of the automation added on top of the dawn cron,
+// and this predicate is the whole of its rule. Everything else it does —
+// assignDay — is asserted above; what is left to get wrong is *which day*, and
+// the trap is that Riyadh is UTC+3, so a comparison written against UTC dates
+// passes locally and mis-assigns three hours a night in production.
+
+// The one that would break a naive toISOString().slice(0, 10): 23:00 UTC and
+// 05:00 UTC the next UTC day are both the 30th in Riyadh, and an appointment at
+// 08:00 that morning must be assigned by a payment taken at 02:00.
+assert.ok(
+  isToday(new Date("2026-08-30T05:00:00Z"), new Date("2026-08-29T23:00:00Z")),
+  "two UTC days, one Riyadh day — a booking after midnight local is still today",
+);
+
+// And the mirror: 21:00 UTC is already tomorrow in Riyadh, so an appointment at
+// 21:00 UTC the same UTC day belongs to the run that has not happened yet.
+assert.ok(
+  !isToday(new Date("2026-08-30T21:00:00Z"), new Date("2026-08-30T12:00:00Z")),
+  "one UTC day, two Riyadh days — an appointment past local midnight is not today",
+);
+
+assert.ok(
+  isToday(new Date("2026-08-30T06:00:00Z"), new Date("2026-08-30T18:00:00Z")),
+  "morning and evening of the same Riyadh day are the same day",
+);
+assert.ok(
+  !isToday(new Date("2026-09-05T09:00:00Z"), new Date("2026-08-30T09:00:00Z")),
+  "next week is the dawn run's job, not this one's",
+);
+assert.ok(
+  !isToday(new Date("2026-08-29T09:00:00Z"), new Date("2026-08-30T09:00:00Z")),
+  "yesterday is nobody's job",
+);
 
 // -- who may span branches ---------------------------------------------------
 //

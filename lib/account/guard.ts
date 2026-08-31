@@ -51,4 +51,3 @@ export async function currentCustomer(): Promise<SessionCustomer | null> {
     lang: row.lang,
   };
 }
-

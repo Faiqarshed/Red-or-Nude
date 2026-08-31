@@ -32,6 +32,47 @@ const SEED_ADDONS = [
   { name: "Nail Art", price: 50, img: "/addon-catalogue.webp", seasonal: false },
 ];
 
+// Starter answers for the chat assistant and, eventually, a FAQ page. Written
+// in both languages because the assistant is told to answer in whichever the
+// customer used, and a missing translation there reads as the salon not knowing
+// its own policy. The salon edits these once the admin screen exists.
+const SEED_FAQS = [
+  {
+    ar: {
+      q: "هل تستقبلون الزبونات بدون حجز؟",
+      a: "نعم، حسب توفر الكراسي. الحجز المسبق يضمن لكِ الوقت الذي تريدينه.",
+    },
+    en: {
+      q: "Do you take walk-ins?",
+      a: "Yes, subject to a free chair. Booking ahead is the only way to be sure of a time.",
+    },
+  },
+  {
+    ar: {
+      q: "كيف ألغي حجزي أو أغيّر موعده؟",
+      a: "من صفحة الحجوزات بالرقم المرجعي، أو من حسابك إذا كنتِ مسجلة. الإلغاء متاح حتى ٣ ساعات قبل الموعد.",
+    },
+    en: {
+      q: "How do I cancel or move my booking?",
+      a: "From the bookings page with your reference, or from your account if you have one. Cancelling is open until 3 hours before the appointment.",
+    },
+  },
+  {
+    ar: {
+      q: "كم تدوم إعادة التعبئة؟",
+      a: "٣٠ يوماً للأظافر و١٤ يوماً للرموش من تاريخ الموعد، وتظهر تلقائياً في حجزك عندما تكون متاحة.",
+    },
+    en: {
+      q: "How long do I have for a refill?",
+      a: "30 days for nails and 14 for lashes from the appointment date. It appears on your booking automatically while the window is open.",
+    },
+  },
+  {
+    ar: { q: "هل يتوفر موقف سيارات؟", a: "نعم، يوجد موقف مجاني أمام كل فرع." },
+    en: { q: "Is there parking?", a: "Yes — free parking outside every branch." },
+  },
+] as const;
+
 const SEED_SERVICE_DESC = "SHAPING | BUFFING | CUTICLE CARE | SMOOTH GEL POLISH FINISH";
 
 const SEED_DESIGN_IMGS = [
@@ -164,6 +205,23 @@ async function main() {
     console.log(`→ media library (${found.length} existing images registered)`);
   } else {
     console.log("→ media library already populated, skipping");
+  }
+
+  // Independent of the catalogue below, and guarded on its own count: the
+  // branch check further down returns early on an existing database, and
+  // anything placed after it never runs again.
+  const [{ n: faqCount }] = await db.select({ n: sql<number>`count(*)::int` }).from(s.faqs);
+  if (faqCount > 0) {
+    console.log(`→ faqs already seeded (${faqCount}), skipping`);
+  } else {
+    await db.insert(s.faqs).values(
+      SEED_FAQS.map((f, i) => ({
+        question: { ar: f.ar.q, en: f.en.q },
+        answer: { ar: f.ar.a, en: f.en.a },
+        sort: i,
+      })),
+    );
+    console.log(`→ faqs (${SEED_FAQS.length})`);
   }
 
   // ---- one-time domain data ------------------------------------------------

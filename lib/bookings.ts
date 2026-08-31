@@ -7,20 +7,23 @@
 
 import "server-only";
 import { randomInt, randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
 import {
   addons,
   bookingAddons,
   bookings,
+  branches,
   customers,
   designs,
   removalTypes,
   services,
+  staff,
   ticketCounters,
   type Localized,
 } from "@/lib/db/schema";
 import { reserveStations, utcToLocalDate } from "@/lib/availability";
+import { canCancel, cancelDeadline } from "@/lib/cancellation";
 import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 import { riyadhDayRange } from "@/lib/time";
@@ -29,6 +32,9 @@ import { quotePromo, type PromoRefusal } from "@/lib/promo";
 import { quoteReward, spendPoints } from "@/lib/loyalty";
 import type { RewardRefusal } from "@/lib/rewards";
 import { formatTicketNo } from "@/lib/tickets";
+import { assignIfToday } from "@/lib/assign";
+import { mediaUrl } from "@/lib/storage";
+import type { BookingSummary } from "@/lib/booking";
 
 /** What one guest is booking. */
 export type BookingMember = {
@@ -331,6 +337,128 @@ export async function claimedWindows(bookingIds: string[]): Promise<Set<string>>
     );
 
   return new Set(rows.map((r) => r.parent as string));
+}
+
+/**
+ * A customer's bookings, shaped as the customer is allowed to see them.
+ *
+ * One definition for both ways in, because the shape is a privacy boundary and
+ * not a view model: it deliberately omits the name, phone, email and station,
+ * and two copies of that promise is one copy too many. /my-bookings and
+ * /account rendered the same object from two hand-written queries before this,
+ * which meant a field added carelessly to either leaked from one screen only.
+ *
+ * One lookup kind per credential, rather than a free-form filter: a reference
+ * opens exactly one booking, a session opens that customer's own history,
+ * newest first. The order and the limit follow from which credential was used,
+ * so they are not knobs a caller can get wrong.
+ */
+export async function bookingSummaries(
+  lookup: { code: string } | { customerId: string },
+): Promise<BookingSummary[]> {
+  const byCode = "code" in lookup;
+
+  const rows = await db
+    .select({
+      id: bookings.id,
+      code: bookings.code,
+      branchId: bookings.branchId,
+      startsAt: bookings.startsAt,
+      endsAt: bookings.endsAt,
+      status: bookings.status,
+      ticketNo: bookings.ticketNo,
+      serviceName: bookings.serviceName,
+      totalHalalas: bookings.totalHalalas,
+      refillOfBookingId: bookings.refillOfBookingId,
+      refillDays: services.refillDays,
+      // Live catalogue image, not a snapshot: if the salon reshoots a service
+      // the old bookings should show the new picture, and there is nothing to
+      // mis-price here the way there would be with a stored image of a receipt.
+      serviceImage: services.image,
+      branchName: branches.name,
+      technicianName: staff.name,
+    })
+    .from(bookings)
+    .leftJoin(services, eq(services.id, bookings.serviceId))
+    .leftJoin(branches, eq(branches.id, bookings.branchId))
+    .leftJoin(staff, eq(staff.id, bookings.technicianId))
+    .where(byCode ? eq(bookings.code, lookup.code) : eq(bookings.customerId, lookup.customerId))
+    .orderBy(desc(bookings.startsAt))
+    .limit(byCode ? 1 : 50);
+
+  const bookingIds = rows.map((r) => r.id);
+
+  const [spentOn, { cancel_cutoff_hours: cutoff }, addonRows] = await Promise.all([
+    claimedWindows(bookingIds),
+    getSettings(["cancel_cutoff_hours"]),
+    bookingIds.length
+      ? db
+          .select({
+            bookingId: bookingAddons.bookingId,
+            name: bookingAddons.name,
+            addonName: addons.name,
+            image: addons.image,
+          })
+          .from(bookingAddons)
+          .innerJoin(addons, eq(addons.id, bookingAddons.addonId))
+          .where(inArray(bookingAddons.bookingId, bookingIds))
+      : Promise.resolve([]),
+  ]);
+
+  // Group addons by booking.
+  const addonsByBooking = new Map<string, { name: Localized | null; image: string | null }[]>();
+  for (const ar of addonRows) {
+    const item = {
+      name: ar.name ?? ar.addonName ?? null,
+      image: mediaUrl(ar.image),
+    };
+    const list = addonsByBooking.get(ar.bookingId);
+    if (list) list.push(item);
+    else addonsByBooking.set(ar.bookingId, [item]);
+  }
+
+  const now = new Date();
+
+  return rows.map((r) => {
+    const daysLeft = refillDaysLeft(
+      {
+        startsAt: r.startsAt,
+        status: r.status,
+        refillDays: r.refillDays ?? 0,
+        alreadyRefilled: spentOn.has(r.id),
+        isRefill: Boolean(r.refillOfBookingId),
+      },
+      now,
+    );
+
+    return {
+      code: r.code,
+      startsAt: r.startsAt.toISOString(),
+      status: r.status,
+      ticketNo: r.ticketNo,
+      serviceName: r.serviceName,
+      totalSar: halalasToSar(r.totalHalalas),
+      isRefill: Boolean(r.refillOfBookingId),
+      // Only *whether* a refill is on offer. The countdown, the price and the
+      // booking link all sit behind the emailed code at
+      // POST /api/my-bookings/refill — otherwise holding a forwarded reference
+      // would be enough to read them, and the code would be gating nothing.
+      hasRefill: daysLeft > 0,
+
+      // The cancellation window (brief §2.6), decided here and not in the
+      // browser: the buttons must never offer what the API would refuse.
+      // `cancelBy` is sent even once the window has shut, so the screen can
+      // explain *why* the buttons are gone rather than silently omitting them.
+      canCancel: canCancel(r, cutoff, now),
+      cancelBy: cancelDeadline(r, cutoff).toISOString(),
+      branchId: r.branchId,
+      durationMin: Math.round((r.endsAt.getTime() - r.startsAt.getTime()) / 60_000),
+      serviceImage: mediaUrl(r.serviceImage),
+      addons: addonsByBooking.get(r.id) ?? [],
+      branchName: r.branchName,
+      technicianName: r.technicianName ?? null,
+    };
+  });
 }
 
 /**
@@ -847,6 +975,12 @@ export async function rescheduleBooking(input: {
             startsAt: input.startsAt,
             endsAt: new Date(input.startsAt.getTime() + durations[i]),
             stationId: stationIds[i],
+            // The technician was free at the old time; at the new one she may
+            // already have someone. Emptying the row hands the booking back to
+            // the automation below, which is the only thing that checks. Keeping
+            // a name that is now double-booked would look like a decision and be
+            // a clash.
+            technicianId: null,
             updatedAt: new Date(),
           })
           .where(eq(bookings.id, member.id));
@@ -856,6 +990,12 @@ export async function rescheduleBooking(input: {
     });
 
     if (!moved) return { ok: false, error: "slot-taken" };
+
+    // Re-staffed straight away when the move lands on today. A move to a later
+    // day deliberately stays empty until that morning's run, which is the only
+    // one that can see who will be in.
+    await assignIfToday(anchor.branchId, input.startsAt);
+
     return { ok: true, startsAt: input.startsAt, stationIds: moved };
   } catch (err) {
     if (isSlotConflict(err)) return { ok: false, error: "slot-taken" };

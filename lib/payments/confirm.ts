@@ -23,6 +23,7 @@ import { countPromoUse } from "@/lib/promo";
 import { awardPoints } from "@/lib/loyalty";
 import { pointsEarned } from "@/lib/rewards";
 import { getSettings } from "@/lib/settings";
+import { assignIfToday } from "@/lib/assign";
 import { getDriver, type PaymentMethod } from "./index";
 
 export type ConfirmedTicket = {
@@ -142,6 +143,10 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
 
       return numbers;
     });
+
+    // Real work on today's floor now, so it gets a technician now. Next week is
+    // dawn's job, on the day. One pass covers a whole group.
+    await assignIfToday(anchor.branchId, anchor.startsAt);
 
     const chairs = await db
       .select({ id: stations.id, label: stations.label })

@@ -17,6 +17,7 @@
     "preview:invoice": "tsx --conditions=react-server scripts/preview-invoice.ts",
     "check:invoice": "tsx --conditions=react-server scripts/check-invoice-email.ts",
     "check:roles": "tsx --conditions=react-server scripts/check-roles.ts",
+    "check:assign": "tsx --conditions=react-server scripts/check-assign.ts",
     "check:fields": "tsx scripts/check-fields.ts",
     "check:cancel": "tsx scripts/check-cancel.ts",
     "check:mail": "tsx --conditions=react-server scripts/check-mail.ts",
@@ -24,9 +25,11 @@
     "check:promo": "tsx --conditions=react-server scripts/check-promo.ts",
     "check:reviews": "tsx --conditions=react-server scripts/check-reviews.ts",
     "check:station": "tsx --conditions=react-server scripts/check-station.ts",
-    "check:loyalty": "tsx --conditions=react-server scripts/check-loyalty.ts"
+    "check:loyalty": "tsx --conditions=react-server scripts/check-loyalty.ts",
+    "check:chat": "tsx --conditions=react-server scripts/check-chat.ts"
   },
   "dependencies": {
+    "@google/genai": "^2.19.0",
     "@supabase/supabase-js": "^2.110.8",
     "bcryptjs": "^3.0.3",
     "clsx": "^2.1.1",
