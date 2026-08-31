@@ -28,9 +28,17 @@ export type SlotRow = {
   status: string;
 };
 
-/** A cancelled or closed booking holds nobody. */
+/**
+ * A cancelled, closed, or no-show booking holds nobody.
+ *
+ * `no_show` belongs here for the same reason as the other two, and was missed:
+ * sweepNoShows has already given the chair back by the time a row reaches this
+ * status, so a technician reading as busy for an hour nobody is sitting in is
+ * the screen contradicting the scheduler. It made the desk pick around a
+ * technician who was free.
+ */
 function occupies(status: string): boolean {
-  return status !== "cancelled" && status !== "completed";
+  return status !== "cancelled" && status !== "completed" && status !== "no_show";
 }
 
 /**

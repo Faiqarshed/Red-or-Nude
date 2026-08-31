@@ -28,6 +28,11 @@ export const NAV: NavGroup[] = [
       // an empty sidebar pointing at nothing.
       { key: "dashboard", href: "/admin", icon: "LayoutDashboard" },
       { key: "bookings", href: "/admin/bookings", icon: "CalendarDays", cap: "bookings.view" },
+      // Its own section rather than a banner on Bookings. It is a backlog, not
+      // a property of the day being viewed — an unresolved flag from Friday has
+      // to still be there on Monday, and eighteen of them pushed the whole
+      // bookings screen off the bottom of the page.
+      { key: "noShows", href: "/admin/no-shows", icon: "UserX", cap: "bookings.manage" },
       // The desk, and the floor behind it. Both on bookings.checkin rather than
       // a receptionist-only gate: an admin covering a lunch break or the CEO
       // chasing a stuck ticket has the capability and needs somewhere to use it.

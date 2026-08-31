@@ -4,8 +4,21 @@
 // missing DATABASE_URL at import time would break builds on machines that have
 // no database configured. The error surfaces on first query instead.
 //
-// The connection is cached on globalThis so Next's dev hot-reload doesn't open a
-// new pool on every module reload.
+// The connection is cached on globalThis in every environment. Dev needs it so
+// hot-reload doesn't open a pool per module reload; production used to go
+// without, which was an oversight rather than a decision.
+//
+// `db` below is a Proxy that calls getDb() on *every* property access, so with a
+// dev-only cache each `db.select(...)` in production allocated a fresh
+// postgres() client — several per query, once drizzle reads back through the
+// same proxy.
+//
+// Measured honestly: this is not where the page time was going. postgres() is
+// lazy, so the discarded clients never opened a socket, and `next start` against
+// this database served the same page in 0.36s either way. What the cache buys is
+// one pool with a bounded connection count instead of unbounded object churn
+// under load — worth having, but it is not a latency fix. The latency is the
+// distance between the function region and this database; see docs/DEPLOYMENT.md.
 
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -39,10 +52,8 @@ function getDb(): Db {
 
   const instance = drizzle(client, { schema });
 
-  if (process.env.NODE_ENV !== "production") {
-    globalForDb.__ronSql = client;
-    globalForDb.__ronDb = instance;
-  }
+  globalForDb.__ronSql = client;
+  globalForDb.__ronDb = instance;
 
   return instance;
 }

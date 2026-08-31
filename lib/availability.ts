@@ -3,7 +3,11 @@
 //   slotsFor(branch, date) =
 //        branch_hours[weekday]  −  closures  ×  active stations
 //      − bookings already occupying those stations
-//      → slots of settings.slot_length_min, filtered to now + lead time
+//      → starts every settings.slot_length_min, *plus* the moment any chair
+//        comes free, filtered to now + lead time
+//
+// That "plus" is load-bearing — see candidateStarts. A grid alone hides gaps
+// that are exactly the right size for the service looking at them.
 //
 // Both the public booking API and the admin calendar call this, so the two can
 // never disagree about what is bookable. It replaces the fixed June-2026
@@ -114,6 +118,54 @@ async function loadContext(branchId: string, from: Date, to: Date): Promise<Cont
   };
 }
 
+/**
+ * Every moment worth offering as a start time, in order.
+ *
+ * Two sources, and the second is the whole point:
+ *
+ * 1. **The grid** — every `slot_length_min` from opening. Round, familiar times.
+ * 2. **The edges** — the exact moment an existing booking frees its chair, or a
+ *    closure ends.
+ *
+ * Without (2), a gap can be precisely the size of the service that wants it and
+ * still be unbookable. A real case from this salon: chair 1 free from 10:15 to
+ * 11:30 — exactly 75 minutes — with a 75-minute BIAB looking for a home. The
+ * grid offered 10:00 (too early, the chair was still busy) and 10:30 (10:30 +
+ * 75 = 11:45, running into the next appointment). 10:15 was never on the menu,
+ * so the gap stayed empty all day.
+ *
+ * Worse, it failed *quietly*: 10:30 was still "available" on chairs 4 and 5, so
+ * the booking succeeded somewhere else and nothing looked wrong. Offering 10:15
+ * fixes it without any new chair-picking logic — at 10:15 chair 1 is the only
+ * free chair, so reserveStations lands on it by itself.
+ *
+ * This does not move anything already booked. It only stops hiding the moments
+ * when a chair is genuinely free.
+ */
+function candidateStarts(
+  ctx: Context,
+  openMs: number,
+  latestStartMs: number,
+): { start: number; onGrid: boolean }[] {
+  const grid = new Set<number>();
+  // Guarded: a slot length of zero would spin here forever.
+  const step = Math.max(1, ctx.slotLengthMin) * MINUTE_MS;
+  for (let t = openMs; t <= latestStartMs; t += step) grid.add(t);
+
+  const edges = new Set<number>();
+  const consider = (t: number) => {
+    // Strictly after opening — the grid already owns that moment — and early
+    // enough for the whole appointment to finish before the salon closes.
+    if (t > openMs && t <= latestStartMs && !grid.has(t)) edges.add(t);
+  };
+  for (const b of ctx.bookings) consider(b.endsAt.getTime());
+  for (const c of ctx.closures) consider(c.endsAt.getTime());
+
+  return [...grid, ...edges]
+    .sort((a, b) => a - b)
+    .map((start) => ({ start, onGrid: grid.has(start) }));
+}
+
 function computeDay(
   ctx: Context,
   dateStr: string,
@@ -129,16 +181,15 @@ function computeDay(
   const close = localToUtc(dateStr, hours.closes.slice(0, 5));
   const earliest = new Date(now.getTime() + ctx.leadTimeMin * MINUTE_MS);
 
+  const durationMs = durationMin * MINUTE_MS;
+  // The appointment must finish before closing, not merely start before it.
+  const latestStart = close.getTime() - durationMs;
+
   const slots: Slot[] = [];
 
-  for (
-    let start = open.getTime();
-    // The appointment must finish before closing, not merely start before it.
-    start + durationMin * MINUTE_MS <= close.getTime();
-    start += ctx.slotLengthMin * MINUTE_MS
-  ) {
+  for (const { start, onGrid } of candidateStarts(ctx, open.getTime(), latestStart)) {
     const startsAt = new Date(start);
-    const endsAt = new Date(start + durationMin * MINUTE_MS);
+    const endsAt = new Date(start + durationMs);
 
     const inClosure = ctx.closures.some(
       (c) => startsAt < c.endsAt && endsAt > c.startsAt,
@@ -153,10 +204,17 @@ function computeDay(
             ),
         );
 
+    const available = freeStationIds.length >= minStations && startsAt >= earliest;
+
+    // A grid time always shows, bookable or struck through, so the picker keeps
+    // the shape customers know. A gap time has to earn its place by being
+    // bookable — "11:47, unavailable" is noise nobody asked for.
+    if (!onGrid && !available) continue;
+
     slots.push({
       time: utcToLocalTime(startsAt),
       startsAt: startsAt.toISOString(),
-      available: freeStationIds.length >= minStations && startsAt >= earliest,
+      available,
       freeStationIds,
     });
   }

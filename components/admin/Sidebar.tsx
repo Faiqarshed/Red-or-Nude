@@ -22,6 +22,7 @@ import {
   Ticket,
   Timer,
   UserCog,
+  UserX,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -50,6 +51,7 @@ const ICONS: Record<string, LucideIcon> = {
   Ticket,
   Timer,
   UserCog,
+  UserX,
 };
 
 export default function Sidebar({
