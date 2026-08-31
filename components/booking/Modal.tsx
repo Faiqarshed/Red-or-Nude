@@ -10,8 +10,15 @@ import { useI18n } from "@/lib/i18n";
 // `chrome={false}` drops the header row and the padding and hands the card's
 // layout to the caller — for a dialog that runs a photo edge to edge, or pins a
 // footer while the middle scrolls. Everything else the shell does is the same,
-// which is the point: Escape, the click-outside, the held page and the cap on
-// height are decided once for every pop-up on the site rather than per dialog.
+// which is the point: Escape, the click-outside, the held page, the cap on
+// height *and the scrolling that cap implies* are decided once for every pop-up
+// on the site rather than per dialog.
+//
+// That last one used to be the caller's, and three of four callers forgot: cap
+// a dialog at the viewport without letting it scroll and a short screen — a
+// phone held sideways, an error banner pushing the buttons down — hides the way
+// out completely. A default that has to be remembered is a default that is
+// wrong.
 export default function Modal({
   title,
   onClose,
@@ -53,14 +60,18 @@ export default function Modal({
       aria-modal="true"
       onClick={onClose}
     >
-      {/* Capped at the viewport so a long dialog scrolls inside the card rather
-          than growing past the top and bottom of the screen. `dvh` rather than
-          `vh` because mobile browser chrome moves. */}
+      {/* Capped at the viewport and scrollable, so a long dialog scrolls inside
+          the card rather than growing past the top and bottom of the screen.
+          `dvh` rather than `vh` because mobile browser chrome moves.
+
+          A caller that pins its own footer puts `min-h-0 flex-1 overflow-y-auto`
+          on the middle instead; that region fills the card, so this one never
+          has anything left to scroll and the two do not fight. */}
       <div
         dir={dir}
         onClick={(e) => e.stopPropagation()}
-        className={`max-h-[calc(100dvh-2rem)] w-full rounded-[24px] bg-white shadow-[0_40px_100px_rgba(0,0,0,0.25)] ${
-          chrome ? "overflow-y-auto p-6 md:p-8" : "flex flex-col overflow-hidden"
+        className={`max-h-[calc(100dvh-2rem)] w-full overflow-y-auto rounded-[24px] bg-white shadow-[0_40px_100px_rgba(0,0,0,0.25)] ${
+          chrome ? "p-6 md:p-8" : "flex flex-col"
         } ${className}`}
       >
         {chrome && (

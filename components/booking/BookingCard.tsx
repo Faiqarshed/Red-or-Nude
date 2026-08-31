@@ -15,7 +15,10 @@
 // open: a guest confirms cancel, reschedule and refill with a code emailed to
 // the booking, while a signed-in customer's session already says more than the
 // code would. The server decides for real either way (lib/booking-auth.ts), so
-// a stale flag here costs a round trip, never a wrong answer.
+// a stale flag here costs a round trip, never a wrong answer — but only because
+// `otp-required` comes back to open the code dialog. Map that to an error
+// message and the flag starts costing wrong answers instead: a code box she was
+// never shown, said to hold a code she never typed.
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -338,10 +341,29 @@ export default function BookingCard({
         return null;
       }
       if (data.error === "slot-taken" || data.error === "too-soon") return h.slotTaken;
+
+      // "You need a code", not "your code was wrong" — and nobody has been
+      // shown a code box yet. Only the signed-in path can land here: a guest
+      // always sends one, so a missing code means the session this page was
+      // rendered with is not one the server accepts any anymore. Signed out in
+      // another tab, most likely.
+      //
+      // So fall back to the route a guest already takes — a code to the
+      // booking's own address — instead of telling her she mistyped something
+      // she was never asked for.
+      if (data.error === "otp-required") {
+        setGate(
+          what === "cancel"
+            ? { kind: "cancel" }
+            : { kind: "reschedule", startsAt: payload.startsAt as string },
+        );
+        return null;
+      }
+
       // The credential was refused rather than the request: that is the code
       // dialog's language, not the cancellation window's.
       // Refusals that mean "the code was wrong", not "the request was".
-      if (["otp-required", "wrong", "no-code", "too-many-attempts"].includes(data.error))
+      if (["wrong", "no-code", "too-many-attempts"].includes(data.error))
         return otpErrorMessage(data.error, h);
       return refusalMessage(data, h);
     } catch {
@@ -351,9 +373,21 @@ export default function BookingCard({
     }
   };
 
-  /** Run it now and report on the card — the signed-in path. */
+  /**
+   * Run it now and report on the card — the signed-in path.
+   *
+   * The dialog that asked comes down either way, before the message lands.
+   * `problem` renders on the card, which is behind the overlay: a refusal left
+   * under an open confirmation is painted where nobody can read it, and the
+   * button she just pressed re-arms, so the only thing the screen tells her is
+   * that pressing it again does nothing. `submit` already clears the way like
+   * this when it succeeds; a refusal needs it more, not less.
+   */
   const runNow = (fn: () => Promise<string | null>) => {
-    void fn().then((message) => message && setProblem(message));
+    void fn().then((message) => {
+      setConfirmCancel(false);
+      if (message) setProblem(message);
+    });
   };
 
   const onCancelClick = () => {

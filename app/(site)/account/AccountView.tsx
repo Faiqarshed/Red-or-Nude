@@ -64,6 +64,21 @@ function SignedIn({
   const [verifying, setVerifying] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
 
+  // Whether a booking can still be cancelled was decided when this page
+  // rendered, so a tab left open all afternoon keeps offering a button whose
+  // deadline has passed — and the customer only finds out by pressing it. Re-read
+  // while she is actually looking: on the minute, and the moment she comes back
+  // to the tab, which is when a page has usually gone stalest.
+  useEffect(() => {
+    const reread = () => document.visibilityState === "visible" && router.refresh();
+    const id = setInterval(reread, 60_000);
+    document.addEventListener("visibilitychange", reread);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", reread);
+    };
+  }, [router]);
+
   const signOut = async () => {
     if (signingOut) return;
     setSigningOut(true);
