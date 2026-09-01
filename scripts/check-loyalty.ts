@@ -14,6 +14,10 @@
 // counting a redemption whose booking died. That is only safe if every way a
 // booking can die is covered, so every way is asserted below.
 
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";
+
 import assert from "node:assert";
 import {
   REWARDS,

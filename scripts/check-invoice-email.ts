@@ -12,9 +12,9 @@
 //
 // It writes real rows to whatever DATABASE_URL points at, then deletes exactly
 // the ones it created. Point it at a development database.
-
-import { config } from "dotenv";
-config({ path: ".env.local" });
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";
 
 import assert from "node:assert";
 import { and, eq, inArray } from "drizzle-orm";

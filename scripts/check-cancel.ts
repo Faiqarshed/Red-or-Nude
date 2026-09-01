@@ -7,6 +7,10 @@
 // themselves rather than a mock of them. Saudi Arabia has no DST and lib/time.ts
 // uses a fixed +3 offset, so there is no clock-change case to cover.
 
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";
+
 import assert from "node:assert";
 import { canCancel, cancelDeadline, cancelRefusal } from "@/lib/cancellation";
 

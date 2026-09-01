@@ -10,6 +10,10 @@
 // then attributed to two guests has to add back up to the halala, or the invoice
 // disagrees with the card.
 
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";
+
 import assert from "node:assert";
 import { promoDiscount, promoRefusal, type PromoRule } from "@/lib/promo";
 import { shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";

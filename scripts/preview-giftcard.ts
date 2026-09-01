@@ -5,9 +5,9 @@
 //   npm run preview:giftcard -- --send you@you.com  → also sends the English one
 //
 // Pure without --send: no database, no network, nothing sent.
-
-import { config } from "dotenv";
-config({ path: ".env.local" });
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import assert from "node:assert";

@@ -26,7 +26,8 @@
     "check:reviews": "tsx --conditions=react-server scripts/check-reviews.ts",
     "check:station": "tsx --conditions=react-server scripts/check-station.ts",
     "check:loyalty": "tsx --conditions=react-server scripts/check-loyalty.ts",
-    "check:chat": "tsx --conditions=react-server scripts/check-chat.ts"
+    "check:chat": "tsx --conditions=react-server scripts/check-chat.ts",
+    "db:migrate:test": "node scripts/migrate-test.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.19.0",

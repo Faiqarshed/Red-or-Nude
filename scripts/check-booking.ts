@@ -4,11 +4,15 @@
 //
 // Covers the concurrency guarantees that the availability engine and
 // lib/bookings.ts depend on. Plain asserts, no test framework — if it exits 0
-// the invariants hold. It cleans up after itself, but it writes real rows, so
-// point it at a development database.
+// the invariants hold.
+//
+// It does NOT only clean up after itself: cleanup() empties every booking at
+// the branch it picks, whether this script created it or not. That is why it
+// runs against TEST_DATABASE_URL and nothing else.
 
-import { config } from "dotenv";
-config({ path: ".env.local" });
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";
 
 import assert from "node:assert";
 import { and, eq, like } from "drizzle-orm";
@@ -399,17 +403,23 @@ async function main() {
   );
   console.log("  no-show: still flagged hours later ✓");
 
-  // But only today. This is what stops switching the feature on from flagging
+  // But not for ever. This is what stops switching the feature on from flagging
   // every untouched booking in the table's history.
+  //
+  // The bound used to be "today", and this assertion still read `26 * 60` — one
+  // day back — long after NO_SHOW_LOOKBACK_DAYS replaced it with seven. Yesterday
+  // is now swept on purpose: the old bound meant a day rolling over froze every
+  // un-checked-in booking as `confirmed` for good. Nine days back is the edge
+  // that still exists.
   await cleanup(branch.id);
-  const yesterday = await seatedAt(26 * 60);
+  const longPast = await seatedAt(9 * 24 * 60);
   await sweepNoShows(branch.id);
   assert.equal(
-    (await rowOf(yesterday)).status,
+    (await rowOf(longPast)).status,
     "confirmed",
-    "yesterday is history, not something to release a chair for",
+    "past the lookback is history, not something to release a chair for",
   );
-  console.log("  no-show: yesterday is left alone ✓");
+  console.log("  no-show: past the lookback is left alone ✓");
 
   // And the point of all of it: the chair is genuinely bookable again.
   await cleanup(branch.id);

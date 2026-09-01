@@ -6,6 +6,10 @@
 // free; offerableStations() decides which of those answers the customer is
 // actually shown, and that is the part the scan screen's whole shape depends on.
 
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";
+
 import assert from "node:assert";
 import { offerableStations } from "@/lib/availability";
 
