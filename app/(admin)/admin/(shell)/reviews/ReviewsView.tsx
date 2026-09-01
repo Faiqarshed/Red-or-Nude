@@ -1,7 +1,8 @@
 "use client";
 
 import { Star } from "lucide-react";
-import { Badge, Card, EmptyState, PageHeader, StatCard, scoreTone } from "@/components/admin/ui";
+import { useRouter } from "next/navigation";
+import { Badge, BranchFilter, Card, EmptyState, PageHeader, StatCard, scoreTone } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { formatDateTime } from "@/lib/time";
@@ -26,14 +27,20 @@ export default function ReviewsView({
   answered,
   avgService,
   avgTech,
+  branchId,
+  branchOptions,
 }: {
   rows: Row[];
   invited: number;
   answered: number;
   avgService: number | null;
   avgTech: number | null;
+  /** Null = every branch. Only the CEO is ever offered the choice. */
+  branchId: string | null;
+  branchOptions: { id: string; name: Localized }[];
 }) {
   const { t, lang } = useAdminI18n();
+  const router = useRouter();
   const r = t.reviews;
 
   const oneDecimal = (value: number | null) => (value === null ? "—" : value.toFixed(1));
@@ -41,7 +48,19 @@ export default function ReviewsView({
 
   return (
     <>
-      <PageHeader title={r.title} subtitle={r.subtitle} />
+      <PageHeader
+        title={r.title}
+        subtitle={r.subtitle}
+        action={
+          <BranchFilter
+            branchId={branchId}
+            options={branchOptions}
+            allLabel={t.topbar.allBranches}
+            lang={lang}
+            onChange={(id) => router.push(id ? `/admin/reviews?branch=${id}` : "/admin/reviews")}
+          />
+        }
+      />
 
       <div className="mb-5 grid gap-4 sm:grid-cols-3">
         <StatCard

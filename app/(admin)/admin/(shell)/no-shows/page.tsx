@@ -14,11 +14,12 @@
 // salon lost, and what it did about it. Resolving one moves it across rather
 // than deleting it from the screen.
 
-import { and, asc, count, desc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
-import { scopedBranchId } from "@/lib/auth/rbac";
+import { can } from "@/lib/auth/rbac";
+import { branchScope } from "@/lib/admin/branch-scope";
 import NoShowsView from "./NoShowsView";
 
 export const dynamic = "force-dynamic";
@@ -29,10 +30,12 @@ const PER_PAGE = 10;
 export default async function NoShowsPage({
   searchParams,
 }: {
-  searchParams: { page?: string; tab?: string };
+  searchParams: { page?: string; tab?: string; branch?: string };
 }) {
   const user = await requirePage("bookings.manage");
-  const branchId = scopedBranchId(user.role, user.branchId);
+  // The CEO can now narrow to one branch instead of only ever seeing every
+  // outstanding flag in the salon at once.
+  const { branchId, options: branchOptions } = await branchScope(user, searchParams.branch);
 
   const tab = searchParams.tab === "resolved" ? "resolved" : "open";
 
@@ -58,7 +61,7 @@ export default async function NoShowsPage({
         // The reschedule picker keeps the appointment exactly as long as it is.
         endsAt: bookings.endsAt,
         serviceName: bookings.serviceName,
-        customerName: customers.name,
+        customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
         customerPhone: customers.phone,
         noShowNote: bookings.noShowNote,
         noShowResolvedAt: bookings.noShowResolvedAt,
@@ -92,6 +95,9 @@ export default async function NoShowsPage({
       resolvedCount={resolvedTotal?.n ?? 0}
       page={page}
       perPage={PER_PAGE}
+      canReschedule={can(user.role, "bookings.reschedule")}
+      branchId={branchId}
+      branchOptions={branchOptions}
     />
   );
 }

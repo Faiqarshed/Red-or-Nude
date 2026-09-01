@@ -446,7 +446,7 @@ export async function notifyTechnician(bookingId: string): Promise<void> {
         startsAt: bookings.startsAt,
         serviceName: bookings.serviceName,
         stationLabel: stations.label,
-        customerName: customers.name,
+        customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
         techName: staff.name,
         techEmail: staff.email,
       })

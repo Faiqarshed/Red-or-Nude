@@ -10,6 +10,10 @@
 // ownership guard on the technician's two actions. That one is a WHERE clause,
 // and docs/ROLE-SCREENS.md §"Try to break it" walks through proving it by hand.
 
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";
+
 import assert from "node:assert";
 import { can, mustHaveBranch, scopedBranchId, ROLE_LABELS } from "@/lib/auth/rbac";
 import { chooseTechnician, isToday, planAssignments, type PlannableBooking } from "@/lib/assign";
@@ -25,6 +29,17 @@ const ROLES: StaffRole[] = ["ceo", "admin", "receptionist", "technician"];
 assert.ok(can("ceo", "settings.manage"), "the CEO can reach settings");
 assert.ok(can("ceo", "audit.view"), "the CEO can read the audit log");
 assert.ok(can("ceo", "bookings.reschedule"), "the CEO can move an appointment");
+
+// Deleting a booking, as opposed to cancelling one. Held by the two roles that
+// answer for the records and by nobody who works a counter — a busy desk must
+// not be one mis-tap from erasing an appointment.
+assert.ok(can("ceo", "bookings.delete"), "the CEO can delete a booking");
+assert.ok(can("admin", "bookings.delete"), "an admin can delete a booking");
+assert.ok(
+  !can("receptionist", "bookings.delete"),
+  "the front desk cancels bookings, it does not delete them",
+);
+assert.ok(!can("technician", "bookings.delete"), "a technician cannot delete a booking");
 
 // Brief §3.3, both halves: admin runs the service list, and admin does not
 // touch a booking's timing.

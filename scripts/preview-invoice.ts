@@ -11,9 +11,9 @@
 // Without --send this is pure: no database, no network, nothing sent. The sample
 // bill below is a group booking, which is the awkward case — two guests, a shared
 // discount, and totals that have to add back up to what the card was charged.
-
-import { config } from "dotenv";
-config({ path: ".env.local" });
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import assert from "node:assert";
@@ -33,6 +33,7 @@ function sample(lang: "ar" | "en"): InvoiceData {
       code: ["RON-4F2K", "RON-7XQM"][i],
       ticketNo: ["K45", "K46"][i],
       stationLabel: ["3", "4"][i],
+      technicianName: ["Sara", "Noura"][i],
       lines:
         i === 0
           ? [

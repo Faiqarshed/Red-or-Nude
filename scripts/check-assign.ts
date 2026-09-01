@@ -15,9 +15,10 @@
 //
 // It writes to the database it is pointed at. Every row it makes is removed
 // again on the way out, including on failure — never run it at a real salon.
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";
 
-import { config } from "dotenv";
-config({ path: ".env.local" });
 import assert from "node:assert";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";

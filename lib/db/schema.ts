@@ -294,6 +294,19 @@ export const designs = pgTable("designs", {
   collectionId: uuid("collection_id").references(() => designCollections.id, {
     onDelete: "set null",
   }),
+  /**
+   * The add-on whose picker shows this design.
+   *
+   * There is not one seasonal catalogue, there are as many as the salon cares to
+   * sell — a winter set, a chrome set, an eid set — each its own add-on with its
+   * own pictures. Before this the table had no owner at all and the pop-up
+   * showed every design in the database whichever add-on opened it.
+   *
+   * Cascades: the pictures belong to the add-on, so removing it takes them.
+   * Nullable for the rows that predate this, which stay visible until they are
+   * given an owner.
+   */
+  addonId: uuid("addon_id").references(() => addons.id, { onDelete: "cascade" }),
   name: localized("name").notNull(),
   image: text("image"),
   sort: integer("sort").notNull().default(0),
@@ -413,6 +426,21 @@ export const bookings = pgTable(
     // holds no fact its members don't already carry, and the only query anyone
     // runs is "the other rows with this id".
     groupId: uuid("group_id"),
+
+    /**
+     * Who this booking was made for, as given at the time.
+     *
+     * Snapshotted for exactly the reason the prices below are. The customer row
+     * is keyed on the phone number and its name is overwritten by every later
+     * booking, so joining it live meant one person booking six times under six
+     * names ended up with all six appointments — and August's — displaying
+     * whichever name they typed last. History is not allowed to rewrite itself.
+     *
+     * Null on rows written before this column existed and on a walk-in nobody
+     * named; readers fall back to the customer row, which is what they used to
+     * read anyway.
+     */
+    customerName: text("customer_name"),
 
     // Snapshotted at booking time. Never joined live off the catalog — raising a
     // price must not rewrite last month's revenue.

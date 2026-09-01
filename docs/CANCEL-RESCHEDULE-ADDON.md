@@ -27,7 +27,7 @@ Two settings drive these flows:
 | Key | Default | What it does |
 |---|---|---|
 | `cancel_cutoff_hours` | `3` | How close to the appointment a customer may still cancel or move it |
-| `booking_lead_time_min` | `60` | How far ahead a *new* slot must be — also enforced on reschedule |
+| `booking_lead_time_min` | `0` | How far ahead a *new* slot must be — also enforced on reschedule. Was `60`; dropped to `0` on 2026-09-01 because nothing in the brief asked for a notice period and it was hiding free chairs. Staff are exempt either way |
 
 **There is no `/admin/settings` screen yet** — that route renders the "under
 construction" page. Nothing in the app writes to the `settings` table; values

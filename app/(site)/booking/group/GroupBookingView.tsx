@@ -73,6 +73,17 @@ export default function GroupBookingView({
     clearSchedule();
   };
 
+  /**
+   * The second guest's name, which does *not* clear the chosen time.
+   *
+   * Everything else in a guest's panel changes how long her chair is needed, so
+   * setGuest drops the schedule and makes her pick again. A name changes
+   * nothing — and routing it through setGuest would wipe the appointment on
+   * every keystroke.
+   */
+  const setGuestName = (name: string) =>
+    setGuests((prev) => [prev[0], { ...prev[1], name }]);
+
   const totals = useMemo(() => guests.map((g) => guestTotals(catalog, g)), [catalog, guests]);
   const members = useMemo(
     () => guests.map((g) => toMemberSelection(catalog, g, lang)),
@@ -175,6 +186,34 @@ export default function GroupBookingView({
 
                 {openGuest === i && (
                   <div className="border-t border-black/[0.05] px-5 pb-6 pt-6">
+                    {/* Asked of the second guest only. The first is whoever
+                        fills in checkout, so her name is already on its way and
+                        a second field for it would be the form asking a question
+                        it knows the answer to.
+
+                        Optional on purpose: a friend's name is a courtesy to the
+                        desk, not something worth blocking a booking over. Left
+                        empty, both chairs read as the booker — which is exactly
+                        what happened before this field existed. */}
+                    {i === 1 && (
+                      <label className="mb-6 block">
+                        <span className="mb-1.5 block text-[13px] font-semibold text-ink">
+                          {b.guest2Name}
+                        </span>
+                        <input
+                          type="text"
+                          maxLength={120}
+                          value={guests[1].name ?? ""}
+                          onChange={(e) => setGuestName(e.target.value)}
+                          autoComplete="off"
+                          className="w-full rounded-[12px] border border-black/[0.12] bg-white px-4 py-3 text-sm text-ink outline-none transition-colors placeholder:text-ink/30 focus:border-red/50"
+                        />
+                        <span className="mt-1.5 block text-[11px] text-ink/45">
+                          {b.guest2NameHint}
+                        </span>
+                      </label>
+                    )}
+
                     <GuestPicker
                       catalog={catalog}
                       value={guests[i]}

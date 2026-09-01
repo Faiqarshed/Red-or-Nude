@@ -1,6 +1,6 @@
 import { asc } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { addons, removalTypes, services } from "@/lib/db/schema";
+import { addons, designs, removalTypes, services } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
 import { halalasToSar } from "@/lib/money";
 import { mediaUrl } from "@/lib/storage";
@@ -11,10 +11,12 @@ export const dynamic = "force-dynamic";
 export default async function CatalogPage() {
   await requirePage("catalog.manage");
 
-  const [serviceRows, addonRows, removalRows] = await Promise.all([
+  const [serviceRows, addonRows, removalRows, designRows] = await Promise.all([
     db.select().from(services).orderBy(asc(services.sort)),
     db.select().from(addons).orderBy(asc(addons.sort)),
     db.select().from(removalTypes).orderBy(asc(removalTypes.sort)),
+    // Every one of these is a tile in some add-on's picker, active or not.
+    db.select().from(designs).orderBy(asc(designs.sort)),
   ]);
 
   return (
@@ -42,6 +44,16 @@ export default async function CatalogPage() {
           image: r.image,
           imageUrl: mediaUrl(r.image),
           isSeasonal: r.isSeasonal,
+          // Its own pictures, in their own order. Empty for an add-on that
+          // does not offer a choice, which is most of them.
+          designs: designRows
+            .filter((d) => d.addonId === r.id)
+            .map((d) => ({
+              id: d.id,
+              name: d.name,
+              image: d.image,
+              imageUrl: mediaUrl(d.image),
+            })),
           active: r.active,
           sort: r.sort,
         }),

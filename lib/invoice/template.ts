@@ -34,7 +34,8 @@ const T = {
     reference: "الرقم المرجعي",
     guest: (i: number) => `الضيفة ${i}`,
     ticket: "رقم التذكرة",
-    station: "رقم الكرسي",
+    station: "الكرسي",
+    technician: "الفنية",
     item: "البند",
     amount: "المبلغ (ر.س)",
     lineTotal: "الإجمالي",
@@ -61,7 +62,8 @@ const T = {
     reference: "Reference",
     guest: (i: number) => `Guest ${i}`,
     ticket: "Ticket",
-    station: "Station",
+    station: "Chair",
+    technician: "Technician",
     item: "Item",
     amount: "Amount (SAR)",
     lineTotal: "Total",
@@ -144,6 +146,7 @@ export function renderInvoiceEmail(data: InvoiceData): RenderedEmail {
       const chips = [
         g.ticketNo ? `${t.ticket}: <strong>${esc(g.ticketNo)}</strong>` : null,
         g.stationLabel ? `${t.station}: <strong>${esc(g.stationLabel)}</strong>` : null,
+        g.technicianName ? `${t.technician}: <strong>${esc(g.technicianName)}</strong>` : null,
         `${t.reference}: <strong>${esc(g.code)}</strong>`,
       ]
         .filter(Boolean)
@@ -260,6 +263,7 @@ export function renderInvoiceEmail(data: InvoiceData): RenderedEmail {
     if (multi) textLines.push(`— ${t.guest(i + 1)} —`);
     if (g.ticketNo) textLines.push(`${t.ticket}: ${g.ticketNo}`);
     if (g.stationLabel) textLines.push(`${t.station}: ${g.stationLabel}`);
+    if (g.technicianName) textLines.push(`${t.technician}: ${g.technicianName}`);
     textLines.push(`${t.reference}: ${g.code}`);
     for (const l of g.lines) textLines.push(`  ${pick(l.label, lang)}  ${money(l.amountHalalas)}`);
     if (g.discountHalalas > 0) textLines.push(`  ${discountLabel}  −${money(g.discountHalalas)}`);

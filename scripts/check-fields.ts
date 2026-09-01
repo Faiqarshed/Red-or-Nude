@@ -5,6 +5,10 @@
 // Pure — no database, no network. lib/card.ts holds the rules the checkout form
 // enforces, so these are the boundaries themselves, not a mock of them.
 
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";
+
 import assert from "node:assert";
 import {
   brandOf,

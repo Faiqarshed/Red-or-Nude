@@ -30,6 +30,27 @@ const config: Config = {
         // prices and times align down a column in dense tables.
         ui: ["var(--font-plex-ar)", "system-ui", "sans-serif"],
       },
+      keyframes: {
+        // The technician is across the room with her hands busy. A static ring
+        // is something she has to look for; a card that breathes is something
+        // she catches out of the corner of her eye. Two colours, two meanings:
+        // red is "somebody is waiting on you", green is "you are on the clock".
+        "waiting-pulse": {
+          "0%, 100%": { backgroundColor: "#ffffff", borderColor: "rgba(24,23,23,0.06)" },
+          "50%": { backgroundColor: "#fdeaea", borderColor: "#B80007" },
+        },
+        "running-pulse": {
+          "0%, 100%": { backgroundColor: "#ffffff", borderColor: "rgba(24,23,23,0.06)" },
+          "50%": { backgroundColor: "#e9f5ee", borderColor: "#1f7a4d" },
+        },
+      },
+      animation: {
+        // Slow enough to read as breathing rather than an alarm — this runs for
+        // as long as the customer is sitting there, and a fast blink would have
+        // the salon turning the screen face-down by lunchtime.
+        "waiting-pulse": "waiting-pulse 1.8s ease-in-out infinite",
+        "running-pulse": "running-pulse 2.6s ease-in-out infinite",
+      },
       borderRadius: {
         card: "36px",
       },

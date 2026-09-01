@@ -6,7 +6,19 @@ import { settings } from "@/lib/db/schema";
 export const SETTING_DEFAULTS = {
   vat_percent: 15,
   slot_length_min: 30,
-  booking_lead_time_min: 60,
+  /**
+   * Minutes of notice a *customer* must give on a new or moved booking.
+   *
+   * Zero: book the chair you can see. The 60 that used to sit here was a
+   * developer's default that nothing in the brief ever asked for, and it was
+   * quietly costing the salon the next two slots on a floor with every chair
+   * free — the picker struck them through, so they read as fully booked.
+   *
+   * The machinery stays: raise this and lib/availability marks the slots inside
+   * the window `too-soon`, and the picker explains the rule instead of pretending
+   * the salon is busy. Staff are exempt either way (see the walkIn parameter).
+   */
+  booking_lead_time_min: 0,
   currency: "SAR",
   timezone: "Asia/Riyadh",
   /** How long an unpaid web booking holds its chair before it's swept. */

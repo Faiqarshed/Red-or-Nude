@@ -5,7 +5,7 @@
 // keeps them out of the reviews screen.
 
 import "server-only";
-import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   bookingAddons,
@@ -84,7 +84,7 @@ export async function loadMyHistory(
       finishedAt: bookings.finishedAt,
       serviceName: bookings.serviceName,
       designName: designs.name,
-      customerName: customers.name,
+      customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
       designImage: designs.image,
       serviceImage: services.image,
     })
@@ -135,7 +135,7 @@ export async function loadMyDay(technicianId: string): Promise<MyDayBooking[]> {
       serviceName: bookings.serviceName,
       designName: designs.name,
       stationLabel: stations.label,
-      customerName: customers.name,
+      customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
       notes: bookings.notes,
       durationMin: services.durationMin,
       // Both joins are already here for the name and the duration, so these are

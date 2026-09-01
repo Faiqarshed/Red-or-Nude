@@ -1,11 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookings } from "@/lib/db/schema";
+import { bookings, loyaltyTxns, payments, reviews } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
+import { can } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
 import { createBooking, rescheduleBooking as moveBooking } from "@/lib/bookings";
 import { inviteReview } from "@/lib/reviews/invite";
@@ -35,6 +36,18 @@ export async function setBookingStatus(
   reason?: string,
 ): Promise<Result> {
   const actor = await requireCan("bookings.manage");
+
+  // The desk's two moves are the desk's: check-in is what the no-show rule
+  // measures, and closing a ticket is what sends the rating invitation. Every
+  // other status is a correction to the record — cancelling, marking someone
+  // absent, completing out of order — and that is the owner's call.
+  //
+  // Guarded here rather than in the drawer that offers the buttons: this is
+  // the single write path for a status, and a check in the one caller that
+  // renders controls is a check the next caller forgets.
+  if (status !== "checked_in" && status !== "completed" && !can(actor.role, "bookings.status")) {
+    return { ok: false, error: "forbidden" };
+  }
   if (!STATUSES.includes(status)) return { ok: false, error: "invalid-status" };
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, id)).limit(1);
@@ -201,6 +214,7 @@ export async function resolveNoShow(input: {
   note?: string;
 }): Promise<Result> {
   const actor = await requireCan("bookings.manage");
+
   const parsed = resolveSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "invalid" };
 
@@ -267,6 +281,7 @@ export type WalkInInput = z.input<typeof walkInSchema>;
 
 export async function createWalkIn(input: WalkInInput): Promise<Result & { code?: string }> {
   const actor = await requireCan("bookings.manage");
+
   const parsed = walkInSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.path.join(".") ?? "invalid" };
 
@@ -355,6 +370,87 @@ export async function rescheduleNoShow(input: {
       startsAt: { from: before.startsAt.toISOString(), to: startsAt.toISOString() },
     },
   });
+
+  revalidate();
+  return { ok: true };
+}
+
+/**
+ * Erase a booking, as opposed to cancelling it.
+ *
+ * **Cancelling is almost always the right move.** A cancelled booking keeps its
+ * reference, its price, its reason and its place in the day's history; the chair
+ * goes back on sale and the books still add up. This is for the other case: a
+ * duplicate, a test row, a walk-in typed against the wrong customer — a booking
+ * that should never have existed rather than one that ended.
+ *
+ * So it refuses anything carrying money or a customer's words:
+ *
+ * - a **payment** that is not `failed`, because a `paid` booking is a receipt
+ *   and `payments.booking_id` is `set null` — the money would survive as a row
+ *   pointing at nothing, which is worse than either keeping or removing both;
+ * - a **submitted review**, which cascades: deleting the booking destroys a
+ *   rating the customer took the trouble to leave;
+ * - **loyalty points**, which also cascade, and are the customer's balance —
+ *   `loyalty_txns` is not a log beside the balance, it *is* the balance, so
+ *   erasing rows silently makes points appear or vanish.
+ *
+ * What is left is exactly the class of row worth deleting, and the refusals name
+ * themselves so the screen can say why rather than "failed".
+ *
+ * A group goes together. Two guests on one bill are one appointment, and half a
+ * party is not a state anything else in this codebase knows how to render.
+ *
+ * Audited *before* the delete, with the reference and the customer copied into
+ * the diff: afterwards there is no row to join back to, so the trail has to
+ * carry enough to answer "what was this" on its own.
+ */
+export async function deleteBooking(id: string): Promise<Result> {
+  const actor = await requireCan("bookings.delete");
+
+  const [before] = await db.select().from(bookings).where(eq(bookings.id, id)).limit(1);
+  if (!before) return { ok: false, error: "not-found" };
+
+  // The whole party, so a group is never half-deleted.
+  const members = before.groupId
+    ? await db.select().from(bookings).where(eq(bookings.groupId, before.groupId))
+    : [before];
+  const ids = members.map((m) => m.id);
+
+  const [paid, reviewed, points] = await Promise.all([
+    db
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(inArray(payments.bookingId, ids), ne(payments.status, "failed")))
+      .limit(1),
+    db
+      .select({ id: reviews.id })
+      .from(reviews)
+      .where(and(inArray(reviews.bookingId, ids), isNotNull(reviews.submittedAt)))
+      .limit(1),
+    db.select({ id: loyaltyTxns.id }).from(loyaltyTxns).where(inArray(loyaltyTxns.bookingId, ids)).limit(1),
+  ]);
+
+  if (paid.length) return { ok: false, error: "has-payment" };
+  if (reviewed.length) return { ok: false, error: "has-review" };
+  if (points.length) return { ok: false, error: "has-points" };
+
+  for (const m of members) {
+    await recordAudit(actor, {
+      action: "delete",
+      entity: "bookings",
+      entityId: m.id,
+      diff: {
+        code: { from: m.code, to: null },
+        customerName: { from: m.customerName, to: null },
+        startsAt: { from: m.startsAt.toISOString(), to: null },
+        status: { from: m.status, to: null },
+        totalHalalas: { from: String(m.totalHalalas), to: null },
+      },
+    });
+  }
+
+  await db.delete(bookings).where(inArray(bookings.id, ids));
 
   revalidate();
   return { ok: true };

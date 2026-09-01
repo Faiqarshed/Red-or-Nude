@@ -13,6 +13,18 @@ export type Capability =
   | "bookings.manage"
   | "bookings.checkin" // the front desk: ticket lookup, check in, close the ticket
   | "bookings.reschedule" // moving an appointment — its own capability, see below
+  // Setting a booking to any status by hand — cancelled, no-show, completed
+  // out of order. Split out of bookings.manage, which everyone at the desk
+  // holds: check-in and closing a ticket are the desk's own moves and stay
+  // on bookings.checkin, while overwriting the record is not something a
+  // busy counter should be able to do by mis-clicking.
+  | "bookings.status"
+  // Erasing a booking outright, as opposed to cancelling it. Its own capability
+  // for the same reason bookings.status is: the desk cancels all day and must
+  // never be one mis-tap from destroying an appointment record. The action
+  // itself refuses anything carrying money — see deleteBooking — so this grants
+  // the power to remove a mistake, not to rewrite the books.
+  | "bookings.delete"
   | "bookings.own" // technicians: their own bookings, status changes only
   | "availability.manage"
   | "catalog.manage"
@@ -39,6 +51,8 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "bookings.manage",
     "bookings.checkin",
     "bookings.reschedule",
+    "bookings.status",
+    "bookings.delete",
     "bookings.own",
     "availability.manage",
     "catalog.manage",
@@ -65,12 +79,22 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "bookings.view",
     "bookings.manage",
     "bookings.checkin",
-    // Brief §3.3 says "Admin cannot change a booking's timing", and this was
-    // deliberately absent for that reason. The salon overrode it on 2026-08-28:
-    // an admin covering the desk had no way to move an appointment a customer
-    // was on the phone about. Granted knowingly, not leaked — if you are
-    // reconciling against the brief, this is the line that departs from it.
-    "bookings.reschedule",
+    // Granted 2026-09-01 at the salon's request, in the same breath as the two
+    // below were taken away. Worth reading twice, because it looks backwards:
+    // an admin may not move an appointment or set its status, but may delete
+    // one. It holds because deleteBooking refuses any booking that was paid
+    // for, reviewed or earned points — so what admin can actually remove is a
+    // mistake nobody has touched, and never a record of money.
+    "bookings.delete",
+    // No bookings.reschedule and no bookings.status. Brief §3.3 says "Admin
+    // cannot change a booking's timing"; it was granted anyway on 2026-08-28
+    // so an admin covering the desk could move an appointment a customer was
+    // ringing about, and taken back on 2026-09-01 at the salon's request.
+    // check-roles.ts asserts it, and was failing for the whole period the
+    // override was in place.
+    //
+    // An admin covering the desk is now covered by the desk's own login, not
+    // by widening this one — the receptionist keeps bookings.reschedule.
     "bookings.own",
     "availability.manage",
     // Brief §3.3: "manage the services listed on the booking site (add, edit,
@@ -96,8 +120,10 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "bookings.view",
     "bookings.manage",
     "bookings.checkin",
-    // The desk is who actually moves an appointment when a customer rings up.
-    // The brief only forbids this to admin.
+    // The desk is who actually moves an appointment when a customer rings up,
+    // and the brief only ever forbade this to admin. Briefly taken away on
+    // 2026-09-01 alongside admin's and given straight back: the alternative at
+    // the counter is cancel-and-rebook, which loses the ticket number.
     "bookings.reschedule",
     "bookings.own",
     "customers.manage",

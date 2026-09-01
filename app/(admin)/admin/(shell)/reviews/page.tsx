@@ -9,17 +9,21 @@ import { avg, count, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, reviews, staff } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
-import { scopedBranchId } from "@/lib/auth/rbac";
+import { branchScope } from "@/lib/admin/branch-scope";
 import ReviewsView from "./ReviewsView";
 
 export const dynamic = "force-dynamic";
 
-export default async function ReviewsPage() {
+export default async function ReviewsPage({
+  searchParams,
+}: {
+  searchParams: { branch?: string };
+}) {
   const user = await requirePage("bookings.view");
 
-  // Managers and receptionists see their own branch; owners see everything —
-  // the same rule the bookings screen applies, via the same helper.
-  const pinned = scopedBranchId(user.role, user.branchId);
+  // Managers and receptionists see their own branch; owners see everything, or
+  // whichever one they have narrowed to — the same helper every screen uses.
+  const { branchId: pinned, options: branchOptions } = await branchScope(user, searchParams.branch);
 
   const rows = await db
     .select({
@@ -63,6 +67,8 @@ export default async function ReviewsPage() {
 
   return (
     <ReviewsView
+      branchId={pinned}
+      branchOptions={branchOptions}
       invited={totals?.invited ?? 0}
       answered={totals?.answered ?? 0}
       avgService={num(totals?.avgService ?? null)}

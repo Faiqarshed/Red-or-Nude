@@ -37,6 +37,16 @@ import type { BookingSummary } from "@/lib/booking";
 
 /** What one guest is booking. */
 export type BookingMember = {
+  /**
+   * Who this chair is for, when it is not the person paying.
+   *
+   * Optional, and falls back to the booker: guest 1 *is* the customer filling in
+   * checkout, so asking for her name twice would be a form asking a question it
+   * already knows the answer to. Guest 2 is a friend the salon has no other way
+   * of learning about — without this the desk sees the booker's name on both
+   * chairs and has to guess which of the two women in front of it is which.
+   */
+  guestName?: string | null;
   serviceId: string;
   addonIds: string[];
   removalTypeId?: string | null;
@@ -348,19 +358,43 @@ export async function claimedWindows(bookingIds: string[]): Promise<Set<string>>
  * which meant a field added carelessly to either leaked from one screen only.
  *
  * One lookup kind per credential, rather than a free-form filter: a reference
- * opens exactly one booking, a session opens that customer's own history,
- * newest first. The order and the limit follow from which credential was used,
- * so they are not knobs a caller can get wrong.
+ * opens that booking *and the rest of its party*, a session opens that
+ * customer's own history, newest first. The order and the limit follow from
+ * which credential was used, so they are not knobs a caller can get wrong.
+ *
+ * **A reference opens the whole party.** Two guests who booked together are two
+ * rows with two codes, and quoting either one used to reveal exactly half the
+ * appointment: the customer who paid one bill for two people saw one booking and
+ * had to find a second reference to see the other. Cancelling already worked on
+ * the party (lib/payments/confirm.ts and the cancel route both fan out over
+ * `group_id`), so the read was the odd one out.
+ *
+ * It leaks nothing: the members share one `customer_id`, which is exactly who
+ * this reference already belonged to, and the shape omits name, phone and email
+ * either way.
  */
 export async function bookingSummaries(
   lookup: { code: string } | { customerId: string },
 ): Promise<BookingSummary[]> {
   const byCode = "code" in lookup;
 
+  // Resolve a reference to its party before reading. One extra round trip on the
+  // guest path only, and it buys the whole appointment instead of half of it.
+  let codeFilter = byCode ? eq(bookings.code, lookup.code) : undefined;
+  if (byCode) {
+    const [found] = await db
+      .select({ groupId: bookings.groupId })
+      .from(bookings)
+      .where(eq(bookings.code, lookup.code))
+      .limit(1);
+    if (found?.groupId) codeFilter = eq(bookings.groupId, found.groupId);
+  }
+
   const rows = await db
     .select({
       id: bookings.id,
       code: bookings.code,
+      groupId: bookings.groupId,
       branchId: bookings.branchId,
       startsAt: bookings.startsAt,
       endsAt: bookings.endsAt,
@@ -381,9 +415,12 @@ export async function bookingSummaries(
     .leftJoin(services, eq(services.id, bookings.serviceId))
     .leftJoin(branches, eq(branches.id, bookings.branchId))
     .leftJoin(staff, eq(staff.id, bookings.technicianId))
-    .where(byCode ? eq(bookings.code, lookup.code) : eq(bookings.customerId, lookup.customerId))
+    .where(byCode ? codeFilter : eq(bookings.customerId, lookup.customerId))
+    // A party is at most a handful, so the reference path keeps a small cap
+    // rather than none: whatever the group table says, this is still a lookup
+    // by one code and should never return a page of history.
     .orderBy(desc(bookings.startsAt))
-    .limit(byCode ? 1 : 50);
+    .limit(byCode ? 10 : 50);
 
   const bookingIds = rows.map((r) => r.id);
 
@@ -432,6 +469,10 @@ export async function bookingSummaries(
 
     return {
       code: r.code,
+      // Only whether this booking has company, and how much. Not the other
+      // person's name — she is a second customer with her own privacy, and the
+      // one who booked already knows who she brought.
+      groupSize: r.groupId ? rows.filter((x) => x.groupId === r.groupId).length : 1,
       startsAt: r.startsAt.toISOString(),
       status: r.status,
       ticketNo: r.ticketNo,
@@ -815,6 +856,10 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
             source: input.source,
             groupId,
             ticketNo: tickets?.[i] ?? null,
+            // Who this chair is for, as given now. A named guest wins; anyone
+            // else is the person who booked. The customer row's name is
+            // overwritten by every later booking; this one is not.
+            customerName: guest.member.guestName?.trim() || customer.name || null,
             // Snapshotted here and never joined live afterwards: raising a price
             // must not rewrite what this customer was charged.
             serviceName: guest.service.name as Localized,

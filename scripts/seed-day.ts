@@ -17,10 +17,6 @@
  * hand-written rows that only look like bookings.
  */
 
-import { config } from "dotenv";
-
-config({ path: ".env.local" });
-
 /** Every seeded account signs in with this. Fixture data; not a secret. */
 const PASSWORD = "salon1234";
 
@@ -191,3 +187,7 @@ async function main() {
 }
 
 main().then(() => process.exit(0));
+
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+import "./_test-db";

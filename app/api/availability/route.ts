@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDayAvailability, getMonthAvailability } from "@/lib/availability";
 import { sweepNoShows } from "@/lib/bookings";
+import { getSettings } from "@/lib/settings";
 import { currentStaff } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
@@ -64,9 +65,23 @@ export async function GET(request: Request) {
         staff ? 0 : undefined,
       );
       // freeStationIds is internal scheduling detail — the browser doesn't need
-      // to know which chair it would get.
+      // to know which chair it would get. `blockedBy` is not that: it is the
+      // reason the picker has to show, and without it every unbookable slot
+      // renders as "taken" whether the chairs were free or not.
+      //
+      // `leadTimeMin` rides along so the picker can state the rule exactly. It
+      // cannot be inferred from the slots — the first bookable one is wherever
+      // the grid happens to fall after the cutoff, which is a different number.
+      // Zero for staff, who are exempt, and the picker then says nothing.
+      const { booking_lead_time_min } = await getSettings(["booking_lead_time_min"]);
       return NextResponse.json({
-        slots: slots.map(({ time, startsAt, available }) => ({ time, startsAt, available })),
+        leadTimeMin: staff ? 0 : booking_lead_time_min,
+        slots: slots.map(({ time, startsAt, available, blockedBy }) => ({
+          time,
+          startsAt,
+          available,
+          blockedBy,
+        })),
       });
     }
 

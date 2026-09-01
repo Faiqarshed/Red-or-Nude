@@ -9,7 +9,7 @@
 // hiding a number the page already fetched.
 
 import "server-only";
-import { and, asc, desc, eq, gte, inArray, lt, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   bookings,
@@ -177,7 +177,7 @@ export async function loadDashboard(branchIds: string[]): Promise<DashboardData>
           serviceRating: reviews.serviceRating,
           techRating: reviews.techRating,
           serviceName: bookings.serviceName,
-          customerName: customers.name,
+          customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
         })
         .from(reviews)
         .innerJoin(bookings, eq(bookings.id, reviews.bookingId))

@@ -56,6 +56,9 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "customers", href: "/admin/customers", icon: "Users", cap: "customers.manage" },
       { key: "staff", href: "/admin/staff", icon: "IdCard", cap: "staff.manage" },
+      // A day at a time, for any day. Performance below is the same people over
+      // a period — two questions, and the same capability answers both.
+      { key: "technicians", href: "/admin/technicians", icon: "UsersRound", cap: "staff.performance" },
       { key: "performance", href: "/admin/performance", icon: "Timer", cap: "staff.performance" },
       // Ratings are read by whoever reads bookings — front desk included, and
       // technicians deliberately not.

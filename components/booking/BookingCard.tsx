@@ -445,6 +445,14 @@ export default function BookingCard({
                 {h.refillBadge}
               </span>
             )}
+            {/* One reference now opens the whole party, so two cards appear
+                where the customer quoted one code. Without this badge that
+                reads like a duplicate. */}
+            {row.groupSize > 1 && (
+              <span className="rounded-full bg-[#e6f0f5] px-2.5 py-0.5 text-[10px] font-semibold text-[#2c6a88]">
+                {h.groupBadge}
+              </span>
+            )}
           </div>
           <p className="mt-1 text-[13px] text-ink/55">
             {formatDateLabel(row.startsAt.slice(0, 10), lang)}
@@ -519,11 +527,25 @@ export default function BookingCard({
         </div>
       )}
 
-      {row.canCancel && (
+      {/* The deadline stays on screen either way, which is what the note above
+          promises and what this block used to break: gated on `canCancel`, it
+          vanished at the same moment the buttons did, so a customer inside the
+          cutoff got a card with no buttons and no reason. Now the closed case
+          says so, and says what to do instead.
+
+          Only while the appointment is still live. On a cancelled or finished
+          one the status badge has already answered the question. */}
+      {row.canCancel ? (
         <p className="mt-2 text-[11px] text-ink/40">
           {h.changeBy} {formatDateLabel(row.cancelBy.slice(0, 10), lang)}
         </p>
-      )}
+      ) : row.status === "pending" || row.status === "confirmed" ? (
+        <p className="mt-2 text-[11px] text-ink/45">
+          {h.changeClosed} {formatDateLabel(row.cancelBy.slice(0, 10), lang)}
+          {" · "}
+          {h.changeCallUs}
+        </p>
+      ) : null}
 
       {problem && (
         <p role="alert" className="mt-3 text-[12px] text-red">

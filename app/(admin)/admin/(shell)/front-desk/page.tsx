@@ -1,8 +1,7 @@
-import { asc } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { branches } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
-import { loadFrontDesk } from "./data";
+import { can } from "@/lib/auth/rbac";
+import { branchScope } from "@/lib/admin/branch-scope";
+import { NO_BRANCH, loadFrontDesk } from "./data";
 import FrontDeskView from "./FrontDeskView";
 
 export const dynamic = "force-dynamic";
@@ -16,28 +15,41 @@ export const dynamic = "force-dynamic";
  * too and had nowhere to use it — /admin renders them the revenue dashboard.
  * This route is that missing door.
  */
-export default async function FrontDeskPage() {
+export default async function FrontDeskPage({
+  searchParams,
+}: {
+  searchParams: { branch?: string };
+}) {
   const user = await requirePage("bookings.checkin");
 
-  // One desk at a time: a floor is a place, and the CEO — who is pinned to no
-  // branch — gets the first one rather than an impossible merge of all of them.
-  const branchId =
-    user.branchId ??
-    (await db.select({ id: branches.id }).from(branches).orderBy(asc(branches.sort)).limit(1))[0]
-      ?.id;
+  // One desk at a time: a desk is a place, and the CEO — who is pinned to no
+  // branch — got the first one and no way to reach another. She picks now, with
+  // the first still the default so nobody lands on nothing.
+  const { branchId: pinned, options: branchOptions } = await branchScope(user, searchParams.branch);
+  const branchId = pinned ?? branchOptions[0]?.id;
+
+  const canSetStatus = can(user.role, "bookings.status");
+  const canReschedule = can(user.role, "bookings.reschedule");
 
   if (!branchId) {
     return (
       <FrontDeskView
         branchId=""
-        data={{
-          rows: [],
-          technicians: [],
-          stats: { finished: 0, inService: 0, waiting: 0, upcoming: 0 },
-        }}
+        branchOptions={branchOptions}
+        data={NO_BRANCH}
+        canSetStatus={canSetStatus}
+        canReschedule={canReschedule}
       />
     );
   }
 
-  return <FrontDeskView branchId={branchId} data={await loadFrontDesk(branchId)} />;
+  return (
+    <FrontDeskView
+      branchId={branchId}
+      branchOptions={branchOptions}
+      data={await loadFrontDesk(branchId)}
+      canSetStatus={canSetStatus}
+      canReschedule={canReschedule}
+    />
+  );
 }

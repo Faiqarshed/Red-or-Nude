@@ -30,6 +30,8 @@ type Ticket = {
   code: string;
   ticketNo: string;
   stationLabel: string | null;
+  /** Null for a booking further out than today — nobody is assigned yet. */
+  technicianName: string | null;
   serviceName: { ar: string; en: string } | null;
   startsAt: string;
   totalHalalas: number;
@@ -273,6 +275,7 @@ export default function PaymentPage() {
             branchId: booking.branchId,
             startsAt: booking.startsAt,
             members: booking.members.map((m) => ({
+              guestName: m.guestName,
               serviceId: m.serviceId,
               addonIds: m.addonIds,
               removalTypeId: m.removalTypeId,
@@ -725,6 +728,15 @@ function SuccessModal({
                 </span>
                 {t.serviceName && (
                   <span className="font-semibold text-ink">{t.serviceName[lang]}</span>
+                )}
+                {/* Only when there is one. A booking further out has no
+                    technician yet — the morning run assigns on the day — and
+                    an empty label would read as one nobody turned up for. */}
+                {t.technicianName && (
+                  <span className="text-ink/55">
+                    {p.technicianLabel}{" "}
+                    <span className="font-bold text-ink">{t.technicianName}</span>
+                  </span>
                 )}
               </div>
             </div>

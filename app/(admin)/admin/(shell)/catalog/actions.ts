@@ -8,10 +8,10 @@
 // the customer-facing booking page now reads.
 
 import { revalidatePath } from "next/cache";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { addons, removalTypes, services } from "@/lib/db/schema";
+import { addons, designs, removalTypes, services } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
@@ -50,6 +50,19 @@ const itemSchema = z.object({
   refillDays: z.coerce.number().int().min(0).max(365).optional(),
   image: z.string().max(400).nullable().optional(),
   isSeasonal: z.boolean().optional(),
+  // Add-ons that offer a choice. Absent means "leave them alone" — an empty
+  // array means "there are none", and the two must not be confused or every
+  // save from a screen that does not edit them would wipe them.
+  designs: z
+    .array(
+      z.object({
+        id: z.string().uuid().optional(),
+        name: localizedText,
+        image: z.string().max(400).nullable().optional(),
+      }),
+    )
+    .max(60)
+    .optional(),
   active: z.boolean(),
   sort: z.coerce.number().int().min(0).max(9999),
 });
@@ -61,6 +74,42 @@ function revalidateAll() {
   revalidatePath("/admin/catalog");
   revalidatePath("/booking");
   revalidatePath("/");
+}
+
+/**
+ * Make the add-on's design pictures match what the drawer was showing.
+ *
+ * Undefined means the caller was not editing them and they are left alone —
+ * only an add-on that offers a picker sends this at all. An empty array is a
+ * real answer, "there are none", and clears them.
+ *
+ * Rows keep their ids across a save so a booking that already points at a
+ * design still points at the same one. Only the ones actually dropped from the
+ * list are deleted, and `bookings.design_id` is `on delete set null`, so a
+ * finished appointment loses the picture and nothing else.
+ */
+async function syncDesigns(
+  addonId: string,
+  wanted: { id?: string; name: { ar: string; en: string }; image?: string | null }[] | undefined,
+): Promise<void> {
+  if (!wanted) return;
+
+  const keep = wanted.map((d) => d.id).filter(Boolean) as string[];
+  await db
+    .delete(designs)
+    .where(
+      keep.length
+        ? and(eq(designs.addonId, addonId), notInArray(designs.id, keep))
+        : eq(designs.addonId, addonId),
+    );
+
+  // Sequential rather than one statement: the list is a handful of rows typed
+  // by hand, and the order they were dragged into is the order they render in.
+  for (const [i, d] of wanted.entries()) {
+    const row = { addonId, name: d.name, image: d.image ?? null, sort: i, updatedAt: new Date() };
+    if (d.id) await db.update(designs).set(row).where(eq(designs.id, d.id));
+    else await db.insert(designs).values(row);
+  }
 }
 
 export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult> {
@@ -102,6 +151,7 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
       if (!before) return { ok: false, error: "not-found" };
 
       await db.update(table).set(values).where(eq(table.id, data.id));
+      await syncDesigns(data.id, data.designs);
       await recordAudit(actor, {
         action: "update",
         entity: ENTITY[data.kind],
@@ -113,6 +163,7 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
     }
 
     const [row] = await db.insert(table).values(values).returning({ id: table.id });
+    await syncDesigns(row.id, data.designs);
     await recordAudit(actor, {
       action: "create",
       entity: ENTITY[data.kind],

@@ -7,7 +7,7 @@
 // technician, sends her mail and fires the review invitation. One write path for
 // the status means those side effects can't be forgotten by a second caller.
 
-import { and, eq, gte, lt, or } from "drizzle-orm";
+import { and, eq, gte, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers, type Localized } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
@@ -26,8 +26,11 @@ export type TicketMatch = {
   serviceName: Localized | null;
   customerName: string | null;
   technicianId: string | null;
+  groupId: string | null;
   /** The earliest moment this booking may be checked in — see checkin_early_min. */
   checkInOpensAt: string;
+  /** The other guests on this booking. Empty for a booking of one. */
+  party: { id: string; name: string | null; ticketNo: string | null }[];
 };
 
 export type LookupResult =
@@ -63,8 +66,9 @@ export async function findTicket(branchId: string, ticketNo: string): Promise<Lo
       startsAt: bookings.startsAt,
       status: bookings.status,
       serviceName: bookings.serviceName,
-      customerName: customers.name,
+      customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
       technicianId: bookings.technicianId,
+      groupId: bookings.groupId,
     })
     .from(bookings)
     .leftJoin(customers, eq(customers.id, bookings.customerId))
@@ -84,12 +88,26 @@ export async function findTicket(branchId: string, ticketNo: string): Promise<Lo
   // that she can't. The server re-checks on the way in; this is for the message.
   const { checkin_early_min: earlyMin } = await getSettings(["checkin_early_min"]);
 
+  // Who else is on this booking.
+  //
+  // One reference covers two guests, and the desk has to know before she says
+  // "you're all set" to somebody whose friend is still waiting to be checked in.
+  // Names rather than a count: she is about to greet them.
+  const party = row.groupId
+    ? await db
+        .select({ id: bookings.id, name: customers.name, ticketNo: bookings.ticketNo })
+        .from(bookings)
+        .leftJoin(customers, eq(customers.id, bookings.customerId))
+        .where(and(eq(bookings.groupId, row.groupId), ne(bookings.id, row.id)))
+    : [];
+
   return {
     ok: true,
     booking: {
       ...row,
       startsAt: row.startsAt.toISOString(),
       checkInOpensAt: new Date(row.startsAt.getTime() - earlyMin * 60_000).toISOString(),
+      party: party.map((p) => ({ id: p.id, name: p.name, ticketNo: p.ticketNo })),
     },
   };
 }

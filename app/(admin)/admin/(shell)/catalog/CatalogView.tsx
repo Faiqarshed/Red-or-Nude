@@ -10,6 +10,14 @@ import type { Localized } from "@/lib/db/schema";
 import CatalogDrawer from "./CatalogDrawer";
 import { moveCatalogItem, setCatalogActive, type CatalogKind } from "./actions";
 
+/** One picture in an add-on's design picker. */
+export type DesignRow = {
+  id?: string;
+  name: Localized;
+  image?: string | null;
+  imageUrl?: string | null;
+};
+
 export type CatalogRow = {
   id: string;
   name: Localized;
@@ -20,7 +28,10 @@ export type CatalogRow = {
   refillDays?: number;
   image?: string | null;
   imageUrl?: string | null;
+  /** Add-ons: does this one open a picker instead of being a plain extra? */
   isSeasonal?: boolean;
+  /** Add-ons: the pictures in that picker, in order. */
+  designs?: DesignRow[];
   active: boolean;
   sort: number;
 };

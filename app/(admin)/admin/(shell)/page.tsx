@@ -19,7 +19,7 @@ import MyDayView from "./my-day/MyDayView";
 import { loadMyDay, loadMyHistory } from "./my-day/data";
 import { isPeriodKey, loadTechnicianStats } from "@/lib/performance";
 import FrontDeskView from "./front-desk/FrontDeskView";
-import { loadFrontDesk } from "./front-desk/data";
+import { NO_BRANCH, loadFrontDesk } from "./front-desk/data";
 
 export const dynamic = "force-dynamic";
 
@@ -73,9 +73,14 @@ export default async function AdminHomePage({
       (await db.select({ id: branches.id }).from(branches).orderBy(asc(branches.sort)).limit(1))[0]
         ?.id;
 
-    if (!branchId) return <FrontDeskView branchId="" data={{ rows: [], technicians: [], stats: { finished: 0, inService: 0, waiting: 0, upcoming: 0 } }} />;
-
-    return <FrontDeskView branchId={branchId} data={await loadFrontDesk(branchId)} />;
+    return (
+      <FrontDeskView
+        branchId={branchId || ""}
+        data={branchId ? await loadFrontDesk(branchId) : NO_BRANCH}
+        canSetStatus={can(user.role, "bookings.status")}
+        canReschedule={can(user.role, "bookings.reschedule")}
+      />
+    );
   }
 
   // The CEO spans branches; everyone else is pinned to their own. The scope is

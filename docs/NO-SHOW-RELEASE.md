@@ -86,7 +86,8 @@ does not.
 
 ## Why walk-ins now ignore the lead time
 
-`booking_lead_time_min` is 60, and the walk-in drawer used the same availability
+`booking_lead_time_min` was 60 when this was written (it is 0 now — see
+docs/CANCEL-RESCHEDULE-ADDON.md), and the walk-in drawer used the same availability
 engine as the public site. So a chair freed at 14:20 could not be given to
 anyone: the 14:00 slot is past and 14:30 is inside the hour. The feature would
 have released chairs nobody could use.
@@ -331,7 +332,8 @@ slots than the public booking page does for the same day.
 
 ## 8. Regression
 
-- [ ] A normal web booking still cannot be made inside the 60-minute lead time
+- [ ] A normal web booking may now be made right up to the slot itself — the
+      lead time is 0. Restore it to 60 to re-test this row as written
 - [ ] `npx tsx --conditions=react-server scripts/check-booking.ts` passes
 - [ ] `npm run check:cancel` and `npm run check:fields` pass
 - [ ] `npm run build` is clean
