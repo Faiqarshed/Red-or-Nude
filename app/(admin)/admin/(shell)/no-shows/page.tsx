@@ -18,7 +18,7 @@ import { and, asc, count, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
-import { scopedBranchId } from "@/lib/auth/rbac";
+import { can, scopedBranchId } from "@/lib/auth/rbac";
 import NoShowsView from "./NoShowsView";
 
 export const dynamic = "force-dynamic";
@@ -92,6 +92,7 @@ export default async function NoShowsPage({
       resolvedCount={resolvedTotal?.n ?? 0}
       page={page}
       perPage={PER_PAGE}
+      canReschedule={can(user.role, "bookings.reschedule")}
     />
   );
 }

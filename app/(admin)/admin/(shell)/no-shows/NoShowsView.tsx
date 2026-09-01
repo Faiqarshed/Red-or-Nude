@@ -37,6 +37,7 @@ export default function NoShowsView({
   resolvedCount,
   page,
   perPage,
+  canReschedule,
 }: {
   rows: NoShowRow[];
   tab: NoShowTab;
@@ -44,6 +45,9 @@ export default function NoShowsView({
   resolvedCount: number;
   page: number;
   perPage: number;
+  /** `bookings.reschedule` — the owner only. Without it the flag is still
+   *  resolvable, just not by moving the appointment. */
+  canReschedule: boolean;
 }) {
   const { t, lang } = useAdminI18n();
   const b = t.bookings;
@@ -235,6 +239,9 @@ export default function NoShowsView({
         className="max-w-md"
       >
         <div className="flex flex-col gap-3 text-start">
+          {/* Offered only to whoever may actually move a booking. A button that
+              opens a picker and then fails on submit is worse than no button. */}
+          {canReschedule ? (
           <button
             onClick={() => {
               setMoving(chosen);
@@ -245,6 +252,7 @@ export default function NoShowsView({
             <span className="block text-sm font-semibold text-ink">{b.reschedule}</span>
             <span className="mt-1 block text-xs text-ink/55">{b.noShowRescheduleHint}</span>
           </button>
+          ) : null}
 
           <button
             onClick={() => setMode("reason")}

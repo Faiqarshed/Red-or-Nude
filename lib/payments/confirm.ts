@@ -14,7 +14,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, customers, payments, stations, type Localized } from "@/lib/db/schema";
+import { bookings, customers, payments, staff, stations, type Localized } from "@/lib/db/schema";
 import { allocateTickets } from "@/lib/bookings";
 import { utcToLocalDate } from "@/lib/availability";
 import { notify } from "@/lib/notify";
@@ -30,6 +30,13 @@ export type ConfirmedTicket = {
   code: string;
   ticketNo: string;
   stationLabel: string | null;
+  /**
+   * Who will be doing it, when that is already known — which for a booking
+   * taken for today it is, because assignIfToday ran a few lines before this
+   * was built. Null for anything further out: the morning run assigns on the
+   * day, so promising a name a week ahead would be promising a guess.
+   */
+  technicianName: string | null;
   serviceName: Localized | null;
   startsAt: string;
   totalHalalas: number;
@@ -159,6 +166,27 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
       );
     const labelOf = new Map(chairs.map((c) => [c.id, c.label]));
 
+    // Read back rather than taken off `members`: those rows were loaded before
+    // assignIfToday ran just above, so a booking taken for today has a
+    // technician on the row by now and not in the copy held here. Two readers:
+    // the ticket the browser shows and the confirmation message. The invoice
+    // looks the same thing up inside buildBookingInvoice, which has callers of
+    // its own and should not need one handed in.
+    const techOf = new Map(
+      (
+        await db
+          .select({ id: bookings.id, name: staff.name })
+          .from(bookings)
+          .leftJoin(staff, eq(staff.id, bookings.technicianId))
+          .where(
+            inArray(
+              bookings.id,
+              members.map((m) => m.id),
+            ),
+          )
+      ).map((r) => [r.id, r.name]),
+    );
+
     // Two separate messages, on purpose. sendConfirmations is the customer's
     // "you're booked" note and goes through the notify() seam, which is still
     // log-only. sendBookingInvoice is the tax invoice and delivers for real over
@@ -188,7 +216,7 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
       await awardPoints(anchor.customerId, anchor.id, pointsEarned(billTotal, sarPerPoint));
     }
 
-    await sendConfirmations(members, tickets, labelOf);
+    await sendConfirmations(members, tickets, labelOf, techOf);
     await sendBookingInvoice(members.map((m) => m.id));
 
     return {
@@ -198,6 +226,7 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
         code: m.code,
         ticketNo: tickets[i],
         stationLabel: m.stationId ? (labelOf.get(m.stationId) ?? null) : null,
+        technicianName: techOf.get(m.id) ?? null,
         serviceName: m.serviceName,
         startsAt: m.startsAt.toISOString(),
         totalHalalas: m.totalHalalas,
@@ -224,11 +253,11 @@ async function sendConfirmations(
   members: (typeof bookings.$inferSelect)[],
   tickets: string[],
   labelOf: Map<string, string>,
+  techOf: Map<string, string | null>,
 ): Promise<void> {
   try {
     const customerId = members[0].customerId;
     if (!customerId) return;
-
     const [customer] = await db
       .select({ email: customers.email, phone: customers.phone, lang: customers.lang })
       .from(customers)
@@ -249,6 +278,7 @@ async function sendConfirmations(
           code: m.code,
           ticketNo: tickets[i],
           station: m.stationId ? (labelOf.get(m.stationId) ?? null) : null,
+          technician: techOf.get(m.id) ?? null,
           serviceName: m.serviceName,
           totalHalalas: m.totalHalalas,
         })),

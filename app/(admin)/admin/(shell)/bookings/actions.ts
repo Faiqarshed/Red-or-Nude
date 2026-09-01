@@ -6,6 +6,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
+import { can } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
 import { createBooking, rescheduleBooking as moveBooking } from "@/lib/bookings";
 import { inviteReview } from "@/lib/reviews/invite";
@@ -35,6 +36,18 @@ export async function setBookingStatus(
   reason?: string,
 ): Promise<Result> {
   const actor = await requireCan("bookings.manage");
+
+  // The desk's two moves are the desk's: check-in is what the no-show rule
+  // measures, and closing a ticket is what sends the rating invitation. Every
+  // other status is a correction to the record — cancelling, marking someone
+  // absent, completing out of order — and that is the owner's call.
+  //
+  // Guarded here rather than in the drawer that offers the buttons: this is
+  // the single write path for a status, and a check in the one caller that
+  // renders controls is a check the next caller forgets.
+  if (status !== "checked_in" && status !== "completed" && !can(actor.role, "bookings.status")) {
+    return { ok: false, error: "forbidden" };
+  }
   if (!STATUSES.includes(status)) return { ok: false, error: "invalid-status" };
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, id)).limit(1);
@@ -201,6 +214,7 @@ export async function resolveNoShow(input: {
   note?: string;
 }): Promise<Result> {
   const actor = await requireCan("bookings.manage");
+
   const parsed = resolveSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "invalid" };
 
@@ -267,6 +281,7 @@ export type WalkInInput = z.input<typeof walkInSchema>;
 
 export async function createWalkIn(input: WalkInInput): Promise<Result & { code?: string }> {
   const actor = await requireCan("bookings.manage");
+
   const parsed = walkInSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.path.join(".") ?? "invalid" };
 

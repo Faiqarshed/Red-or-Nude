@@ -13,6 +13,12 @@ export type Capability =
   | "bookings.manage"
   | "bookings.checkin" // the front desk: ticket lookup, check in, close the ticket
   | "bookings.reschedule" // moving an appointment — its own capability, see below
+  // Setting a booking to any status by hand — cancelled, no-show, completed
+  // out of order. Split out of bookings.manage, which everyone at the desk
+  // holds: check-in and closing a ticket are the desk's own moves and stay
+  // on bookings.checkin, while overwriting the record is not something a
+  // busy counter should be able to do by mis-clicking.
+  | "bookings.status"
   | "bookings.own" // technicians: their own bookings, status changes only
   | "availability.manage"
   | "catalog.manage"
@@ -39,6 +45,7 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "bookings.manage",
     "bookings.checkin",
     "bookings.reschedule",
+    "bookings.status",
     "bookings.own",
     "availability.manage",
     "catalog.manage",
@@ -65,12 +72,13 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "bookings.view",
     "bookings.manage",
     "bookings.checkin",
-    // Brief §3.3 says "Admin cannot change a booking's timing", and this was
-    // deliberately absent for that reason. The salon overrode it on 2026-08-28:
-    // an admin covering the desk had no way to move an appointment a customer
-    // was on the phone about. Granted knowingly, not leaked — if you are
-    // reconciling against the brief, this is the line that departs from it.
-    "bookings.reschedule",
+    // No bookings.reschedule and no bookings.status. Brief §3.3 says "Admin
+    // cannot change a booking's timing"; it was granted anyway on 2026-08-28
+    // so an admin covering the desk could move an appointment a customer was
+    // ringing about, and taken back on 2026-09-01 at the salon's request —
+    // moving or rewriting a booking is the owner's call and nobody else's.
+    // check-roles.ts asserts this, and was failing for the whole period the
+    // override was in place.
     "bookings.own",
     "availability.manage",
     // Brief §3.3: "manage the services listed on the booking site (add, edit,
@@ -96,9 +104,9 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "bookings.view",
     "bookings.manage",
     "bookings.checkin",
-    // The desk is who actually moves an appointment when a customer rings up.
-    // The brief only forbids this to admin.
-    "bookings.reschedule",
+    // No bookings.reschedule: moving an appointment is the owner's call as of
+    // 2026-09-01. The desk still checks people in and closes tickets — that is
+    // bookings.checkin above, and it never went through this.
     "bookings.own",
     "customers.manage",
     "giftcards.issue",

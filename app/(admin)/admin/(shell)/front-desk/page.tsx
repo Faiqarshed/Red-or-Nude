@@ -2,7 +2,8 @@ import { asc } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { branches } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
-import { loadFrontDesk } from "./data";
+import { can } from "@/lib/auth/rbac";
+import { NO_BRANCH, loadFrontDesk } from "./data";
 import FrontDeskView from "./FrontDeskView";
 
 export const dynamic = "force-dynamic";
@@ -26,18 +27,26 @@ export default async function FrontDeskPage() {
     (await db.select({ id: branches.id }).from(branches).orderBy(asc(branches.sort)).limit(1))[0]
       ?.id;
 
+  const canSetStatus = can(user.role, "bookings.status");
+  const canReschedule = can(user.role, "bookings.reschedule");
+
   if (!branchId) {
     return (
       <FrontDeskView
         branchId=""
-        data={{
-          rows: [],
-          technicians: [],
-          stats: { finished: 0, inService: 0, waiting: 0, upcoming: 0 },
-        }}
+        data={NO_BRANCH}
+        canSetStatus={canSetStatus}
+        canReschedule={canReschedule}
       />
     );
   }
 
-  return <FrontDeskView branchId={branchId} data={await loadFrontDesk(branchId)} />;
+  return (
+    <FrontDeskView
+      branchId={branchId}
+      data={await loadFrontDesk(branchId)}
+      canSetStatus={canSetStatus}
+      canReschedule={canReschedule}
+    />
+  );
 }

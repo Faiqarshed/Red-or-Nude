@@ -20,6 +20,7 @@ import {
   customers,
   payments,
   promoCodes,
+  staff,
   stations,
   type Localized,
 } from "@/lib/db/schema";
@@ -32,6 +33,15 @@ export type InvoiceGuest = {
   code: string;
   ticketNo: string | null;
   stationLabel: string | null;
+  /**
+   * Who will be doing the work, when that is already known.
+   *
+   * Null is the ordinary case for anything past today: assignIfToday only
+   * fills a technician in on the day itself, because an assignment made a
+   * week ahead cannot see who will be on leave by then. The template omits
+   * the line rather than promising a name the salon has not picked yet.
+   */
+  technicianName: string | null;
   lines: InvoiceLine[];
   discountHalalas: number;
   subtotalHalalas: number;
@@ -126,6 +136,18 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
     : [];
   const labelOf = new Map(chairs.map((c) => [c.id, c.label]));
 
+  // Read live rather than snapshotted, like the promo code below. The invoice
+  // is built after assignIfToday has run, so a booking taken for today already
+  // knows whose it is — which is exactly the case this line exists for.
+  const techIds = ordered.map((b) => b.technicianId).filter(Boolean) as string[];
+  const techs = techIds.length
+    ? await db
+        .select({ id: staff.id, name: staff.name })
+        .from(staff)
+        .where(inArray(staff.id, techIds))
+    : [];
+  const techOf = new Map(techs.map((t) => [t.id, t.name]));
+
   const extras = await db
     .select()
     .from(bookingAddons)
@@ -176,6 +198,7 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
       code: b.code,
       ticketNo: b.ticketNo,
       stationLabel: b.stationId ? (labelOf.get(b.stationId) ?? null) : null,
+      technicianName: b.technicianId ? (techOf.get(b.technicianId) ?? null) : null,
       lines,
       discountHalalas: b.discountHalalas,
       subtotalHalalas: b.subtotalHalalas,

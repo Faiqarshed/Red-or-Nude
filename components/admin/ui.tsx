@@ -11,7 +11,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { ChevronRight, TrendingDown, TrendingUp } from "lucide-react";
+import { ChevronLeft, ChevronRight, TrendingDown, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 // ------------------------------------------------------------- surfaces ----
@@ -551,6 +551,73 @@ export function EmptyState({
       {icon ? <span className="text-ink/20">{icon}</span> : null}
       <p className="text-sm font-medium text-ink">{title}</p>
       {body ? <p className="max-w-sm text-xs text-ink/50">{body}</p> : null}
+    </div>
+  );
+}
+/**
+ * Step a day at a time, or jump to any date.
+ *
+ * The arrows are fine for "yesterday" and useless for "the 14th of next
+ * month", which is most of what the desk is asked on the phone — so the middle
+ * is a real date input. Native, so it opens the platform's own calendar and
+ * keeps the keyboard path for anyone who would rather type.
+ *
+ * `showPicker()` on click because browsers only open the calendar from the
+ * small icon otherwise, and the whole control looks clickable. Guarded:
+ * Firefox has no such method, and Safari throws if the call is not from a user
+ * gesture.
+ *
+ * The date lives in the URL on both screens that use this, so the component
+ * takes a value and a callback and knows nothing about routing.
+ */
+export function DateStepper({
+  date,
+  onChange,
+  labels,
+}: {
+  /** `YYYY-MM-DD`. */
+  date: string;
+  onChange: (date: string) => void;
+  labels: { prev: string; next: string; date: string };
+}) {
+  const step = (days: number) => {
+    const d = new Date(`${date}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    onChange(d.toISOString().slice(0, 10));
+  };
+
+  return (
+    <div className="flex items-center gap-1 rounded-xl border border-black/[0.06] bg-white p-1">
+      <button
+        onClick={() => step(-1)}
+        className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]"
+        aria-label={labels.prev}
+      >
+        <ChevronLeft className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
+      </button>
+      <input
+        type="date"
+        value={date}
+        onChange={(e) => e.target.value && onChange(e.target.value)}
+        onClick={(e) => {
+          const el = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
+          try {
+            el.showPicker?.();
+          } catch {
+            /* not supported here, or not a trusted gesture — the icon still works */
+          }
+        }}
+        aria-label={labels.date}
+        className="min-w-[130px] cursor-pointer rounded-lg bg-transparent px-2 text-center text-sm font-medium tabular-nums text-ink outline-none focus:bg-black/[0.03]"
+        dir="ltr"
+      />
+      <button
+        onClick={() => step(1)}
+        className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]"
+        aria-label={labels.next}
+      >
+        <ChevronRight className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
+      </button>
     </div>
   );
 }

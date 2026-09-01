@@ -7,7 +7,7 @@ import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
-import { formatCountdown, localTime } from "@/lib/time";
+import { formatCountdown, formatDuration, localTime } from "@/lib/time";
 import { setBookingStatus } from "./actions";
 import RescheduleDialog from "./RescheduleDialog";
 import { STATUS_TONE, type BookingReview, type BookingRow, type BookingStatus } from "./BookingsView";
@@ -105,9 +105,121 @@ function ScorePill({ label, value }: { label: string; value: number | null }) {
   );
 }
 
+/**
+ * Everything true about a booking, without any of the buttons.
+ *
+ * Split out of the drawer because the front desk needs exactly this twice over:
+ * once when a card is opened, and once — the more important one — under the
+ * ticket search, where the receptionist has a customer standing in front of her
+ * and needs to say which chair and which technician. That panel used to show
+ * four facts. Two copies of this list would have drifted the first time a field
+ * was added to one of them.
+ *
+ * Every line past the first few is conditional on its own field, which is what
+ * lets /admin/bookings pass a row with no timings and get a shorter list rather
+ * than a list of dashes.
+ *
+ * `now` comes from the caller: both screens already tick a clock for their own
+ * reasons, and a third interval in here would be the same second re-derived.
+ */
+export function BookingFacts({ booking, now }: { booking: BookingRow; now: number }) {
+  const { t, lang } = useAdminI18n();
+  const f = t.frontDesk;
+
+  const startedMs = booking.startedAt ? new Date(booking.startedAt).getTime() : null;
+  // Finished is the settled figure — Start to Finish, not counting however long
+  // the ticket then sat waiting for reception to close it. Still running, it
+  // counts up off `now`, so an overrunning service is visible while there is
+  // still time to do something about it.
+  const tookMs =
+    startedMs !== null && booking.finishedAt
+      ? new Date(booking.finishedAt).getTime() - startedMs
+      : null;
+  const runningMs = startedMs !== null && !booking.finishedAt ? now - startedMs : null;
+  const remainingMs = runningMs === null ? null : new Date(booking.endsAt).getTime() - now;
+
+  const row = (label: string, value: string | null | undefined): [string, string][] =>
+    value ? [[label, value]] : [];
+
+  const rows: [string, string][] = [
+    [t.bookings.code, booking.code],
+    ...row(f.ticket, booking.ticketNo),
+    ...row(t.bookings.refillOf, booking.refillOfCode),
+    [f.booked, `${localTime(booking.startsAt)} – ${localTime(booking.endsAt)}`],
+    [t.bookings.service, pick(booking.serviceName, lang) || "—"],
+    // High up, beside the service rather than buried under the money: on both
+    // screens "who is doing it" is asked about as often as "what is it", and at
+    // the desk it is said out loud along with the chair.
+    [t.frontDesk.technician, booking.technicianName || t.frontDesk.unassignedShort],
+    ...row(t.bookings.station, booking.stationLabel),
+    [
+      t.bookings.addons,
+      booking.addons.length ? booking.addons.map((a) => pick(a, lang)).join("، ") : t.common.none,
+    ],
+    ...row(f.checkedIn, booking.checkedInAt ? localTime(booking.checkedInAt) : null),
+    ...row(f.started, booking.startedAt ? localTime(booking.startedAt) : null),
+    ...row(f.took, tookMs === null ? null : formatDuration(tookMs, lang)),
+    ...row(
+      f.running,
+      runningMs === null
+        ? null
+        : booking.durationMin
+          ? `${formatDuration(runningMs, lang)} · ${f.ofAbout(booking.durationMin)}`
+          : formatDuration(runningMs, lang),
+    ),
+    // Only while it could still be positive — "0 minutes left" on a service that
+    // ran over is a worse answer than not asking.
+    ...row(
+      f.remaining,
+      remainingMs !== null && remainingMs > 0 ? formatDuration(remainingMs, lang) : null,
+    ),
+    [t.bookings.source, t.bookings.sources[booking.source]],
+    // Only once someone has dealt with it — an open flag lives on /admin/no-shows,
+    // not buried in a panel nobody has opened.
+    ...row(t.bookings.noShowNote, booking.noShowNote),
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Badge tone={STATUS_TONE[booking.status]}>{t.bookings.statuses[booking.status]}</Badge>
+        <span className="ms-auto font-display text-xl font-bold tabular-nums text-ink">
+          {booking.totalSar.toLocaleString("en-US")}
+          <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
+        </span>
+      </div>
+
+      {booking.customerPhone ? (
+        <a
+          href={`tel:${booking.customerPhone}`}
+          className="flex items-center gap-2 rounded-xl border border-black/[0.06] bg-white px-4 py-3 text-sm text-ink transition-colors hover:border-sky"
+        >
+          <Phone className="h-4 w-4 text-ink/40" strokeWidth={1.75} />
+          <span dir="ltr">{booking.customerPhone}</span>
+        </a>
+      ) : null}
+
+      <dl className="divide-y divide-black/[0.05] rounded-xl border border-black/[0.06] bg-white px-4">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex items-center justify-between gap-4 py-3">
+            <dt className="text-xs text-ink/50">{label}</dt>
+            <dd className="text-end text-sm font-medium text-ink">{value}</dd>
+          </div>
+        ))}
+      </dl>
+
+      {booking.notes ? (
+        <p className="rounded-xl bg-black/[0.03] px-4 py-3 text-start text-xs text-ink/60">
+          {booking.notes}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export default function BookingDrawer({
   booking,
-  canManage,
+  canSetStatus,
   canReschedule,
   checkinEarlyMin,
   branchId,
@@ -115,8 +227,13 @@ export default function BookingDrawer({
   onChanged,
 }: {
   booking: BookingRow | null;
-  canManage: boolean;
-  /** `bookings.reschedule` — held by everyone except technicians. */
+  /**
+   * `bookings.status` — the owner only. Not the same as being allowed to work
+   * the desk: check-in and closing a ticket have their own buttons on the front
+   * desk and their own capability. These are the corrections to the record.
+   */
+  canSetStatus: boolean;
+  /** `bookings.reschedule` — the owner only, as of 2026-09-01. */
   canReschedule: boolean;
   /** `checkin_early_min`, so the drawer can count down to the unlock. */
   checkinEarlyMin: number;
@@ -164,28 +281,6 @@ export default function BookingDrawer({
         );
     });
 
-  const rows: [string, string][] = [
-    [t.bookings.code, booking.code],
-    ...(booking.refillOfCode
-      ? ([[t.bookings.refillOf, booking.refillOfCode]] as [string, string][])
-      : []),
-    [t.bookings.time, `${localTime(booking.startsAt)} – ${localTime(booking.endsAt)}`],
-    [t.bookings.service, pick(booking.serviceName, lang) || "—"],
-    // High up, beside the service rather than buried under the money: on this
-    // screen "who is doing it" is asked about as often as "what is it".
-    [t.frontDesk.technician, booking.technicianName || t.frontDesk.unassignedShort],
-    [
-      t.bookings.addons,
-      booking.addons.length ? booking.addons.map((a) => pick(a, lang)).join("، ") : t.common.none,
-    ],
-    [t.bookings.source, t.bookings.sources[booking.source]],
-    // Only once someone has dealt with it — an open flag lives in the strip on
-    // the bookings screen, not buried in a drawer nobody has opened.
-    ...(booking.noShowNote
-      ? ([[t.bookings.noShowNote, booking.noShowNote]] as [string, string][])
-      : []),
-  ];
-
   return (
     <Drawer
       open
@@ -198,38 +293,7 @@ export default function BookingDrawer({
       }
     >
       <div className="space-y-5">
-        <div className="flex items-center gap-2">
-          <Badge tone={STATUS_TONE[booking.status]}>{t.bookings.statuses[booking.status]}</Badge>
-          <span className="ms-auto font-display text-xl font-bold tabular-nums text-ink">
-            {booking.totalSar.toLocaleString("en-US")}
-            <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
-          </span>
-        </div>
-
-        {booking.customerPhone ? (
-          <a
-            href={`tel:${booking.customerPhone}`}
-            className="flex items-center gap-2 rounded-xl border border-black/[0.06] bg-white px-4 py-3 text-sm text-ink transition-colors hover:border-sky"
-          >
-            <Phone className="h-4 w-4 text-ink/40" strokeWidth={1.75} />
-            <span dir="ltr">{booking.customerPhone}</span>
-          </a>
-        ) : null}
-
-        <dl className="divide-y divide-black/[0.05] rounded-xl border border-black/[0.06] bg-white px-4">
-          {rows.map(([label, value]) => (
-            <div key={label} className="flex items-center justify-between gap-4 py-3">
-              <dt className="text-xs text-ink/50">{label}</dt>
-              <dd className="text-end text-sm font-medium text-ink">{value}</dd>
-            </div>
-          ))}
-        </dl>
-
-        {booking.notes ? (
-          <p className="rounded-xl bg-black/[0.03] px-4 py-3 text-start text-xs text-ink/60">
-            {booking.notes}
-          </p>
-        ) : null}
+        <BookingFacts booking={booking} now={now} />
 
         {/* Only once the ticket is ended. Before that there is nothing to show
             and nothing to chase — the invitation is sent by setBookingStatus at
@@ -238,7 +302,7 @@ export default function BookingDrawer({
           <ReviewPanel review={booking.review ?? null} />
         ) : null}
 
-        {canManage && NEXT[booking.status].length > 0 ? (
+        {canSetStatus && NEXT[booking.status].length > 0 ? (
           <div>
             <p className="mb-2 text-start text-xs font-medium text-ink/60">{t.bookings.changeStatus}</p>
             <div className="flex flex-wrap gap-2">

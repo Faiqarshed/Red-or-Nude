@@ -4,7 +4,16 @@ import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, List, Plus } from "lucide-react";
-import { Badge, Button, Card, EmptyState, PageHeader, Thumb, scoreTone } from "@/components/admin/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  DateStepper,
+  EmptyState,
+  PageHeader,
+  Thumb,
+  scoreTone,
+} from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
 import { UTC_OFFSET_HOURS, localTime, riyadhDateKey } from "@/lib/time";
@@ -60,6 +69,21 @@ export type BookingRow = {
    * hasn't reached a future booking yet, and a walk-in is picked at check-in.
    */
   technicianName?: string | null;
+  /**
+   * What the front desk knows and this screen does not.
+   *
+   * All optional, and all absent here: /admin/bookings loads a day to be read,
+   * while the desk loads today to be worked. `BookingFacts` renders each line
+   * only when its field is there, so one detail panel serves both without this
+   * page growing three columns it has no use for.
+   */
+  ticketNo?: string | null;
+  stationLabel?: string | null;
+  /** What the service is meant to take, for a running timer to sit against. */
+  durationMin?: number | null;
+  checkedInAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 };
 
 /**
@@ -108,12 +132,6 @@ function riyadhParts(iso: string): { date: string; time: string } {
 function minutesFromDayStart(iso: string): number {
   const [h, m] = localTime(iso).split(":").map(Number);
   return (h - DAY_START_HOUR) * 60 + m;
-}
-
-function shiftDate(date: string, days: number): string {
-  const d = new Date(`${date}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
 }
 
 /**
@@ -236,6 +254,7 @@ export default function BookingsView({
   noShowCount,
   catalog,
   canManage,
+  canSetStatus,
   canReschedule,
   checkinEarlyMin,
 }: {
@@ -248,7 +267,10 @@ export default function BookingsView({
   /** Unresolved no-show flags for this role's branches, on any date. */
   noShowCount: number;
   catalog: { services: CatalogOption[]; addons: CatalogOption[]; removals: CatalogOption[] };
+  /** Walk-ins and the no-show backlog — everyone but a technician. */
   canManage: boolean;
+  /** `bookings.status`: rewriting a booking by hand. The owner only. */
+  canSetStatus: boolean;
   /** `bookings.reschedule`. Separate from canManage — a technician has neither,
    *  but the two came apart so admin could hold one without the other. */
   canReschedule: boolean;
@@ -365,48 +387,14 @@ export default function BookingsView({
       ) : null}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1 rounded-xl border border-black/[0.06] bg-white p-1">
-          <button
-            onClick={() => go({ date: shiftDate(date, -1) })}
-            className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]"
-            aria-label={t.bookings.prevDay}
-          >
-            <ChevronLeft className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
-          </button>
-          {/* A real date input, not the plain text this used to be. The arrows
-              are fine for "yesterday" and useless for "the 14th of next month",
-              which is most of what the desk is asked on the phone. Native, so
-              it opens the platform's own calendar and keeps the keyboard path
-              for anyone who would rather type.
-
-              `showPicker()` on click because browsers only open the calendar
-              from the small icon otherwise, and the whole control looks
-              clickable. It is guarded: Firefox has no such method, and Safari
-              throws if the call isn't from a user gesture. */}
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => e.target.value && go({ date: e.target.value })}
-            onClick={(e) => {
-              const el = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
-              try {
-                el.showPicker?.();
-              } catch {
-                /* not supported here, or not a trusted gesture — the icon still works */
-              }
-            }}
-            aria-label={t.bookings.date}
-            className="min-w-[130px] cursor-pointer rounded-lg bg-transparent px-2 text-center text-sm font-medium tabular-nums text-ink outline-none focus:bg-black/[0.03]"
-            dir="ltr"
-          />
-          <button
-            onClick={() => go({ date: shiftDate(date, 1) })}
-            className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]"
-            aria-label={t.bookings.nextDay}
-          >
-            <ChevronRight className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
-          </button>
-        </div>
+        {/* Shared with /admin/technicians, which asks the same question of a
+            different screen. The stepper owns the arrows, the native picker and
+            the day arithmetic; this page still owns where the date goes. */}
+        <DateStepper
+          date={date}
+          onChange={(next) => go({ date: next })}
+          labels={{ prev: t.bookings.prevDay, next: t.bookings.nextDay, date: t.bookings.date }}
+        />
 
         {/* The way back. Jumping a month ahead is now one click, so returning
             should not be thirty — and hidden while it would do nothing. */}
@@ -612,7 +600,7 @@ export default function BookingsView({
 
       <BookingDrawer
         booking={selected}
-        canManage={canManage}
+        canSetStatus={canSetStatus}
         canReschedule={canReschedule}
         checkinEarlyMin={checkinEarlyMin}
         branchId={branchId}

@@ -46,7 +46,7 @@ export default async function BookingsPage({
     : utcToLocalDate(riyadhDayRange().start);
 
   if (!branchId) {
-    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} catalog={{ services: [], addons: [], removals: [] }} canManage={false} canReschedule={false} checkinEarlyMin={0} branchId="" />;
+    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} catalog={{ services: [], addons: [], removals: [] }} canManage={false} canSetStatus={false} canReschedule={false} checkinEarlyMin={0} branchId="" />;
   }
 
   // Release chairs nobody checked in to, before reading the day back — otherwise
@@ -165,6 +165,9 @@ export default async function BookingsPage({
       branches={pinned ? [] : branchRows.map((b) => ({ id: b.id, name: b.name }))}
       stations={stationRows.map((s) => ({ id: s.id, label: s.label }))}
       canManage={user.role !== "technician"}
+      // Rewriting a status by hand is the owner's, and so is moving a booking.
+      // Both read the matrix rather than a role list, so they only move once.
+      canSetStatus={can(user.role, "bookings.status")}
       // Read from the matrix rather than another role list: this is the one
       // capability the salon has moved, and it should only have to move once.
       canReschedule={can(user.role, "bookings.reschedule")}

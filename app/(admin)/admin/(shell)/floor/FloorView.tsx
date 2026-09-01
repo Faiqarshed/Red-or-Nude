@@ -10,6 +10,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { ChevronDown } from "lucide-react";
 import { Badge, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
@@ -20,6 +21,7 @@ import type { FloorData } from "./data";
 import { bringBack, sendHome } from "./actions";
 import { assignTechnician } from "../front-desk/actions";
 import { TechSelect } from "../front-desk/FrontDeskView";
+import TechnicianDay, { DayCounts, useDayClock, useToggleSet } from "../technicians/TechnicianDay";
 
 export default function FloorView({ data }: { data: FloorData }) {
   const { t, lang } = useAdminI18n();
@@ -27,6 +29,8 @@ export default function FloorView({ data }: { data: FloorData }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [open, toggle] = useToggleSet();
+  const now = useDayClock();
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) =>
     startTransition(async () => {
@@ -63,17 +67,30 @@ export default function FloorView({ data }: { data: FloorData }) {
             return (
               <Card key={tech.id} className={cn("overflow-hidden", tech.off && "bg-black/[0.02]")}>
                 <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                  <div className="flex items-center gap-3">
+                  {/* The count was the only thing this card said about a
+                      technician who is here, so "what is she actually doing"
+                      needed a different screen. It unfolds now. */}
+                  <button
+                    type="button"
+                    onClick={() => toggle(tech.id)}
+                    aria-expanded={open.has(tech.id)}
+                    className="flex min-w-0 flex-1 flex-wrap items-center gap-3 text-start"
+                  >
+                    <ChevronDown
+                      className={cn(
+                        "h-4 w-4 shrink-0 text-ink/35 transition-transform",
+                        open.has(tech.id) && "rotate-180",
+                      )}
+                      strokeWidth={2}
+                    />
                     <span className="font-display text-base font-bold text-ink">{tech.name}</span>
                     {tech.off ? (
                       <Badge tone="danger">{f.off}</Badge>
                     ) : (
                       <Badge tone="success">{f.here}</Badge>
                     )}
-                    <span className="text-xs text-ink/50">
-                      {f.bookingCount.replace("{n}", String(tech.bookings.length))}
-                    </span>
-                  </div>
+                    <DayCounts rows={tech.bookings} />
+                  </button>
 
                   {tech.off ? (
                     <Button
@@ -96,8 +113,12 @@ export default function FloorView({ data }: { data: FloorData }) {
                   )}
                 </div>
 
+                {open.has(tech.id) ? <TechnicianDay rows={tech.bookings} now={now} /> : null}
+
                 {/* Her customers, and where they go. Listed only once she is out:
-                    a technician who is here needs no reassignment prompts. */}
+                    a technician who is here needs no reassignment prompts. And
+                    never behind the toggle above — this is the thing the desk
+                    has to act on, not a detail it went looking for. */}
                 {tech.off && toMove.length > 0 && (
                   <div className="border-t border-black/[0.06] bg-white">
                     <p className="px-4 pt-3 text-xs font-semibold text-red">{f.needsMoving}</p>

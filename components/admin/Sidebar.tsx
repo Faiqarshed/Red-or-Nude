@@ -24,6 +24,7 @@ import {
   UserCog,
   UserX,
   Users,
+  UsersRound,
   type LucideIcon,
 } from "lucide-react";
 import { useAdminI18n } from "@/lib/admin/i18n";
@@ -52,6 +53,7 @@ const ICONS: Record<string, LucideIcon> = {
   Timer,
   UserCog,
   UserX,
+  UsersRound,
 };
 
 export default function Sidebar({
