@@ -47,7 +47,7 @@ export default function NoShowsView({
   resolvedCount: number;
   page: number;
   perPage: number;
-  /** `bookings.reschedule` — the owner only. Without it the flag is still
+  /** `bookings.reschedule` — not admin. Without it the flag is still
    *  resolvable, just not by moving the appointment. */
   canReschedule: boolean;
   /** Null = every branch. Only the CEO ever sees anything but their own. */

@@ -591,9 +591,10 @@ export default function FrontDeskView({
       </Card>
 
       {/* The bookings screen's own drawer, not a second one written here. Both
-          flags come down from the page and both are false at the desk as of
-          2026-09-01, so it reads the whole booking and rewrites none of it —
-          check-in and closing a ticket are its own buttons, above. */}
+          flags come down from the page: the desk holds bookings.reschedule, so
+          it gets the picker and can move an appointment a customer is ringing
+          about, but not the status buttons — overwriting the record is the
+          owner's. Check-in and closing a ticket are its own buttons, above. */}
       <BookingDrawer
         booking={open}
         canSetStatus={canSetStatus}

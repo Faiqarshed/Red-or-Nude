@@ -233,7 +233,7 @@ export default function BookingDrawer({
    * desk and their own capability. These are the corrections to the record.
    */
   canSetStatus: boolean;
-  /** `bookings.reschedule` — the owner only, as of 2026-09-01. */
+  /** `bookings.reschedule` — the owner and the desk, never admin. */
   canReschedule: boolean;
   /** `checkin_early_min`, so the drawer can count down to the unlock. */
   checkinEarlyMin: number;

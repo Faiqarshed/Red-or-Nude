@@ -75,10 +75,12 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     // No bookings.reschedule and no bookings.status. Brief §3.3 says "Admin
     // cannot change a booking's timing"; it was granted anyway on 2026-08-28
     // so an admin covering the desk could move an appointment a customer was
-    // ringing about, and taken back on 2026-09-01 at the salon's request —
-    // moving or rewriting a booking is the owner's call and nobody else's.
-    // check-roles.ts asserts this, and was failing for the whole period the
+    // ringing about, and taken back on 2026-09-01 at the salon's request.
+    // check-roles.ts asserts it, and was failing for the whole period the
     // override was in place.
+    //
+    // An admin covering the desk is now covered by the desk's own login, not
+    // by widening this one — the receptionist keeps bookings.reschedule.
     "bookings.own",
     "availability.manage",
     // Brief §3.3: "manage the services listed on the booking site (add, edit,
@@ -104,9 +106,11 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "bookings.view",
     "bookings.manage",
     "bookings.checkin",
-    // No bookings.reschedule: moving an appointment is the owner's call as of
-    // 2026-09-01. The desk still checks people in and closes tickets — that is
-    // bookings.checkin above, and it never went through this.
+    // The desk is who actually moves an appointment when a customer rings up,
+    // and the brief only ever forbade this to admin. Briefly taken away on
+    // 2026-09-01 alongside admin's and given straight back: the alternative at
+    // the counter is cancel-and-rebook, which loses the ticket number.
+    "bookings.reschedule",
     "bookings.own",
     "customers.manage",
     "giftcards.issue",
