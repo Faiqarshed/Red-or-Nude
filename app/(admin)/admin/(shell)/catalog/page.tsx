@@ -1,6 +1,6 @@
 import { asc } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { addons, removalTypes, services } from "@/lib/db/schema";
+import { addons, designs, removalTypes, services } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
 import { halalasToSar } from "@/lib/money";
 import { mediaUrl } from "@/lib/storage";
@@ -11,10 +11,12 @@ export const dynamic = "force-dynamic";
 export default async function CatalogPage() {
   await requirePage("catalog.manage");
 
-  const [serviceRows, addonRows, removalRows] = await Promise.all([
+  const [serviceRows, addonRows, removalRows, designRows] = await Promise.all([
     db.select().from(services).orderBy(asc(services.sort)),
     db.select().from(addons).orderBy(asc(addons.sort)),
     db.select().from(removalTypes).orderBy(asc(removalTypes.sort)),
+    // Every one of these is a tile in the seasonal pop-up, active or not.
+    db.select().from(designs).orderBy(asc(designs.sort)),
   ]);
 
   return (
@@ -42,6 +44,21 @@ export default async function CatalogPage() {
           image: r.image,
           imageUrl: mediaUrl(r.image),
           isSeasonal: r.isSeasonal,
+          active: r.active,
+          sort: r.sort,
+        }),
+      )}
+      designs={designRows.map(
+        (r): CatalogRow => ({
+          id: r.id,
+          name: r.name,
+          // A design is a picture with a name. No price, no duration — the
+          // zeroes are what the shared row shape wants, and the Designs tab
+          // renders neither.
+          priceSar: 0,
+          durationMin: 0,
+          image: r.image,
+          imageUrl: mediaUrl(r.image),
           active: r.active,
           sort: r.sort,
         }),

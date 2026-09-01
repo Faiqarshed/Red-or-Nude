@@ -621,3 +621,48 @@ export function DateStepper({
     </div>
   );
 }
+
+/**
+ * Narrow a screen to one branch, or widen it to all of them.
+ *
+ * Rendered only where there is a real choice: `options` comes back empty from
+ * branchScope() for anyone pinned to a single branch, and an empty list renders
+ * nothing rather than a control that cannot change the answer.
+ *
+ * The branch lives in the URL like the date does, so a screen can be sent to
+ * someone and arrive showing what the sender was looking at.
+ */
+export function BranchFilter({
+  branchId,
+  options,
+  allLabel,
+  lang,
+  allowAll = true,
+  onChange,
+}: {
+  branchId: string | null;
+  options: { id: string; name: { ar: string; en: string } }[];
+  allLabel: string;
+  lang: "ar" | "en";
+  /** False on the desk and the floor: those are one place, never all of them. */
+  allowAll?: boolean;
+  onChange: (branchId: string | null) => void;
+}) {
+  if (options.length < 2) return null;
+
+  return (
+    <select
+      value={branchId ?? ""}
+      onChange={(e) => onChange(e.target.value || null)}
+      aria-label={allLabel}
+      className="h-10 rounded-xl border border-black/[0.06] bg-white px-3 text-sm text-ink outline-none"
+    >
+      {allowAll ? <option value="">{allLabel}</option> : null}
+      {options.map((b) => (
+        <option key={b.id} value={b.id}>
+          {b.name[lang] || b.name.en}
+        </option>
+      ))}
+    </select>
+  );
+}

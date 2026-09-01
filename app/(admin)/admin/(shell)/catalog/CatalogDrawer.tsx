@@ -96,12 +96,16 @@ export default function CatalogDrawer({
       ? t.catalog.editService
       : kind === "addon"
         ? t.catalog.editAddon
-        : t.catalog.editRemoval
+        : kind === "removal"
+          ? t.catalog.editRemoval
+          : t.catalog.editDesign
     : kind === "service"
       ? t.catalog.newService
       : kind === "addon"
         ? t.catalog.newAddon
-        : t.catalog.newRemoval;
+        : kind === "removal"
+          ? t.catalog.newRemoval
+          : t.catalog.newDesign;
 
   const save = () =>
     startTransition(async () => {
@@ -114,8 +118,8 @@ export default function CatalogDrawer({
           kind === "service"
             ? { ar: form.descAr.trim(), en: form.descEn.trim() }
             : undefined,
-        priceSar: form.priceSar,
-        durationMin: form.durationMin,
+        priceSar: kind === "design" ? undefined : form.priceSar,
+        durationMin: kind === "design" ? undefined : form.durationMin,
         refillDays: kind === "service" ? form.refillDays : undefined,
         image: kind === "removal" ? null : form.image,
         isSeasonal: kind === "addon" ? form.isSeasonal : undefined,
@@ -205,6 +209,7 @@ export default function CatalogDrawer({
           </div>
         ) : null}
 
+        {kind === "design" ? null : (
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label={`${t.catalog.price} (${t.common.riyal})`}>
             <Input
@@ -229,6 +234,7 @@ export default function CatalogDrawer({
             />
           </Field>
         </div>
+        )}
 
         {/* Services only: this is what makes the refill button appear in the
             customer's booking history, and for how long.

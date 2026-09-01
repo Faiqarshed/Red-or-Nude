@@ -11,19 +11,29 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown } from "lucide-react";
-import { Badge, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import { Badge, BranchFilter, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { localTime } from "@/lib/time";
 import { busyDuring } from "@/lib/slots";
 import { cn } from "@/lib/cn";
+import type { Localized } from "@/lib/db/schema";
 import type { FloorData } from "./data";
 import { bringBack, sendHome } from "./actions";
 import { assignTechnician } from "../front-desk/actions";
 import { TechSelect } from "../front-desk/FrontDeskView";
 import TechnicianDay, { DayCounts, useDayClock, useToggleSet } from "../technicians/TechnicianDay";
 
-export default function FloorView({ data }: { data: FloorData }) {
+export default function FloorView({
+  data,
+  branchId,
+  branchOptions,
+}: {
+  data: FloorData;
+  branchId: string;
+  /** Empty for anyone pinned. A floor is one place, so there is no "all". */
+  branchOptions: { id: string; name: Localized }[];
+}) {
   const { t, lang } = useAdminI18n();
   const f = t.floor;
   const router = useRouter();
@@ -47,6 +57,16 @@ export default function FloorView({ data }: { data: FloorData }) {
       <PageHeader
         title={f.title}
         subtitle={f.subtitle.replace("{n}", String(working))}
+        action={
+          <BranchFilter
+            branchId={branchId}
+            options={branchOptions}
+            allLabel={t.topbar.allBranches}
+            lang={lang}
+            allowAll={false}
+            onChange={(id) => router.push(id ? `/admin/floor?branch=${id}` : "/admin/floor")}
+          />
+        }
       />
 
       {error && (
@@ -63,6 +83,17 @@ export default function FloorView({ data }: { data: FloorData }) {
             // What still needs a home. A customer already in the chair is not
             // a booking to hand around — that work is happening, or it is done.
             const toMove = tech.bookings.filter((b) => b.status === "confirmed");
+
+            // And what does not, which the screen never said. Sending someone
+            // home with four bookings moves one and leaves three, and until now
+            // the other three just sat there under the name of somebody who has
+            // left the building with nothing to explain why. A finished service
+            // records who performed it — /admin/performance reads its timings
+            // off exactly these rows — and a customer mid-service is in her
+            // chair right now. Neither can be handed to anyone else.
+            const staying = tech.bookings.filter(
+              (b) => !["confirmed", "cancelled", "no_show"].includes(b.status),
+            );
 
             return (
               <Card key={tech.id} className={cn("overflow-hidden", tech.off && "bg-black/[0.02]")}>
@@ -165,6 +196,12 @@ export default function FloorView({ data }: { data: FloorData }) {
                 {tech.off && toMove.length === 0 && tech.bookings.length > 0 && (
                   <p className="border-t border-black/[0.06] px-4 py-3 text-xs text-ink/50">
                     {f.nothingToMove}
+                  </p>
+                )}
+
+                {tech.off && staying.length > 0 && (
+                  <p className="border-t border-black/[0.06] px-4 py-3 text-xs text-ink/50">
+                    {f.staysWithHer(staying.length)}
                   </p>
                 )}
               </Card>

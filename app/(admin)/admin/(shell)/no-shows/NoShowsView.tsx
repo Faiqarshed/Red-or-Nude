@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { ChevronLeft, ChevronRight, UserX } from "lucide-react";
-import { Badge, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import { Badge, BranchFilter, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
 import { Dialog } from "@/components/admin/overlays";
 import RescheduleDialog from "../bookings/RescheduleDialog";
 import { useAdminI18n } from "@/lib/admin/i18n";
@@ -38,6 +38,8 @@ export default function NoShowsView({
   page,
   perPage,
   canReschedule,
+  branchId,
+  branchOptions,
 }: {
   rows: NoShowRow[];
   tab: NoShowTab;
@@ -48,6 +50,9 @@ export default function NoShowsView({
   /** `bookings.reschedule` — the owner only. Without it the flag is still
    *  resolvable, just not by moving the appointment. */
   canReschedule: boolean;
+  /** Null = every branch. Only the CEO ever sees anything but their own. */
+  branchId: string | null;
+  branchOptions: { id: string; name: Localized }[];
 }) {
   const { t, lang } = useAdminI18n();
   const b = t.bookings;
@@ -95,11 +100,26 @@ export default function NoShowsView({
         title={b.noShowTitle}
         subtitle={b.noShowSubtitle}
         action={
-          openCount > 0 ? (
+          <div className="flex items-center gap-2">
+            <BranchFilter
+              branchId={branchId}
+              options={branchOptions}
+              allLabel={t.topbar.allBranches}
+              lang={lang}
+              onChange={(id) => {
+                const q = new URLSearchParams(window.location.search);
+                if (id) q.set("branch", id);
+                else q.delete("branch");
+                q.delete("page");
+                router.push(`/admin/no-shows?${q.toString()}`);
+              }}
+            />
+            {openCount > 0 ? (
             <span className="rounded-xl bg-[#b7791f]/14 px-3 py-1.5 text-xs font-semibold tabular-nums text-[#8a5a06]">
               {b.noShowPending(openCount)}
-            </span>
-          ) : null
+              </span>
+            ) : null}
+          </div>
         }
       />
 
@@ -112,7 +132,7 @@ export default function NoShowsView({
           {(["open", "resolved"] as const).map((k) => (
             <Link
               key={k}
-              href={k === "open" ? "/admin/no-shows" : "/admin/no-shows?tab=resolved"}
+              href={noShowHref(k, branchId)}
               className={cn(
                 "flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
                 tab === k ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]",
@@ -218,13 +238,13 @@ export default function NoShowsView({
               {b.pageOf((page - 1) * perPage + 1, Math.min(page * perPage, total), total)}
             </p>
             <div className="flex items-center gap-1">
-              <Pager tab={tab} to={page - 1} disabled={page <= 1} label={b.prevPage}>
+              <Pager tab={tab} branchId={branchId} to={page - 1} disabled={page <= 1} label={b.prevPage}>
                 <ChevronLeft className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
               </Pager>
               <span className="px-1 text-xs tabular-nums text-ink/60">
                 {page} / {pageCount}
               </span>
-              <Pager tab={tab} to={page + 1} disabled={page >= pageCount} label={b.nextPage}>
+              <Pager tab={tab} branchId={branchId} to={page + 1} disabled={page >= pageCount} label={b.nextPage}>
                 <ChevronRight className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
               </Pager>
             </div>
@@ -321,16 +341,28 @@ export default function NoShowsView({
  * The page number lives in the URL because the query does — so a receptionist
  * can send "page 3" to a colleague, and coming back from a booking she opened
  * lands her where she was rather than at the top. The tab travels with it, or
- * paging on Resolved would drop her back onto Open.
+ * paging on Resolved would drop her back onto Open — and so does the branch,
+ * or the CEO would page out of the branch she had narrowed to.
  */
+function noShowHref(tab: NoShowTab, branchId: string | null, page?: number): string {
+  const q = new URLSearchParams();
+  if (tab === "resolved") q.set("tab", "resolved");
+  if (branchId) q.set("branch", branchId);
+  if (page && page > 1) q.set("page", String(page));
+  const s = q.toString();
+  return s ? `/admin/no-shows?${s}` : "/admin/no-shows";
+}
+
 function Pager({
   tab,
+  branchId,
   to,
   disabled,
   label,
   children,
 }: {
   tab: NoShowTab;
+  branchId: string | null;
   to: number;
   disabled: boolean;
   label: string;
@@ -346,11 +378,11 @@ function Pager({
     );
   }
 
-  const query = tab === "resolved" ? `?tab=resolved&page=${to}` : `?page=${to}`;
+  const query = noShowHref(tab, branchId, to);
 
   return (
     <Link
-      href={`/admin/no-shows${query}`}
+      href={query}
       aria-label={label}
       className={cn(base, "text-ink/50 hover:bg-black/[0.04]")}
     >

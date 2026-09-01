@@ -11,23 +11,30 @@ import { revalidatePath } from "next/cache";
 import { asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { addons, removalTypes, services } from "@/lib/db/schema";
+import { addons, designs, removalTypes, services } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
 
-export type CatalogKind = "service" | "addon" | "removal";
+// `design` is one image in the seasonal pop-up. It joined this set rather than
+// getting a screen of its own because it is the same four operations over the
+// same four columns — name, picture, order, active — and the only thing that
+// made it special was having no price. Before this there was no way to add a
+// seasonal design at all: the pop-up read whatever the seeder had put there.
+export type CatalogKind = "service" | "addon" | "removal" | "design";
 
 const TABLES = {
   service: services,
   addon: addons,
   removal: removalTypes,
+  design: designs,
 } as const;
 
 const ENTITY: Record<CatalogKind, string> = {
   service: "services",
   addon: "addons",
   removal: "removal_types",
+  design: "designs",
 };
 
 const localizedText = z.object({
@@ -36,15 +43,16 @@ const localizedText = z.object({
 });
 
 const itemSchema = z.object({
-  kind: z.enum(["service", "addon", "removal"]),
+  kind: z.enum(["service", "addon", "removal", "design"]),
   id: z.string().uuid().optional(),
   name: localizedText,
   description: z
     .object({ ar: z.string().trim().max(400), en: z.string().trim().max(400) })
     .optional(),
-  // Entered in riyals; stored in halalas.
-  priceSar: z.coerce.number().min(0).max(100_000),
-  durationMin: z.coerce.number().int().min(0).max(600),
+  // Entered in riyals; stored in halalas. Optional because a design has
+  // neither — it is a picture in a pop-up, not something anyone buys.
+  priceSar: z.coerce.number().min(0).max(100_000).optional(),
+  durationMin: z.coerce.number().int().min(0).max(600).optional(),
   // Services only. Zero is how the form's "has a refill" tick stores "no" —
   // one number rather than a boolean and a length that could contradict it.
   refillDays: z.coerce.number().int().min(0).max(365).optional(),
@@ -77,15 +85,23 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
   // everywhere, so build the payload per kind rather than casting it away.
   const common = {
     name: data.name,
-    priceHalalas: sarToHalalas(data.priceSar),
-    durationMin: data.durationMin,
+    priceHalalas: sarToHalalas(data.priceSar ?? 0),
+    durationMin: data.durationMin ?? 0,
     active: data.active,
     sort: data.sort,
     updatedAt: new Date(),
   };
 
   const values =
-    data.kind === "service"
+    data.kind === "design"
+      ? {
+          name: data.name,
+          image: data.image ?? null,
+          active: data.active,
+          sort: data.sort,
+          updatedAt: new Date(),
+        }
+      : data.kind === "service"
       ? {
           ...common,
           description: data.description ?? null,

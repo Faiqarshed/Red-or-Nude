@@ -8,7 +8,7 @@
 // worse than no average at all.
 
 import { requirePage } from "@/lib/auth/guard";
-import { scopedBranchId } from "@/lib/auth/rbac";
+import { branchScope } from "@/lib/admin/branch-scope";
 import { isPeriodKey, loadTechnicianStats } from "@/lib/performance";
 import PerformanceView from "./PerformanceView";
 
@@ -17,15 +17,20 @@ export const dynamic = "force-dynamic";
 export default async function PerformancePage({
   searchParams,
 }: {
-  searchParams: { period?: string };
+  searchParams: { period?: string; branch?: string };
 }) {
   const user = await requirePage("staff.performance");
   const period = isPeriodKey(searchParams.period) ? searchParams.period : "7";
 
-  const stats = await loadTechnicianStats({
-    period,
-    branchId: scopedBranchId(user.role, user.branchId),
-  });
+  const { branchId, options } = await branchScope(user, searchParams.branch);
+  const stats = await loadTechnicianStats({ period, branchId });
 
-  return <PerformanceView stats={stats} period={period} />;
+  return (
+    <PerformanceView
+      stats={stats}
+      period={period}
+      branchId={branchId}
+      branchOptions={options}
+    />
+  );
 }

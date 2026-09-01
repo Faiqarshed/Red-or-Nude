@@ -25,20 +25,27 @@ export type CatalogRow = {
   sort: number;
 };
 
-const TABS: { kind: CatalogKind; labelKey: "tabServices" | "tabAddons" | "tabRemovals" }[] = [
+const TABS: {
+  kind: CatalogKind;
+  labelKey: "tabServices" | "tabAddons" | "tabRemovals" | "tabDesigns";
+}[] = [
   { kind: "service", labelKey: "tabServices" },
   { kind: "addon", labelKey: "tabAddons" },
   { kind: "removal", labelKey: "tabRemovals" },
+  { kind: "design", labelKey: "tabDesigns" },
 ];
 
 export default function CatalogView({
   services,
   addons,
   removals,
+  designs,
 }: {
   services: CatalogRow[];
   addons: CatalogRow[];
   removals: CatalogRow[];
+  /** The seasonal pop-up, one row per picture. */
+  designs: CatalogRow[];
 }) {
   const { t, lang } = useAdminI18n();
   const router = useRouter();
@@ -47,10 +54,23 @@ export default function CatalogView({
   const [creating, setCreating] = useState(false);
   const [, startTransition] = useTransition();
 
-  const rows = tab === "service" ? services : tab === "addon" ? addons : removals;
+  const rows =
+    tab === "service"
+      ? services
+      : tab === "addon"
+        ? addons
+        : tab === "removal"
+          ? removals
+          : designs;
 
   const newLabel =
-    tab === "service" ? t.catalog.newService : tab === "addon" ? t.catalog.newAddon : t.catalog.newRemoval;
+    tab === "service"
+      ? t.catalog.newService
+      : tab === "addon"
+        ? t.catalog.newAddon
+        : tab === "removal"
+          ? t.catalog.newRemoval
+          : t.catalog.newDesign;
 
   const run = (fn: () => Promise<unknown>) =>
     startTransition(async () => {
@@ -85,6 +105,12 @@ export default function CatalogView({
           </button>
         ))}
       </div>
+
+      {/* The one tab whose rows are not something a customer buys, so it says
+          where they actually turn up. */}
+      {tab === "design" ? (
+        <p className="mb-4 text-start text-xs text-ink/55">{t.catalog.designsHint}</p>
+      ) : null}
 
       <Card className="overflow-hidden">
         {rows.length === 0 ? (
@@ -122,15 +148,19 @@ export default function CatalogView({
                       <Badge tone="warning">{t.catalog.missingAr}</Badge>
                     )}
                   </span>
-                  <span className="mt-0.5 block text-xs text-ink/45">
-                    {row.durationMin} {t.catalog.minutes}
-                  </span>
+                  {tab === "design" ? null : (
+                    <span className="mt-0.5 block text-xs text-ink/45">
+                      {row.durationMin} {t.catalog.minutes}
+                    </span>
+                  )}
                 </button>
 
-                <span className="shrink-0 text-sm font-semibold tabular-nums text-ink">
-                  {row.priceSar.toLocaleString("en-US")}
-                  <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
-                </span>
+                {tab === "design" ? null : (
+                  <span className="shrink-0 text-sm font-semibold tabular-nums text-ink">
+                    {row.priceSar.toLocaleString("en-US")}
+                    <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
+                  </span>
+                )}
 
                 <div className="flex shrink-0 items-center gap-0.5">
                   <button

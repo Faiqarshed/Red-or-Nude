@@ -1,20 +1,38 @@
 "use client";
 
 import Link from "next/link";
-import { Card, EmptyState, PageHeader, Badge } from "@/components/admin/ui";
+import { useRouter } from "next/navigation";
+import { Card, EmptyState, PageHeader, Badge, BranchFilter } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
+import type { Localized } from "@/lib/db/schema";
 import type { PeriodKey, TechnicianStats } from "@/lib/performance";
 
 export default function PerformanceView({
   stats,
   period,
+  branchId,
+  branchOptions,
 }: {
   stats: TechnicianStats[];
   period: PeriodKey;
+  /** Null = every branch. Only the CEO is ever offered the choice. */
+  branchId: string | null;
+  branchOptions: { id: string; name: Localized }[];
 }) {
-  const { t } = useAdminI18n();
+  const { t, lang } = useAdminI18n();
+  const router = useRouter();
   const p = t.performance;
+
+  // The period is already in the URL, so the branch joins it there rather than
+  // in state — the two have to travel together or switching one loses the other.
+  const href = (next: { period?: PeriodKey; branch?: string | null }) => {
+    const q = new URLSearchParams();
+    q.set("period", next.period ?? period);
+    const b = next.branch === undefined ? branchId : next.branch;
+    if (b) q.set("branch", b);
+    return `/admin/performance?${q.toString()}`;
+  };
 
   const tabs: [PeriodKey, string][] = [
     ["today", p.periodToday],
@@ -28,11 +46,19 @@ export default function PerformanceView({
         title={p.title}
         subtitle={p.subtitle}
         action={
+          <div className="flex flex-wrap items-center gap-2">
+          <BranchFilter
+            branchId={branchId}
+            options={branchOptions}
+            allLabel={t.topbar.allBranches}
+            lang={lang}
+            onChange={(id) => router.push(href({ branch: id }))}
+          />
           <div className="flex gap-1 rounded-xl bg-black/[0.04] p-1">
             {tabs.map(([key, label]) => (
               <Link
                 key={key}
-                href={`/admin/performance?period=${key}`}
+                href={href({ period: key })}
                 className={cn(
                   "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
                   period === key ? "bg-white text-ink shadow-sm" : "text-ink/55 hover:text-ink",
@@ -41,6 +67,7 @@ export default function PerformanceView({
                 {label}
               </Link>
             ))}
+          </div>
           </div>
         }
       />

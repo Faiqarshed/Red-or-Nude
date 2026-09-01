@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown } from "lucide-react";
-import { Card, EmptyState, PageHeader, Badge, Button, Thumb } from "@/components/admin/ui";
+import { Card, EmptyState, PageHeader, Badge, BranchFilter, Button, Thumb } from "@/components/admin/ui";
 import { STATUS_TONE } from "../bookings/BookingsView";
 import BookingDrawer, { BookingFacts } from "../bookings/BookingDrawer";
 import { useAdminI18n } from "@/lib/admin/i18n";
@@ -17,6 +17,7 @@ import { pick } from "@/lib/localized";
 import { formatCountdown, formatDuration, localTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import { busyDuring } from "@/lib/slots";
+import type { Localized } from "@/lib/db/schema";
 import type { FrontDeskData, FrontDeskRow, TechnicianOption } from "./data";
 import {
   assignTechnician,
@@ -97,11 +98,14 @@ function techLockReason(r: FrontDeskRow): "done" | "no-show" | null {
 export default function FrontDeskView({
   data,
   branchId,
+  branchOptions = [],
   canSetStatus,
   canReschedule,
 }: {
   data: FrontDeskData;
   branchId: string;
+  /** Empty for anyone pinned. A desk is one place, so there is no "all". */
+  branchOptions?: { id: string; name: Localized }[];
   /** What the drawer may offer beyond reading. */
   canSetStatus: boolean;
   canReschedule: boolean;
@@ -280,7 +284,22 @@ export default function FrontDeskView({
 
   return (
     <>
-      <PageHeader title={f.title} subtitle={f.subtitle} />
+      <PageHeader
+        title={f.title}
+        subtitle={f.subtitle}
+        action={
+          <BranchFilter
+            branchId={branchId}
+            options={branchOptions}
+            allLabel={t.topbar.allBranches}
+            lang={lang}
+            allowAll={false}
+            onChange={(id) =>
+              router.push(id ? `/admin/front-desk?branch=${id}` : "/admin/front-desk")
+            }
+          />
+        }
+      />
 
       {/* The four lanes, before the ticket box: what is in front of her beats
           what she might look up. Counts live on the lane headings rather than
