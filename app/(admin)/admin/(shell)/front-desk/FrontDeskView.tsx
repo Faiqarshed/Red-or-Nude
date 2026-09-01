@@ -590,10 +590,10 @@ export default function FrontDeskView({
         )}
       </Card>
 
-      {/* The bookings screen's own drawer, not a second one written here. The
-          desk holds bookings.manage and bookings.reschedule, so it gets the
-          status buttons and the reschedule picker too — this is the same
-          booking, and there is no reason the desk should see less of it. */}
+      {/* The bookings screen's own drawer, not a second one written here. Both
+          flags come down from the page and both are false at the desk as of
+          2026-09-01, so it reads the whole booking and rewrites none of it —
+          check-in and closing a ticket are its own buttons, above. */}
       <BookingDrawer
         booking={open}
         canSetStatus={canSetStatus}
