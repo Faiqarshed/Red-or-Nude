@@ -143,6 +143,10 @@ export default function GuestPicker({
   const b = c.booking;
   const { services, addons, removals, designs } = catalog;
   const [modal, setModal] = useState<null | "removal" | "designs">(null);
+  // Which add-on the picker was opened from. There is more than one design
+  // set now — a winter catalogue and a chrome one are different add-ons — so
+  // "the designs" is no longer a single list.
+  const [designsFor, setDesignsFor] = useState<string | null>(null);
 
   const removalName = value.removal
     ? (removals.find((r) => r.id === value.removal)?.name ?? null)
@@ -160,8 +164,11 @@ export default function GuestPicker({
       return;
     }
     onChange({ ...value, addons: [...value.addons, i] });
-    // The seasonal add-on is the one that opens the designs catalogue.
-    if (isSeasonal) setModal("designs");
+    // An add-on marked as having designs is the one that opens the catalogue.
+    if (isSeasonal) {
+      setDesignsFor(addons[i].id);
+      setModal("designs");
+    }
   };
 
   return (
@@ -236,7 +243,7 @@ export default function GuestPicker({
       )}
       {modal === "designs" && (
         <DesignsModal
-          designs={designs}
+          designs={designs.filter((d) => d.addonId === designsFor)}
           initialDesign={value.design}
           onConfirm={(d) => {
             onChange({ ...value, design: d });

@@ -8,7 +8,7 @@
 // the customer-facing booking page now reads.
 
 import { revalidatePath } from "next/cache";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { addons, designs, removalTypes, services } from "@/lib/db/schema";
@@ -16,25 +16,18 @@ import { requireCan } from "@/lib/auth/guard";
 import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
 
-// `design` is one image in the seasonal pop-up. It joined this set rather than
-// getting a screen of its own because it is the same four operations over the
-// same four columns — name, picture, order, active — and the only thing that
-// made it special was having no price. Before this there was no way to add a
-// seasonal design at all: the pop-up read whatever the seeder had put there.
-export type CatalogKind = "service" | "addon" | "removal" | "design";
+export type CatalogKind = "service" | "addon" | "removal";
 
 const TABLES = {
   service: services,
   addon: addons,
   removal: removalTypes,
-  design: designs,
 } as const;
 
 const ENTITY: Record<CatalogKind, string> = {
   service: "services",
   addon: "addons",
   removal: "removal_types",
-  design: "designs",
 };
 
 const localizedText = z.object({
@@ -43,21 +36,33 @@ const localizedText = z.object({
 });
 
 const itemSchema = z.object({
-  kind: z.enum(["service", "addon", "removal", "design"]),
+  kind: z.enum(["service", "addon", "removal"]),
   id: z.string().uuid().optional(),
   name: localizedText,
   description: z
     .object({ ar: z.string().trim().max(400), en: z.string().trim().max(400) })
     .optional(),
-  // Entered in riyals; stored in halalas. Optional because a design has
-  // neither — it is a picture in a pop-up, not something anyone buys.
-  priceSar: z.coerce.number().min(0).max(100_000).optional(),
-  durationMin: z.coerce.number().int().min(0).max(600).optional(),
+  // Entered in riyals; stored in halalas.
+  priceSar: z.coerce.number().min(0).max(100_000),
+  durationMin: z.coerce.number().int().min(0).max(600),
   // Services only. Zero is how the form's "has a refill" tick stores "no" —
   // one number rather than a boolean and a length that could contradict it.
   refillDays: z.coerce.number().int().min(0).max(365).optional(),
   image: z.string().max(400).nullable().optional(),
   isSeasonal: z.boolean().optional(),
+  // Add-ons that offer a choice. Absent means "leave them alone" — an empty
+  // array means "there are none", and the two must not be confused or every
+  // save from a screen that does not edit them would wipe them.
+  designs: z
+    .array(
+      z.object({
+        id: z.string().uuid().optional(),
+        name: localizedText,
+        image: z.string().max(400).nullable().optional(),
+      }),
+    )
+    .max(60)
+    .optional(),
   active: z.boolean(),
   sort: z.coerce.number().int().min(0).max(9999),
 });
@@ -69,6 +74,42 @@ function revalidateAll() {
   revalidatePath("/admin/catalog");
   revalidatePath("/booking");
   revalidatePath("/");
+}
+
+/**
+ * Make the add-on's design pictures match what the drawer was showing.
+ *
+ * Undefined means the caller was not editing them and they are left alone —
+ * only an add-on that offers a picker sends this at all. An empty array is a
+ * real answer, "there are none", and clears them.
+ *
+ * Rows keep their ids across a save so a booking that already points at a
+ * design still points at the same one. Only the ones actually dropped from the
+ * list are deleted, and `bookings.design_id` is `on delete set null`, so a
+ * finished appointment loses the picture and nothing else.
+ */
+async function syncDesigns(
+  addonId: string,
+  wanted: { id?: string; name: { ar: string; en: string }; image?: string | null }[] | undefined,
+): Promise<void> {
+  if (!wanted) return;
+
+  const keep = wanted.map((d) => d.id).filter(Boolean) as string[];
+  await db
+    .delete(designs)
+    .where(
+      keep.length
+        ? and(eq(designs.addonId, addonId), notInArray(designs.id, keep))
+        : eq(designs.addonId, addonId),
+    );
+
+  // Sequential rather than one statement: the list is a handful of rows typed
+  // by hand, and the order they were dragged into is the order they render in.
+  for (const [i, d] of wanted.entries()) {
+    const row = { addonId, name: d.name, image: d.image ?? null, sort: i, updatedAt: new Date() };
+    if (d.id) await db.update(designs).set(row).where(eq(designs.id, d.id));
+    else await db.insert(designs).values(row);
+  }
 }
 
 export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult> {
@@ -85,23 +126,15 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
   // everywhere, so build the payload per kind rather than casting it away.
   const common = {
     name: data.name,
-    priceHalalas: sarToHalalas(data.priceSar ?? 0),
-    durationMin: data.durationMin ?? 0,
+    priceHalalas: sarToHalalas(data.priceSar),
+    durationMin: data.durationMin,
     active: data.active,
     sort: data.sort,
     updatedAt: new Date(),
   };
 
   const values =
-    data.kind === "design"
-      ? {
-          name: data.name,
-          image: data.image ?? null,
-          active: data.active,
-          sort: data.sort,
-          updatedAt: new Date(),
-        }
-      : data.kind === "service"
+    data.kind === "service"
       ? {
           ...common,
           description: data.description ?? null,
@@ -118,6 +151,7 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
       if (!before) return { ok: false, error: "not-found" };
 
       await db.update(table).set(values).where(eq(table.id, data.id));
+      await syncDesigns(data.id, data.designs);
       await recordAudit(actor, {
         action: "update",
         entity: ENTITY[data.kind],
@@ -129,6 +163,7 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
     }
 
     const [row] = await db.insert(table).values(values).returning({ id: table.id });
+    await syncDesigns(row.id, data.designs);
     await recordAudit(actor, {
       action: "create",
       entity: ENTITY[data.kind],

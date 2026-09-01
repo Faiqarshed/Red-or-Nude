@@ -287,7 +287,9 @@ async function main() {
   );
 
   console.log("→ add-ons");
-  await db.insert(s.addons).values(
+  const seededAddons = await db
+    .insert(s.addons)
+    .values(
     SEED_ADDONS.map((a, i) => ({
       name: { ar: a.name, en: a.name },
       priceHalalas: sarToHalalas(a.price),
@@ -296,7 +298,8 @@ async function main() {
       isSeasonal: a.seasonal,
       sort: i,
     })),
-  );
+    )
+    .returning({ id: s.addons.id, isSeasonal: s.addons.isSeasonal });
 
   console.log("→ removal types");
   await db.insert(s.removalTypes).values(
@@ -314,14 +317,21 @@ async function main() {
     .values({ name: { ar: "التصاميم الموسمية", en: "Seasonal Designs" }, sort: 0 })
     .returning({ id: s.designCollections.id });
 
-  await db.insert(s.designs).values(
-    Array.from({ length: 12 }, (_, i) => ({
-      collectionId: collection.id,
-      name: { ar: `Art ${i + 1}`, en: `Art ${i + 1}` },
-      image: SEED_DESIGN_IMGS[i % SEED_DESIGN_IMGS.length],
-      sort: i,
-    })),
-  );
+  // Hung off the add-on that opens the picker, not floating free: designs
+  // belong to the add-on now, and one with no owner appears in nobody's
+  // catalogue.
+  const seasonalAddon = seededAddons.find((a) => a.isSeasonal);
+  if (seasonalAddon) {
+    await db.insert(s.designs).values(
+      Array.from({ length: 12 }, (_, i) => ({
+        collectionId: collection.id,
+        addonId: seasonalAddon.id,
+        name: { ar: `Art ${i + 1}`, en: `Art ${i + 1}` },
+        image: SEED_DESIGN_IMGS[i % SEED_DESIGN_IMGS.length],
+        sort: i,
+      })),
+    );
+  }
 
   console.log("→ gift cards");
   await db.insert(s.giftCardValues).values(

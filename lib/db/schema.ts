@@ -294,6 +294,19 @@ export const designs = pgTable("designs", {
   collectionId: uuid("collection_id").references(() => designCollections.id, {
     onDelete: "set null",
   }),
+  /**
+   * The add-on whose picker shows this design.
+   *
+   * There is not one seasonal catalogue, there are as many as the salon cares to
+   * sell — a winter set, a chrome set, an eid set — each its own add-on with its
+   * own pictures. Before this the table had no owner at all and the pop-up
+   * showed every design in the database whichever add-on opened it.
+   *
+   * Cascades: the pictures belong to the add-on, so removing it takes them.
+   * Nullable for the rows that predate this, which stay visible until they are
+   * given an owner.
+   */
+  addonId: uuid("addon_id").references(() => addons.id, { onDelete: "cascade" }),
   name: localized("name").notNull(),
   image: text("image"),
   sort: integer("sort").notNull().default(0),

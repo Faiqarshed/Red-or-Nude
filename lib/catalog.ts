@@ -36,7 +36,12 @@ export type PublicCatalog = {
   services: (CatalogItem & { description: Localized | null })[];
   addons: (CatalogItem & { seasonal: boolean })[];
   removals: CatalogItem[];
-  designs: { id: string; name: Localized; img: string | null }[];
+  /**
+   * Every design, each tagged with the add-on whose picker shows it. Kept as
+   * one flat list rather than nested inside the add-ons so the booking page,
+   * which passes them around by index, needs no reshaping.
+   */
+  designs: { id: string; addonId: string | null; name: Localized; img: string | null }[];
 };
 
 export type PublicBranch = { id: string; name: string; address: string };
@@ -92,6 +97,7 @@ export async function getPublicCatalog(): Promise<PublicCatalog> {
     })),
     designs: designRows.map((r) => ({
       id: r.id,
+      addonId: r.addonId,
       name: r.name,
       img: mediaUrl(r.image),
     })),
@@ -102,6 +108,7 @@ export async function getPublicCatalog(): Promise<PublicCatalog> {
 
 export type PublicGiftOptions = {
   values: number[]; // SAR
+  /** Card artwork — a different table from the nail designs above. */
   designs: { id: string; name: Localized; img: string | null }[];
 };
 

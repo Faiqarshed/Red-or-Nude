@@ -6,7 +6,7 @@ import { Button, Field, Input } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import MediaPicker from "@/components/admin/MediaPicker";
 import { useAdminI18n } from "@/lib/admin/i18n";
-import type { CatalogRow } from "./CatalogView";
+import type { CatalogRow, DesignRow } from "./CatalogView";
 import { deleteCatalogItem, saveCatalogItem, type CatalogKind } from "./actions";
 
 type FormState = {
@@ -54,6 +54,9 @@ export default function CatalogDrawer({
   const [form, setForm] = useState<FormState>(empty);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // Its own state rather than a field on the form: this is a list, and the
+  // form holds scalars.
+  const [designs, setDesigns] = useState<DesignRow[]>([]);
 
   // Reload the form whenever the drawer opens on a different row.
   useEffect(() => {
@@ -75,10 +78,14 @@ export default function CatalogDrawer({
           }
         : { ...empty, durationMin: kind === "service" ? "60" : "15" },
     );
+    setDesigns(row?.designs ?? []);
   }, [open, row, kind]);
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
+
+  const setDesign = (i: number, patch: Partial<DesignRow>) =>
+    setDesigns((list) => list.map((d, x) => (x === i ? { ...d, ...patch } : d)));
 
   // Zero is still how "no refill" is stored — one number, and every reader of
   // it (lib/refill.ts, the reminder job, the customer's history) keeps working
@@ -96,16 +103,12 @@ export default function CatalogDrawer({
       ? t.catalog.editService
       : kind === "addon"
         ? t.catalog.editAddon
-        : kind === "removal"
-          ? t.catalog.editRemoval
-          : t.catalog.editDesign
+        : t.catalog.editRemoval
     : kind === "service"
       ? t.catalog.newService
       : kind === "addon"
         ? t.catalog.newAddon
-        : kind === "removal"
-          ? t.catalog.newRemoval
-          : t.catalog.newDesign;
+        : t.catalog.newRemoval;
 
   const save = () =>
     startTransition(async () => {
@@ -118,11 +121,17 @@ export default function CatalogDrawer({
           kind === "service"
             ? { ar: form.descAr.trim(), en: form.descEn.trim() }
             : undefined,
-        priceSar: kind === "design" ? undefined : form.priceSar,
-        durationMin: kind === "design" ? undefined : form.durationMin,
+        priceSar: form.priceSar,
+        durationMin: form.durationMin,
         refillDays: kind === "service" ? form.refillDays : undefined,
         image: kind === "removal" ? null : form.image,
         isSeasonal: kind === "addon" ? form.isSeasonal : undefined,
+        designs:
+          kind === "addon" && form.isSeasonal
+            ? designs
+                .filter((d) => d.name.ar.trim() || d.name.en.trim())
+                .map((d) => ({ id: d.id, name: d.name, image: d.image ?? null }))
+            : undefined,
         active: form.active,
         sort: row?.sort ?? nextSort,
       });
@@ -209,7 +218,6 @@ export default function CatalogDrawer({
           </div>
         ) : null}
 
-        {kind === "design" ? null : (
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label={`${t.catalog.price} (${t.common.riyal})`}>
             <Input
@@ -234,7 +242,6 @@ export default function CatalogDrawer({
             />
           </Field>
         </div>
-        )}
 
         {/* Services only: this is what makes the refill button appear in the
             customer's booking history, and for how long.
@@ -294,6 +301,68 @@ export default function CatalogDrawer({
               checked={form.isSeasonal}
               onChange={(v) => set("isSeasonal", v)}
             />
+          ) : null}
+
+          {/* There is no single seasonal catalogue: a winter set and a chrome
+              set are two add-ons with two sets of pictures. So the pictures
+              live on the add-on that shows them, edited here rather than on a
+              screen of their own — the salon is describing one product, and
+              its designs are part of that description. */}
+          {kind === "addon" && form.isSeasonal ? (
+            <div className="rounded-xl border border-black/[0.06] bg-white p-4">
+              <p className="mb-1 text-start text-xs font-medium text-ink/70">
+                {t.catalog.designs}
+              </p>
+              <p className="mb-3 text-start text-xs text-ink/45">{t.catalog.designsHint}</p>
+
+              <div className="space-y-3">
+                {designs.map((d, i) => (
+                  <div key={i} className="flex flex-wrap items-end gap-3 border-t border-black/[0.05] pt-3 first:border-0 first:pt-0">
+                    <div className="grid min-w-[180px] flex-1 gap-2 sm:grid-cols-2">
+                      <Field label={t.catalog.nameAr}>
+                        <Input
+                          value={d.name.ar}
+                          onChange={(e) => setDesign(i, { name: { ...d.name, ar: e.target.value } })}
+                        />
+                      </Field>
+                      <Field label={t.catalog.nameEn}>
+                        <Input
+                          dir="ltr"
+                          className="text-left"
+                          value={d.name.en}
+                          onChange={(e) => setDesign(i, { name: { ...d.name, en: e.target.value } })}
+                        />
+                      </Field>
+                    </div>
+                    <div className="min-w-[160px]">
+                      <MediaPicker
+                        label={t.catalog.image}
+                        value={d.image ?? null}
+                        onChange={(path) => setDesign(i, { image: path })}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setDesigns(designs.filter((_, x) => x !== i))}
+                      className="h-10 rounded-xl px-3 text-xs font-medium text-red transition-colors hover:bg-red/[0.06]"
+                    >
+                      {t.catalog.delete}
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <Button
+                variant="secondary"
+                size="sm"
+                className="mt-3"
+                onClick={() =>
+                  setDesigns([...designs, { name: { ar: "", en: "" }, image: null }])
+                }
+              >
+                {t.catalog.addDesign}
+              </Button>
+            </div>
           ) : null}
           <Toggle
             label={t.catalog.active}

@@ -15,7 +15,7 @@ export default async function CatalogPage() {
     db.select().from(services).orderBy(asc(services.sort)),
     db.select().from(addons).orderBy(asc(addons.sort)),
     db.select().from(removalTypes).orderBy(asc(removalTypes.sort)),
-    // Every one of these is a tile in the seasonal pop-up, active or not.
+    // Every one of these is a tile in some add-on's picker, active or not.
     db.select().from(designs).orderBy(asc(designs.sort)),
   ]);
 
@@ -44,21 +44,16 @@ export default async function CatalogPage() {
           image: r.image,
           imageUrl: mediaUrl(r.image),
           isSeasonal: r.isSeasonal,
-          active: r.active,
-          sort: r.sort,
-        }),
-      )}
-      designs={designRows.map(
-        (r): CatalogRow => ({
-          id: r.id,
-          name: r.name,
-          // A design is a picture with a name. No price, no duration — the
-          // zeroes are what the shared row shape wants, and the Designs tab
-          // renders neither.
-          priceSar: 0,
-          durationMin: 0,
-          image: r.image,
-          imageUrl: mediaUrl(r.image),
+          // Its own pictures, in their own order. Empty for an add-on that
+          // does not offer a choice, which is most of them.
+          designs: designRows
+            .filter((d) => d.addonId === r.id)
+            .map((d) => ({
+              id: d.id,
+              name: d.name,
+              image: d.image,
+              imageUrl: mediaUrl(d.image),
+            })),
           active: r.active,
           sort: r.sort,
         }),
