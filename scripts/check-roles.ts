@@ -30,6 +30,17 @@ assert.ok(can("ceo", "settings.manage"), "the CEO can reach settings");
 assert.ok(can("ceo", "audit.view"), "the CEO can read the audit log");
 assert.ok(can("ceo", "bookings.reschedule"), "the CEO can move an appointment");
 
+// Deleting a booking, as opposed to cancelling one. Held by the two roles that
+// answer for the records and by nobody who works a counter — a busy desk must
+// not be one mis-tap from erasing an appointment.
+assert.ok(can("ceo", "bookings.delete"), "the CEO can delete a booking");
+assert.ok(can("admin", "bookings.delete"), "an admin can delete a booking");
+assert.ok(
+  !can("receptionist", "bookings.delete"),
+  "the front desk cancels bookings, it does not delete them",
+);
+assert.ok(!can("technician", "bookings.delete"), "a technician cannot delete a booking");
+
 // Brief §3.3, both halves: admin runs the service list, and admin does not
 // touch a booking's timing.
 assert.ok(can("admin", "catalog.manage"), "admin manages the service list");

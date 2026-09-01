@@ -427,6 +427,21 @@ export const bookings = pgTable(
     // runs is "the other rows with this id".
     groupId: uuid("group_id"),
 
+    /**
+     * Who this booking was made for, as given at the time.
+     *
+     * Snapshotted for exactly the reason the prices below are. The customer row
+     * is keyed on the phone number and its name is overwritten by every later
+     * booking, so joining it live meant one person booking six times under six
+     * names ended up with all six appointments — and August's — displaying
+     * whichever name they typed last. History is not allowed to rewrite itself.
+     *
+     * Null on rows written before this column existed and on a walk-in nobody
+     * named; readers fall back to the customer row, which is what they used to
+     * read anyway.
+     */
+    customerName: text("customer_name"),
+
     // Snapshotted at booking time. Never joined live off the catalog — raising a
     // price must not rewrite last month's revenue.
     serviceName: localized("service_name"),

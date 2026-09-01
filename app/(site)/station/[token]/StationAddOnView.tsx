@@ -103,6 +103,8 @@ export default function StationAddOnView({
       startsAt,
       members: [
         {
+          // One chair, and it belongs to whoever pays for it.
+          guestName: null,
           serviceId: service.id,
           addonIds: [],
           removalTypeId: null,

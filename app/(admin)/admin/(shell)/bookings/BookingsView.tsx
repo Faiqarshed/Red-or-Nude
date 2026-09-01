@@ -3,7 +3,15 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, List, Plus } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  List,
+  Plus,
+  Users,
+} from "lucide-react";
 import {
   Badge,
   Button,
@@ -44,6 +52,14 @@ export type BookingReview = {
 export type BookingRow = {
   id: string;
   code: string;
+  /**
+   * Shared by two guests who booked together, null for everyone else.
+   *
+   * They are two rows because they are two chairs, two technicians and two
+   * services — but one party, one bill and one arrival. The screen has to say
+   * so, or the desk checks one in and leaves her friend sitting in reception.
+   */
+  groupId: string | null;
   startsAt: string;
   endsAt: string;
   status: BookingStatus;
@@ -181,20 +197,77 @@ const DROPPED_PER_PAGE = 10;
  * drift into looking like different screens — the difference between them is
  * which rows they are handed, and it should stay only that.
  */
+/** A row, plus where it sits in its party. `size` is 1 for everybody else. */
+type Grouped = {
+  row: BookingRow;
+  size: number;
+  /** True on the party's first row — the only one that gets the badge. */
+  first: boolean;
+  /** True on the party's last row — where the connecting rail stops. */
+  last: boolean;
+};
+
+/**
+ * Keep a party together and say how big it is.
+ *
+ * Two guests who booked together are two rows because they are two chairs, two
+ * technicians and two services. Collapsing them into one would have to throw
+ * away exactly the columns the desk needs — who is with whom, and who has
+ * checked in. So they stay two rows, sorted adjacent and tied together with a
+ * rail down the side, and only the first carries the badge.
+ *
+ * Sorting is stable on the party's earliest start, so a group never jumps the
+ * queue: it lands where its first member would have landed anyway.
+ */
+function groupRows(rows: BookingRow[]): Grouped[] {
+  const parties = new Map<string, BookingRow[]>();
+  for (const r of rows) {
+    if (!r.groupId) continue;
+    const list = parties.get(r.groupId) ?? [];
+    list.push(r);
+    parties.set(r.groupId, list);
+  }
+
+  const out: Grouped[] = [];
+  const done = new Set<string>();
+
+  for (const r of rows) {
+    // A group of one is not a group: the other member may be on another day, or
+    // cancelled and sitting in the other tab.
+    const party = r.groupId ? parties.get(r.groupId) : undefined;
+    if (!party || party.length < 2) {
+      out.push({ row: r, size: 1, first: true, last: true });
+      continue;
+    }
+    if (done.has(r.groupId!)) continue;
+    done.add(r.groupId!);
+    party.forEach((m, i) =>
+      out.push({ row: m, size: party.length, first: i === 0, last: i === party.length - 1 }),
+    );
+  }
+
+  return out;
+}
+
 function BookingTable({
   rows,
   empty,
   onSelect,
+  partyLetter,
 }: {
   rows: BookingRow[];
   empty: string;
   onSelect: (b: BookingRow) => void;
+  /** Which party each group is, so the list and the grid agree on the label. */
+  partyLetter: Map<string, string>;
 }) {
   const { t, lang } = useAdminI18n();
 
   if (rows.length === 0) {
     return <EmptyState title={empty} icon={<CalendarDays className="h-8 w-8" strokeWidth={1.25} />} />;
   }
+
+  const ordered = groupRows(rows);
 
   return (
     <div className="overflow-x-auto">
@@ -214,17 +287,46 @@ function BookingTable({
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((b) => (
+                  {ordered.map(({ row: b, size, first, last }) => (
                     <tr
                       key={b.id}
                       onClick={() => onSelect(b)}
-                      className="cursor-pointer border-b border-black/[0.04] last:border-0 hover:bg-black/[0.015]"
+                      className={cn(
+                        "cursor-pointer hover:bg-black/[0.015]",
+                        // The rule between two members of one party is dropped so
+                        // the pair reads as a block; the rule under the party
+                        // stays, and so does every rule between singles.
+                        last ? "border-b border-black/[0.04] last:border-0" : "",
+                        size > 1 && "bg-sky/[0.035]",
+                      )}
                     >
-                      <td className="whitespace-nowrap px-4 py-3 text-start tabular-nums text-ink" dir="ltr">
+                      <td
+                        className={cn(
+                          "whitespace-nowrap px-4 py-3 text-start tabular-nums text-ink",
+                          // A rail down the reading-start edge, drawn with a
+                          // logical border so it moves to the right in Arabic.
+                          size > 1 && "border-s-[3px] border-s-sky",
+                        )}
+                        dir="ltr"
+                      >
                         {localTime(b.startsAt)}
                       </td>
                       <td className="px-4 py-3 text-start">
-                        <span className="block text-ink">{b.customerName || "—"}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-ink">{b.customerName || "—"}</span>
+                          {/* Only on the first of the party: repeating it on both
+                              rows would say the same thing twice and read as two
+                              separate groups rather than one. */}
+                          {size > 1 && first ? (
+                            <span
+                              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sky/15 px-2 py-0.5 text-[10px] font-semibold text-[#2c6a88]"
+                              title={t.bookings.groupNote}
+                            >
+                              <Users className="h-3 w-3" strokeWidth={2} />
+                              {t.bookings.groupOf(partyLetter.get(b.groupId!) ?? "", size)}
+                            </span>
+                          ) : null}
+                        </span>
                         <span className="block text-[11px] text-ink/45" dir="ltr">
                           {b.customerPhone}
                         </span>
@@ -256,6 +358,7 @@ export default function BookingsView({
   canManage,
   canSetStatus,
   canReschedule,
+  canDelete,
   checkinEarlyMin,
 }: {
   date: string;
@@ -274,6 +377,8 @@ export default function BookingsView({
   /** `bookings.reschedule`. Separate from canManage — a technician has neither,
    *  but the two came apart so admin could hold one without the other. */
   canReschedule: boolean;
+  /** `bookings.delete` — CEO and admin. See deleteBooking for what it refuses. */
+  canDelete: boolean;
   /** `checkin_early_min` — how many minutes before her slot check-in unlocks. */
   checkinEarlyMin: number;
 }) {
@@ -300,7 +405,34 @@ export default function BookingsView({
   };
 
   const hours = Array.from({ length: DAY_END_HOUR - DAY_START_HOUR }, (_, i) => DAY_START_HOUR + i);
+
   const active = bookings.filter((b) => b.status !== "cancelled" && b.status !== "no_show");
+
+  /**
+   * A letter per party on this day: A, B, C…
+   *
+   * A line drawn between two blocks answers "which two", but only while there
+   * is one party — put two groups in the same hour and the lines cross and
+   * answer nothing. A label does not care how many there are: two blocks
+   * reading **A** are together, and the one reading **B** is a different party.
+   * It survives four people, six, and the horizontal scroll that hides one of
+   * them off-screen, which no connector can.
+   *
+   * Ordered by start time so the letters read down the day rather than being
+   * handed out in whatever order the rows arrived.
+   */
+  const partyLetter = new Map<string, string>();
+  for (const b of [...active].sort((x, y) => x.startsAt.localeCompare(y.startsAt))) {
+    if (!b.groupId || partyLetter.has(b.groupId)) continue;
+    const n = partyLetter.size;
+    // Past Z it becomes A2, B2 — a salon will never see it, and a wrong letter
+    // is worse than an ugly one.
+    partyLetter.set(
+      b.groupId,
+      String.fromCharCode(65 + (n % 26)) + (n >= 26 ? String(Math.floor(n / 26) + 1) : ""),
+    );
+  }
+
 
   /**
    * Cancelled and no-show, kept out of the day.
@@ -341,6 +473,14 @@ export default function BookingsView({
       pick(b.serviceName, lang),
       `${t.frontDesk.technician}: ${b.technicianName ?? t.frontDesk.unassignedShort}`,
       `${t.bookings.status}: ${t.bookings.statuses[b.status]}`,
+      b.groupId
+        ? `${t.bookings.groupLetter(partyLetter.get(b.groupId) ?? "")} — ${t.bookings.groupWith}: ${
+            active
+              .filter((x) => x.groupId === b.groupId && x.id !== b.id)
+              .map((x) => x.customerName || x.customerPhone || x.code)
+              .join("، ") || "—"
+          }`
+        : null,
       b.status === "pending" ? t.bookings.pendingHint : null,
       `${t.bookings.total}: ${b.totalSar.toLocaleString("en-US")} ${t.common.riyal}`,
       b.review?.submittedAt && b.review.serviceRating !== null
@@ -474,7 +614,12 @@ export default function BookingsView({
         </Card>
       ) : tab === "dropped" ? (
         <Card className="overflow-hidden">
-          <BookingTable rows={pageRows} empty={t.bookings.droppedEmpty} onSelect={setSelected} />
+          <BookingTable
+            rows={pageRows}
+            empty={t.bookings.droppedEmpty}
+            onSelect={setSelected}
+            partyLetter={partyLetter}
+          />
           {dropped.length > DROPPED_PER_PAGE ? (
             <div className="flex items-center justify-between gap-3 border-t border-black/[0.06] px-4 py-3">
               <p className="text-xs tabular-nums text-ink/50">
@@ -567,14 +712,35 @@ export default function BookingsView({
                                   : b.status === "pending"
                                     ? "border-dashed border-[#b7791f]/50 bg-[#fdf6e7]"
                                     : "border-red/25 bg-red/[0.07]",
+                              // A party is two blocks in two chair columns that
+                              // the grid cannot join. A ring around both, in a
+                              // colour no status uses, is what makes them read
+                              // as one appointment across the gap.
+                              b.groupId && "ring-2 ring-inset ring-[#2c6a88]/45",
                             )}
                             title={tooltip(b)}
                           >
+                            {/* Said in words, not just a ring: the receptionist
+                                scanning the grid for who is arriving together
+                                should not have to decode a border colour. Hidden
+                                on a block too short to hold it — a 30-minute
+                                removal is 22px, and the name matters more. */}
+                            {b.groupId ? (
+                              <span className="mb-0.5 flex items-center gap-1 rounded bg-[#2c6a88] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+                                <Users className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
+                                {t.bookings.groupLetter(partyLetter.get(b.groupId) ?? "")}
+                              </span>
+                            ) : null}
                             {/* The score sits on the name's line rather than in a
                                 corner: a block can be as short as 22px, and the
                                 name truncates around it instead of running
                                 underneath it. */}
                             <span className="flex items-center gap-1">
+                              {/* Two chairs, one party. The grid cannot merge
+                                  them — they are literally in different columns
+                                  — so it marks them instead, and the icon is the
+                                  same one the list uses so the two screens are
+                                  saying the same thing. */}
                               <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-ink">
                                 {b.customerName || b.customerPhone || b.code}
                               </span>
@@ -594,17 +760,24 @@ export default function BookingsView({
         </Card>
       ) : (
         <Card className="overflow-hidden">
-          <BookingTable rows={active} empty={t.bookings.empty} onSelect={setSelected} />
+          <BookingTable rows={active} empty={t.bookings.empty} onSelect={setSelected} partyLetter={partyLetter} />
         </Card>
       )}
 
       <BookingDrawer
         booking={selected}
+        partners={
+          selected?.groupId
+            ? bookings.filter((b) => b.groupId === selected.groupId && b.id !== selected.id)
+            : []
+        }
         canSetStatus={canSetStatus}
         canReschedule={canReschedule}
+        canDelete={canDelete}
         checkinEarlyMin={checkinEarlyMin}
         branchId={branchId}
         onClose={() => setSelected(null)}
+        onOpenPartner={setSelected}
         onChanged={() => {
           setSelected(null);
           router.refresh();

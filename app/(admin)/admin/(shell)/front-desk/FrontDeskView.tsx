@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Users } from "lucide-react";
 import { Card, EmptyState, PageHeader, Badge, BranchFilter, Button, Thumb } from "@/components/admin/ui";
 import { STATUS_TONE } from "../bookings/BookingsView";
 import BookingDrawer, { BookingFacts } from "../bookings/BookingDrawer";
@@ -405,6 +405,32 @@ export default function FrontDeskView({
               </span>
             </div>
 
+            {/* One reference, two guests. The desk finds this out here or she
+                finds it out from the customer standing in front of her asking
+                where her friend's appointment went. Each is still checked in on
+                her own — they may be with different technicians. */}
+            {match.party.length > 0 ? (
+              <div className="mt-3 rounded-xl border border-sky/40 bg-sky/[0.07] px-3 py-2.5 text-start">
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-[#2c6a88]">
+                  <Users className="h-3.5 w-3.5" strokeWidth={2} />
+                  {f.partyWith}
+                </p>
+                <ul className="mt-1.5 space-y-0.5">
+                  {match.party.map((p) => (
+                    <li key={p.id} className="text-sm text-ink">
+                      {p.name ?? "—"}
+                      {p.ticketNo ? (
+                        <span className="ms-2 text-xs tabular-nums text-ink/45" dir="ltr">
+                          {p.ticketNo}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-1.5 text-[11px] text-ink/50">{f.partyHint}</p>
+              </div>
+            ) : null}
+
             {/* Derived, not stored — see the note in search(). Re-rendered every
                 20s with `now`, so the number counts down on its own. */}
             {matchRow.status === "confirmed" && tooEarly(match) ? (
@@ -597,8 +623,18 @@ export default function FrontDeskView({
           owner's. Check-in and closing a ticket are its own buttons, above. */}
       <BookingDrawer
         booking={open}
+        // The lookup panel above names the party while she is at the counter;
+        // this is the same party in the drawer, where each member is a button
+        // that opens them. Same fact, two jobs: one tells her, one gets her there.
+        partners={
+          open?.groupId ? data.rows.filter((r) => r.groupId === open.groupId && r.id !== open.id) : []
+        }
         canSetStatus={canSetStatus}
         canReschedule={canReschedule}
+        // Never from the desk, whoever is signed in. Deleting is a records job
+        // done on the bookings screen with the whole day in front of you, not a
+        // button within reach of a queue at the counter.
+        canDelete={false}
         checkinEarlyMin={data.checkinEarlyMin}
         branchId={branchId}
         onClose={() => setOpenId(null)}

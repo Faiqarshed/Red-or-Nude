@@ -22,6 +22,11 @@ import type { PublicCatalog } from "@/lib/catalog";
 
 /** Indexes into the catalogue rather than ids — the grids render by position. */
 export type GuestState = {
+  /**
+   * Whose chair this is. Only asked of the second guest — the first is whoever
+   * fills in checkout, and the salon learns her name there.
+   */
+  name?: string;
   service: number | null;
   addons: number[];
   removal: string | null;
@@ -60,6 +65,7 @@ export function toMemberSelection(
   const design = g.design ? catalog.designs.find((d) => pick(d.name, lang) === g.design) : null;
 
   return {
+    guestName: g.name?.trim() || null,
     serviceId: service?.id ?? null,
     addonIds: addons.map((a) => a.id),
     removalTypeId: g.removal,

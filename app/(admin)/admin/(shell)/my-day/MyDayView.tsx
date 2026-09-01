@@ -13,8 +13,10 @@
 // "what have I finished", so they render the history list instead: same numbers
 // above, a record rather than a board below, and nothing left to press.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { BellRing } from "lucide-react";
 import { Card, CardHeader, EmptyState, PageHeader, StatCard, Badge, Thumb } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
@@ -130,17 +132,60 @@ export default function MyDayView({
   const { t, lang } = useAdminI18n();
   const m = t.myDay;
   const p = t.performance;
+  const router = useRouter();
 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // One clock for every card, ticking once a minute. A timer per card would be
   // the same number rendered from more setIntervals.
+  //
+  // And a re-read on the same interval, which this screen did not have at all:
+  // the receptionist checking a customer in changes this technician's board from
+  // another machine, and until now nothing told her. She found out by reloading,
+  // or by the customer walking over. The page is force-dynamic, so a refresh is
+  // the whole mechanism.
+  //
+  // ponytail: polling, not push. 20 seconds is well inside "she is still
+  // finishing the last set"; swap in a websocket only if that stops being true.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 30_000);
+    const id = setInterval(() => {
+      setNow(Date.now());
+      router.refresh();
+    }, 20_000);
     return () => clearInterval(id);
-  }, []);
+  }, [router]);
+
+  /**
+   * Somebody has just arrived for her.
+   *
+   * Held as the booking that turned `checked_in` since the last read, so the
+   * banner can name her. Bookings already waiting when the screen opened are
+   * remembered silently — she is looking at them, and announcing a customer who
+   * has been sitting there twenty minutes would teach her to dismiss the banner
+   * without reading it.
+   */
+  const announced = useRef<Set<string> | null>(null);
+  const [arrived, setArrived] = useState<MyDayBooking | null>(null);
+
+  useEffect(() => {
+    const waiting = bookings.filter((b) => b.status === "checked_in");
+
+    if (announced.current === null) {
+      announced.current = new Set(waiting.map((b) => b.id));
+      return;
+    }
+
+    const fresh = waiting.filter((b) => !announced.current!.has(b.id));
+    for (const b of fresh) announced.current.add(b.id);
+    // The newest wins: two arrivals inside one poll is a queue, and the banner
+    // names the last one while both cards pulse.
+    if (fresh.length) setArrived(fresh[fresh.length - 1]);
+
+    // Once she starts a service, the banner about it has done its job.
+    setArrived((prev) => (prev && waiting.some((b) => b.id === prev.id) ? prev : null));
+  }, [bookings]);
 
   async function run(id: string, fn: (id: string) => Promise<{ ok: boolean }>) {
     setBusy(id);
@@ -214,6 +259,34 @@ export default function MyDayView({
           value={stats ? `${stats.totalServiceMin} ${p.minutes}` : "—"}
         />
       </div>
+
+      {/* Sticky, loud, and dismissible. She may be looking at the bottom of a
+          long day when somebody arrives, so this rides the scroll rather than
+          sitting at the top where she is not. `role="alert"` so a screen reader
+          announces it the moment it appears. */}
+      {arrived ? (
+        <div
+          role="alert"
+          className="sticky top-2 z-30 mb-4 flex items-center gap-3 rounded-2xl border-2 border-red bg-red/[0.06] px-4 py-3 shadow-[0_8px_24px_rgba(184,0,7,0.12)]"
+        >
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-red text-white">
+            <BellRing className="h-4 w-4" strokeWidth={2} />
+          </span>
+          <span className="min-w-0 flex-1 text-start">
+            <span className="block text-sm font-bold text-red">{m.arrivedTitle}</span>
+            <span className="block truncate text-xs text-ink/70">
+              {m.arrivedBody(arrived.customerName ?? m.customer)}
+              {arrived.stationLabel ? ` · ${m.station} ${arrived.stationLabel}` : ""}
+            </span>
+          </span>
+          <button
+            onClick={() => setArrived(null)}
+            className="shrink-0 rounded-xl bg-white px-3 py-1.5 text-xs font-semibold text-ink transition-colors hover:bg-black/[0.04]"
+          >
+            {m.arrivedDismiss}
+          </button>
+        </div>
+      ) : null}
 
       {error ? (
         <p role="alert" className="mb-4 rounded-xl bg-red/[0.07] px-4 py-3 text-sm text-red">
@@ -350,8 +423,13 @@ function NextCard({
     <Card
       className={cn(
         "flex flex-col gap-5 p-5 sm:flex-row sm:items-start",
-        control === "start" && "border-red/25 shadow-[0_6px_22px_rgba(184,0,7,0.08)]",
-        control === "finish" && "border-sky/40",
+        // Red until she acknowledges it by pressing Start; green once she has.
+        // `motion-reduce` turns both off for anyone who asked the OS for less
+        // movement, and the ring underneath still carries the same meaning.
+        control === "start" &&
+          "animate-waiting-pulse shadow-[0_6px_22px_rgba(184,0,7,0.10)] motion-reduce:animate-none motion-reduce:border-red/40",
+        control === "finish" &&
+          "animate-running-pulse motion-reduce:animate-none motion-reduce:border-[#1f7a4d]/40",
       )}
     >
       <button type="button" onClick={onOpen} className="shrink-0 self-center sm:self-start">
@@ -466,16 +544,35 @@ function LaterRow({
   lang: "ar" | "en";
   onOpen: () => void;
 }) {
+  // A second customer can arrive while she is mid-service, and that one is not
+  // the hero card. She still has to see it.
+  const control = controlFor(b);
+
   return (
     <button type="button" onClick={onOpen} className="w-full text-start">
-      <Card className="flex items-center gap-4 p-3.5 transition-colors hover:border-red/25">
+      <Card
+        className={cn(
+          "flex items-center gap-4 p-3.5 transition-colors hover:border-red/25",
+          control === "start" && "animate-waiting-pulse motion-reduce:animate-none motion-reduce:border-red/40",
+          control === "finish" && "animate-running-pulse motion-reduce:animate-none motion-reduce:border-[#1f7a4d]/40",
+        )}
+      >
         <span className="w-14 shrink-0 text-sm font-semibold tabular-nums text-ink">
           {localTime(b.startsAt)}
         </span>
         <Thumb src={b.imageUrl} size="md" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[15px] font-semibold text-ink">
-            {pick(b.serviceName, lang)}
+          <span className="flex items-center gap-2">
+            <span className="min-w-0 truncate text-[15px] font-semibold text-ink">
+              {pick(b.serviceName, lang)}
+            </span>
+            {/* Motion carries this for anyone who can see it; the badge carries
+                it for everyone else, and for a screen that has been paused. */}
+            {control === "start" ? (
+              <span className="shrink-0 rounded-full bg-red px-2 py-0.5 text-[10px] font-bold text-white">
+                {m.waitingBadge}
+              </span>
+            ) : null}
           </span>
           <span className="block truncate text-[13px] text-ink/55">
             {[b.customerName, b.stationLabel ? `${m.station} ${b.stationLabel}` : null]

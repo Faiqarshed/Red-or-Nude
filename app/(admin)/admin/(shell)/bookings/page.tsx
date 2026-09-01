@@ -1,4 +1,4 @@
-import { count, and, asc, eq, gte, inArray, isNotNull, isNull, lt } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   addons,
@@ -46,7 +46,7 @@ export default async function BookingsPage({
     : utcToLocalDate(riyadhDayRange().start);
 
   if (!branchId) {
-    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} catalog={{ services: [], addons: [], removals: [] }} canManage={false} canSetStatus={false} canReschedule={false} checkinEarlyMin={0} branchId="" />;
+    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} catalog={{ services: [], addons: [], removals: [] }} canManage={false} canSetStatus={false} canReschedule={false} canDelete={false} checkinEarlyMin={0} branchId="" />;
   }
 
   // Release chairs nobody checked in to, before reading the day back — otherwise
@@ -68,6 +68,7 @@ export default async function BookingsPage({
       .select({
         id: bookings.id,
         code: bookings.code,
+        groupId: bookings.groupId,
         startsAt: bookings.startsAt,
         endsAt: bookings.endsAt,
         status: bookings.status,
@@ -76,7 +77,7 @@ export default async function BookingsPage({
         serviceName: bookings.serviceName,
         totalHalalas: bookings.totalHalalas,
         notes: bookings.notes,
-        customerName: customers.name,
+        customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
         customerPhone: customers.phone,
         // Why this booking is cheaper than the price list says.
         refillOfBookingId: bookings.refillOfBookingId,
@@ -171,6 +172,7 @@ export default async function BookingsPage({
       // Read from the matrix rather than another role list: this is the one
       // capability the salon has moved, and it should only have to move once.
       canReschedule={can(user.role, "bookings.reschedule")}
+      canDelete={can(user.role, "bookings.delete")}
       // So the drawer can say how long until check-in unlocks, rather than only
       // that it hasn't. The setting is the salon's, not the row's, so it travels
       // once instead of on every booking.
@@ -200,6 +202,7 @@ export default async function BookingsPage({
         (r): BookingRow => ({
           id: r.id,
           code: r.code,
+          groupId: r.groupId,
           startsAt: r.startsAt.toISOString(),
           endsAt: r.endsAt.toISOString(),
           status: r.status,

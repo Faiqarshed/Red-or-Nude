@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { CalendarClock, Phone } from "lucide-react";
+import { CalendarClock, ChevronRight, Phone, Trash2, Users } from "lucide-react";
 import { Badge, Button, scoreTone } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
 import { formatCountdown, formatDuration, localTime } from "@/lib/time";
-import { setBookingStatus } from "./actions";
+import { deleteBooking, setBookingStatus } from "./actions";
 import RescheduleDialog from "./RescheduleDialog";
 import { STATUS_TONE, type BookingReview, type BookingRow, type BookingStatus } from "./BookingsView";
 
@@ -219,14 +219,27 @@ export function BookingFacts({ booking, now }: { booking: BookingRow; now: numbe
 
 export default function BookingDrawer({
   booking,
+  partners,
   canSetStatus,
   canReschedule,
+  canDelete,
   checkinEarlyMin,
   branchId,
   onClose,
   onChanged,
+  onOpenPartner,
 }: {
   booking: BookingRow | null;
+  /**
+   * The rest of this booking's party, if it has one.
+   *
+   * Passed in rather than fetched: the screen already holds the whole day, and
+   * the desk opening a drawer should not wait on a round trip to be told the
+   * customer standing in front of her came with somebody.
+   */
+  partners: BookingRow[];
+  /** `bookings.delete` — CEO and admin. The action refuses anything paid for. */
+  canDelete: boolean;
   /**
    * `bookings.status` — the owner only. Not the same as being allowed to work
    * the desk: check-in and closing a ticket have their own buttons on the front
@@ -240,6 +253,8 @@ export default function BookingDrawer({
   branchId: string;
   onClose: () => void;
   onChanged: () => void;
+  /** Swap the drawer over to another member of the party. */
+  onOpenPartner?: (b: BookingRow) => void;
 }) {
   const { t, lang } = useAdminI18n();
   const [pending, startTransition] = useTransition();
@@ -261,6 +276,37 @@ export default function BookingDrawer({
   // both reading `checkin_early_min` rather than by either guessing.
   const opensAt = new Date(booking.startsAt).getTime() - checkinEarlyMin * 60_000;
   const tooEarly = now < opensAt;
+
+  /**
+   * Erase it, after saying so out loud.
+   *
+   * `window.confirm`, like the cancellation reason and the no-show note: the
+   * house way of making staff pause, and the one dialog a browser will not let a
+   * mis-tap dismiss. The message names the group size when there is one, because
+   * deleting one member takes the party with it.
+   *
+   * The refusals come back named, so a booking that cannot be deleted says why
+   * — "cancel it instead" is a useful sentence; "failed" is not.
+   */
+  const remove = () => {
+    if (!booking) return;
+    if (!window.confirm(t.bookings.delConfirm)) return;
+
+    setError(null);
+    startTransition(async () => {
+      const res = await deleteBooking(booking.id);
+      if (res.ok) return onChanged();
+      setError(
+        res.error === "has-payment"
+          ? t.bookings.delHasPayment
+          : res.error === "has-review"
+            ? t.bookings.delHasReview
+            : res.error === "has-points"
+              ? t.bookings.delHasPoints
+              : t.common.error,
+      );
+    });
+  };
 
   const move = (status: BookingStatus) =>
     startTransition(async () => {
@@ -287,12 +333,64 @@ export default function BookingDrawer({
       onClose={onClose}
       title={booking.customerName || booking.customerPhone || booking.code}
       footer={
-        <Button variant="secondary" size="sm" onClick={onClose}>
-          {t.common.cancel}
-        </Button>
+        <>
+          {/* Alone at the reading-start edge, with the everyday buttons pushed
+              away from it: the one control here that cannot be undone should
+              never sit under the thumb that was reaching for Close. */}
+          {canDelete ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={remove}
+              disabled={pending}
+              className="me-auto border-red/30 text-red hover:bg-red/[0.06]"
+            >
+              <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
+              {t.bookings.del}
+            </Button>
+          ) : null}
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            {t.common.cancel}
+          </Button>
+        </>
       }
     >
       <div className="space-y-5">
+        {/* Above the facts rather than among them: the party is not a
+            property of this booking, it is the other half of the appointment,
+            and it is the one thing in this drawer worth clicking. */}
+        {partners.length > 0 ? (
+          <div className="rounded-xl border border-sky/40 bg-sky/[0.07] p-3 text-start">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-[#2c6a88]">
+              <Users className="h-3.5 w-3.5" strokeWidth={2} />
+              {t.bookings.groupWith}
+            </p>
+            <div className="mt-2 flex flex-col gap-1.5">
+              {partners.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => onOpenPartner?.(p)}
+                  className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-start transition-colors hover:bg-black/[0.03]"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-ink">
+                      {p.customerName || p.customerPhone || p.code}
+                    </span>
+                    <span className="block truncate text-[11px] text-ink/50">
+                      {pick(p.serviceName, lang)}
+                    </span>
+                  </span>
+                  <ChevronRight
+                    className="h-4 w-4 shrink-0 text-ink/30 rtl:rotate-180"
+                    strokeWidth={2}
+                  />
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] text-ink/50">{t.bookings.groupNote}</p>
+          </div>
+        ) : null}
+
         <BookingFacts booking={booking} now={now} />
 
         {/* Only once the ticket is ended. Before that there is nothing to show

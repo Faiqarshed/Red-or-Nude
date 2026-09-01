@@ -16,7 +16,7 @@
 // token pinning the booking to it.
 
 import { notFound } from "next/navigation";
-import { and, asc, eq, gt, inArray, lte, ne } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings, branches, customers, stations } from "@/lib/db/schema";
@@ -57,7 +57,7 @@ export default async function StationPage({ params }: { params: { token: string 
       code: bookings.code,
       endsAt: bookings.endsAt,
       serviceName: bookings.serviceName,
-      customerName: customers.name,
+      customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
     })
     .from(bookings)
     .leftJoin(customers, eq(customers.id, bookings.customerId))

@@ -44,11 +44,28 @@ export function utcToLocalTime(date: Date): string {
   return new Date(date.getTime() + UTC_OFFSET_HOURS * HOUR_MS).toISOString().slice(11, 16);
 }
 
+/**
+ * Why a slot cannot be booked. Null when it can.
+ *
+ * The picker used to render every unbookable slot identically — struck through,
+ * grey — so "the salon is full" and "we need an hour's notice" looked the same.
+ * A customer reads a crossed-out 17:00 as *taken* and goes away, when in fact
+ * five chairs were free and the only problem was that she asked at 16:45.
+ *
+ * Reported in the order that answers "what would I have to change": `closed` and
+ * `past` cannot be changed at all, `full` needs a different time, and `too-soon`
+ * needs only a later one — so `full` outranks `too-soon`, because a slot with no
+ * chair stays unbookable however much notice you give it.
+ */
+export type SlotBlocker = "closed" | "past" | "full" | "too-soon";
+
 export type Slot = {
   /** Local wall-clock start, "09:30". */
   time: string;
   startsAt: string; // ISO UTC
   available: boolean;
+  /** Why not, when `available` is false. Null when it is bookable. */
+  blockedBy: SlotBlocker | null;
   /** Stations with no conflicting booking for the full duration. */
   freeStationIds: string[];
 };
@@ -204,7 +221,25 @@ function computeDay(
             ),
         );
 
-    const available = freeStationIds.length >= minStations && startsAt >= earliest;
+    // Every reason this slot is out, in the order a customer can act on them.
+    // `past` before `too-soon` so a 10:00 slot at teatime reads as gone rather
+    // than as needing an hour's notice, and `full` before `too-soon` so a slot
+    // with no free chair is never blamed on the notice period.
+    //
+    // Strictly before `now`: a slot starting this very second is not past, and
+    // for a walk-in — whose lead time is zero — it is exactly the one the desk
+    // wants to book.
+    const blockedBy: SlotBlocker | null = inClosure
+      ? "closed"
+      : startsAt.getTime() < now.getTime()
+        ? "past"
+        : freeStationIds.length < minStations
+          ? "full"
+          : startsAt < earliest
+            ? "too-soon"
+            : null;
+
+    const available = blockedBy === null;
 
     // A grid time always shows, bookable or struck through, so the picker keeps
     // the shape customers know. A gap time has to earn its place by being
@@ -215,6 +250,7 @@ function computeDay(
       time: utcToLocalTime(startsAt),
       startsAt: startsAt.toISOString(),
       available,
+      blockedBy,
       freeStationIds,
     });
   }

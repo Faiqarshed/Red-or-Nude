@@ -14,7 +14,7 @@
 // salon lost, and what it did about it. Resolving one moves it across rather
 // than deleting it from the screen.
 
-import { and, asc, count, desc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
@@ -61,7 +61,7 @@ export default async function NoShowsPage({
         // The reschedule picker keeps the appointment exactly as long as it is.
         endsAt: bookings.endsAt,
         serviceName: bookings.serviceName,
-        customerName: customers.name,
+        customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
         customerPhone: customers.phone,
         noShowNote: bookings.noShowNote,
         noShowResolvedAt: bookings.noShowResolvedAt,

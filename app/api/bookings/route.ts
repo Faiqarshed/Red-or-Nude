@@ -18,6 +18,8 @@ import { currentCustomer } from "@/lib/account/guard";
 export const dynamic = "force-dynamic";
 
 const member = z.object({
+  /** Whose chair this is, when it is not the person paying. See BookingMember. */
+  guestName: z.string().trim().max(120).nullable().optional(),
   serviceId: z.string().uuid(),
   addonIds: z.array(z.string().uuid()).max(20).default([]),
   removalTypeId: z.string().uuid().nullable().optional(),

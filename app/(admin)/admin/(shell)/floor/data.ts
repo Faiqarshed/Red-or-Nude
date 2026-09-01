@@ -10,7 +10,7 @@
 // second query over the same join would be the same day counted two ways.
 
 import "server-only";
-import { and, asc, eq, gte, lt } from "drizzle-orm";
+import { and, asc, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers, services, staff, stations, type Localized } from "@/lib/db/schema";
 import { offOn } from "@/lib/assign";
@@ -67,7 +67,7 @@ export async function loadFloor(branchId: string, day?: Date): Promise<FloorData
         endsAt: bookings.endsAt,
         status: bookings.status,
         serviceName: bookings.serviceName,
-        customerName: customers.name,
+        customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
         stationLabel: stations.label,
         startedAt: bookings.startedAt,
         finishedAt: bookings.finishedAt,

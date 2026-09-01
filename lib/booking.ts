@@ -19,6 +19,8 @@ type DateStrings = Content["date"];
 /** One guest's choices. A solo booking is simply a members array of length 1. */
 export type MemberSelection = {
   // Ids — what the API needs.
+  /** Typed on the group screen for guest 2; null for the guest who is paying. */
+  guestName: string | null;
   serviceId: string | null;
   addonIds: string[];
   removalTypeId: string | null;
@@ -158,6 +160,15 @@ export function formatTime(slot: string, d: DateStrings): string {
  */
 export type BookingSummary = {
   code: string;
+  /**
+   * How many people booked together on this appointment. 1 for everyone else.
+   *
+   * A count rather than the other guest's details: quoting one reference now
+   * returns the whole party, and the screen has to explain why two cards
+   * appeared — but the second guest's name is hers, not the reference holder's
+   * to be handed.
+   */
+  groupSize: number;
   startsAt: string;
   status: (typeof bookingStatus.enumValues)[number];
   ticketNo: string | null;

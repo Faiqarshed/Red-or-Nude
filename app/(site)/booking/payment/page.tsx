@@ -275,6 +275,7 @@ export default function PaymentPage() {
             branchId: booking.branchId,
             startsAt: booking.startsAt,
             members: booking.members.map((m) => ({
+              guestName: m.guestName,
               serviceId: m.serviceId,
               addonIds: m.addonIds,
               removalTypeId: m.removalTypeId,

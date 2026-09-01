@@ -19,6 +19,12 @@ export type Capability =
   // on bookings.checkin, while overwriting the record is not something a
   // busy counter should be able to do by mis-clicking.
   | "bookings.status"
+  // Erasing a booking outright, as opposed to cancelling it. Its own capability
+  // for the same reason bookings.status is: the desk cancels all day and must
+  // never be one mis-tap from destroying an appointment record. The action
+  // itself refuses anything carrying money — see deleteBooking — so this grants
+  // the power to remove a mistake, not to rewrite the books.
+  | "bookings.delete"
   | "bookings.own" // technicians: their own bookings, status changes only
   | "availability.manage"
   | "catalog.manage"
@@ -46,6 +52,7 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "bookings.checkin",
     "bookings.reschedule",
     "bookings.status",
+    "bookings.delete",
     "bookings.own",
     "availability.manage",
     "catalog.manage",
@@ -72,6 +79,13 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "bookings.view",
     "bookings.manage",
     "bookings.checkin",
+    // Granted 2026-09-01 at the salon's request, in the same breath as the two
+    // below were taken away. Worth reading twice, because it looks backwards:
+    // an admin may not move an appointment or set its status, but may delete
+    // one. It holds because deleteBooking refuses any booking that was paid
+    // for, reviewed or earned points — so what admin can actually remove is a
+    // mistake nobody has touched, and never a record of money.
+    "bookings.delete",
     // No bookings.reschedule and no bookings.status. Brief §3.3 says "Admin
     // cannot change a booking's timing"; it was granted anyway on 2026-08-28
     // so an admin covering the desk could move an appointment a customer was

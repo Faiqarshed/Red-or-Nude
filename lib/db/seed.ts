@@ -130,7 +130,7 @@ async function main() {
       { key: "currency", value: "SAR" },
       { key: "timezone", value: "Asia/Riyadh" },
       { key: "slot_length_min", value: 30 }, // matches the site's 30-min grid
-      { key: "booking_lead_time_min", value: 60 },
+      { key: "booking_lead_time_min", value: 0 },
     ])
     .onConflictDoNothing();
 

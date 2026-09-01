@@ -5,7 +5,7 @@
 // bounded the same way.
 
 import "server-only";
-import { and, asc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   bookingAddons,
@@ -37,6 +37,14 @@ import type { BookingStatus } from "../bookings/BookingsView";
 export type FrontDeskRow = {
   id: string;
   code: string;
+  /**
+   * Shared by two guests who booked together, null for everyone else.
+   *
+   * Carried because these rows are handed straight to BookingDrawer, which
+   * shows the party — and because the desk checking one guest in wants to know
+   * her friend is on the same booking.
+   */
+  groupId: string | null;
   ticketNo: string | null;
   startsAt: string;
   /** Needed to tell whether two of the day's bookings collide. */
@@ -125,6 +133,7 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
       .select({
         id: bookings.id,
         code: bookings.code,
+        groupId: bookings.groupId,
         ticketNo: bookings.ticketNo,
         startsAt: bookings.startsAt,
         endsAt: bookings.endsAt,
@@ -137,7 +146,7 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
         durationMin: services.durationMin,
         stationId: bookings.stationId,
         stationLabel: stations.label,
-        customerName: customers.name,
+        customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
         customerPhone: customers.phone,
         notes: bookings.notes,
         noShowNote: bookings.noShowNote,
