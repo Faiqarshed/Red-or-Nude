@@ -224,8 +224,13 @@ const ar = {
     needsMoving: "حجوزات بحاجة إلى فنية أخرى",
     nothingToMove: "لا توجد حجوزات قادمة تحتاج إلى نقل.",
     staysWithHer: (n: number) =>
-      ` حجز يبقى باسمها — خدمات منتهية أو عميلة على الكرسي الآن`,
+      `${n} حجز يبقى باسمها — خدمات منتهية أو عميل على الكرسي الآن`,
     moveTo: "نقل إلى…",
+    needsTechnician: "حجوزات بدون فنية",
+    sentHomeTitle: "حجوزات بحاجة إلى فنية الآن",
+    sentHomeBody: (n: number) =>
+      `${n} حجز فقد فنيته للتو، ولن يُعيَّن تلقائياً. اختر فنية لكل حجز قبل موعده.`,
+    done: "تم",
     noTechnicians: "لا توجد فنيات في هذا الفرع",
     onLeave: "هذه إجازة مسجَّلة — تُعدَّل من صفحة الموظفين.",
   },
@@ -787,6 +792,11 @@ const en: AdminStrings = {
     staysWithHer: (n: number) =>
       `${n} stay with her — already finished, or a customer in the chair now`,
     moveTo: "Move to…",
+    needsTechnician: "Bookings with no technician",
+    sentHomeTitle: "These bookings need a technician now",
+    sentHomeBody: (n: number) =>
+      `${n} booking(s) just lost their technician, and none is assigned automatically. Pick one for each before its appointment time.`,
+    done: "Done",
     noTechnicians: "No technicians at this branch",
     onLeave: "That is booked leave — change it under Staff.",
   },

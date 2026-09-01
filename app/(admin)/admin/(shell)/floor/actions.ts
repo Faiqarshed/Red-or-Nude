@@ -17,10 +17,11 @@ import { db } from "@/lib/db";
 import { staff, staffTimeOff } from "@/lib/db/schema";
 import { requireCan, type SessionStaff } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
-import { assignIfToday, releaseToday } from "@/lib/assign";
+import { releaseToday } from "@/lib/assign";
 import { riyadhDateKey } from "@/lib/time";
 
-export type Result = { ok: true } | { ok: false; error: string };
+/** `released` is how many customers just lost their technician — see sendHome. */
+export type Result = { ok: true; released?: number } | { ok: false; error: string };
 
 /** Both actions answer the same question first: is she mine to move? */
 async function myTechnician(
@@ -52,13 +53,18 @@ function revalidate() {
  * the check-in picker to stop choosing her, and for both dropdowns to grey her
  * out.
  *
- * Then her waiting customers are handed straight to whoever is still in. This
- * used to leave them on her on the grounds that stripping a live floor would
- * lose the receptionist's place — but that was true only while there was nothing
- * to hand them to. Now there is: the rows are emptied and re-dealt in the same
- * breath, so the desk sees new names rather than an empty column, and finds out
- * now instead of at the appointment time. Anything she has already started stays
- * hers, because the customer is sitting in front of her.
+ * Then her waiting customers are taken off her — and left for a person to place.
+ *
+ * Dealing them again automatically was tried and dropped. The run fits whoever
+ * is free into whichever slot, and four customers at the same hour with two
+ * technicians left simply cannot all be placed, so it silently returned some of
+ * them unassigned while looking like it had done the job. Who waits, who is
+ * asked to come back tomorrow, and who gets the technician they asked for are
+ * not questions a first-fit loop can answer. The desk decides, off the list this
+ * action's `released` count sends it to.
+ *
+ * Anything she has already started stays hers, because the customer is sitting
+ * in front of her.
  */
 export async function sendHome(staffId: string): Promise<Result> {
   const actor = await requireCan("bookings.checkin");
@@ -121,12 +127,8 @@ export async function sendHome(staffId: string): Promise<Result> {
     });
   }
 
-  // Ordered after the time-off row on purpose: this run reads it, and would hand
-  // her own customers straight back if it went first.
-  if (mine.branchId) await assignIfToday(mine.branchId, new Date());
-
   revalidate();
-  return { ok: true };
+  return { ok: true, released: released.length };
 }
 
 /**
