@@ -39,6 +39,19 @@ async function main() {
     })
     .returning();
 
+  // From here on the row exists, so every exit path has to remove it — a throw
+  // in the middle used to leave it behind for the next run's opening delete to
+  // find. It only ever pollutes the gated test database, but a demonstration
+  // that leaves litter is a demonstration people stop trusting.
+  try {
+    await demonstrate(victim);
+  } finally {
+    await db.delete(customers).where(eq(customers.id, victim.id));
+  }
+  process.exit(0);
+}
+
+async function demonstrate(victim: typeof customers.$inferSelect) {
   show("BEFORE — Sara's account", victim);
 
   // 2. The attacker proves an inbox *they* own. This part is legitimate: it is
@@ -70,9 +83,6 @@ async function main() {
           "      so every booking and loyalty point of hers came along with it.\n"
       : "\n  >>> Sara's account is intact. The bug is fixed.\n",
   );
-
-  await db.delete(customers).where(eq(customers.id, victim.id));
-  process.exit(0);
 }
 
 main().catch((err) => {
