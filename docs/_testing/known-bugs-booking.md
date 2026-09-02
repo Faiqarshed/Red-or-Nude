@@ -1,6 +1,7 @@
 # Known bugs — booking and availability
 
-Found by `tests/booking/`. Not fixed — reported, per the skill's rule.
+Found by `tests/booking/`. Reported first, fixed only on the owner's
+instruction. BUG-BOOK-001 was partly fixed on 2026-09-03 — the past-date half.
 
 ---
 
