@@ -8,7 +8,7 @@ const config: Config = {
     // is silently never generated. Nothing errors — the element just renders
     // with no styling at all, which is indistinguishable from the styling being
     // wrong, and cost an afternoon on the booking status colours.
-    "./lib/**/*.{js,ts}",
+    "./lib/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
     extend: {
