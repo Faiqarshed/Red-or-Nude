@@ -96,6 +96,33 @@ Read `scripts/check-roles.ts`, `scripts/check-pulse.ts` and
 - Use the repo's own nouns from the glossary. Never invent domain terms.
 - Every security test names the attack it performs.
 
+## The source is spec too, not just `docs/`
+
+The skill says `docs/` is the specification. In this repo that is half the
+picture, and following it alone will produce a thin suite.
+
+`lib/db/schema.ts` is 974 lines and most of it is comment. `lib/auth/rbac.ts`
+carries dated grant-and-revoke history for every odd permission.
+`lib/db/index.ts` explains a measured performance decision and what it does
+*not* buy. `scripts/_test-db.ts` documents an incident. None of that is in
+`docs/`, and all of it is behaviour someone decided on purpose.
+
+So:
+
+1. **Enumerate from the code first.** Every exported function in your area,
+   every branch inside it, every guard, early return, thrown error and Zod
+   field. *Then* read `docs/` for what it adds. `docs/` does not set the
+   boundary of what you test — a function it never mentions still gets the
+   full Phase 5 checklist. An undocumented server action is precisely where a
+   hole lives.
+2. **A comment that asserts behaviour is a requirement.** Register it like any
+   other, cited `source: lib/<file>.ts:<line>`.
+3. **Phase 2's "code without spec" list should be the largest of the three.**
+   Every entry gets a Phase 4 characterization test tagged
+   `// @characterization`.
+4. **A comment contradicting `docs/` is a contradiction to report** — same rule
+   as docs-versus-code. Stop and ask; never pick a side and test it as spec.
+
 ## A failing test that found a real bug
 
 Do not edit it to pass. Do not fix the source. Log it in
