@@ -870,8 +870,17 @@ function LaneRow({
           >
             {runningMin === null ? "—" : formatDuration(runningMin * 60_000, lang)}
           </span>
-          <span className={cn("block text-[11px]", overMin > 0 ? "text-red" : "text-ink/45")}>
-            {overMin > 0 ? f.overBy(overMin) : f.ofAbout(expectedMin)}
+          {/* The over-run line has to answer to `unstarted` as well, or the row
+              says "waiting for a technician" in amber and "over by 30" in red
+              at the same time. Nothing has started, so nothing is overrunning:
+              it is still only what the service is booked to take. */}
+          <span
+            className={cn(
+              "block text-[11px]",
+              !unstarted && overMin > 0 ? "text-red" : "text-ink/45",
+            )}
+          >
+            {!unstarted && overMin > 0 ? f.overBy(overMin) : f.ofAbout(expectedMin)}
           </span>
         </span>
       ) : lane === "ready" ? (

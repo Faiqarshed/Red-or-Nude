@@ -98,4 +98,33 @@ checkClock("nothing stamped yet reads as no clock", {}, NOW, { runningMs: null, 
 // Clock skew must not print a negative duration.
 checkClock("a check-in in the future clamps to zero", { checkedInAt: DONE }, NOW, { runningMs: 0, tookMs: null });
 
+// setBookingStatus never stamps finished_at, so closing a ticket from the admin
+// dropdown or cancelling somebody already checked in leaves it null for good.
+// Read off the timestamps alone the clock called those rows running and counted
+// up all day — a cancelled customer sat in the desk's list reading "Running for
+// 7 h". No finish time means no honest figure, so it shows none.
+for (const status of ["completed", "cancelled", "no_show"] as const) {
+  checkClock(`${status} without a finish stamp is not running`, { status, checkedInAt: CHECKED_IN }, NOW, {
+    runningMs: null,
+    tookMs: null,
+  });
+}
+
+// A real finish stamp still wins: the figure is known, so it is shown, and
+// reaching `completed` afterwards must not erase it.
+checkClock(
+  "completed with a finish stamp keeps its figure",
+  { status: "completed", checkedInAt: CHECKED_IN, finishedAt: DONE },
+  NOW,
+  { runningMs: null, tookMs: 60 * MIN },
+);
+
+// The live states are untouched by the status guard.
+checkClock(
+  "checked_in is still running",
+  { status: "checked_in", checkedInAt: CHECKED_IN },
+  NOW,
+  { runningMs: 45 * MIN, tookMs: null },
+);
+
 console.log("\nall checks passed\n");
