@@ -4,12 +4,14 @@ Found by `tests/booking/`. Not fixed — reported, per the skill's rule.
 
 ---
 
-## BUG-BOOK-001 — the booking route trusts the client's start time  ·  P1
+## BUG-BOOK-001 — the booking route trusts the client's start time  ·  P1  ·  PARTLY FIXED 2026-09-03
 
 **Where** `app/api/bookings/route.ts:125` → `lib/bookings.ts:622`
-**Test** `tests/booking/concurrency.test.ts` — "refuses the three start times the
-slot engine would never offer" (`it.fails`), with current behaviour pinned by
-"today, all three are written to the books".
+**Tests** `tests/booking/concurrency.test.ts` — "refuses a booking in the past,
+at the public route" (passing), "still accepts a slot chosen seconds ago"
+(passing), "still lets the salon seat a walk-in into a chair a no-show just
+freed" (passing), and "refuses the two start times outside the branch's opening
+hours" (`it.fails` — still open).
 
 ### What happens
 
@@ -19,16 +21,41 @@ across this window* — and writes the row if the answer is yes. Nothing anywher
 on the path asks whether the availability engine would have **offered** that
 moment.
 
-All three of these are accepted today:
-
-| Posted `startsAt` | Result |
-|---|---|
-| Yesterday | booked |
-| 07:00 local, branch opens 10:00 | booked |
-| 21:30 local + a 90-minute service, branch closes 22:00 | booked, finishing at 23:00 |
+| Posted `startsAt` | Before | Now |
+|---|---|---|
+| Yesterday | booked | **400 `slot-in-past`** |
+| 07:00 local, branch opens 10:00 | booked | booked — still open |
+| 21:30 local + a 90-minute service, branch closes 22:00 | booked | booked — still open |
 
 A closed weekday and a `closures` row are the same shape and almost certainly
-behave the same way.
+behave like the two still-open rows.
+
+### The fix so far, 2026-09-03
+
+A start time more than two minutes in the past is refused with
+`400 slot-in-past`, in `app/api/bookings/route.ts`.
+
+**Why the route and not `createBookings`.** The library must keep accepting a
+past start: a no-show frees a slot that has already begun and the walk-in drawer
+seats somebody into it. `scripts/check-booking.ts` asserts exactly that — "no-show:
+freed chair is immediately rebookable" — and it still passes. This is the same
+split `app/api/availability/route.ts` already draws when it passes
+`leadTimeMin: 0` for signed-in staff and the branch's real lead time for
+everyone else: staff reach the floor through the admin actions, and this route
+is the public one.
+
+**Why a two-minute grace.** A slot picked at 14:00 and confirmed at 14:00:03 was
+honestly available when it was chosen; refusing it would be a bug report nobody
+could reproduce. Small enough that it cannot reach a slot that has meaningfully
+passed. Asserted in both directions.
+
+### Still open — opening hours and closing time
+
+Deliberately not fixed in the same change. Checking those safely means asking
+the availability engine whether the slot was offered, and the station QR add-on
+(brief §2.7) books at a *projected finish time* that may not sit on the engine's
+slot grid. A careless check there would break a real flow in order to close a
+smaller hole, so it wants its own change with the QR flow tested alongside.
 
 ### Why it matters
 

@@ -238,55 +238,99 @@ describe("times a booking must never be accepted at", () => {
     expect(made.ok).toBe(false);
   });
 
+  it("refuses a booking in the past, at the public route", async () => {
+    // BUG-BOOK-001, the half that is fixed. The body is whatever the caller
+    // types; the browser's slot picker is not a gate.
+    const branch = await fx.branch({ stationCount: 1 });
+    const svc = await fx.service({ durationMin: 60 });
+    const { POST } = await import("@/app/api/bookings/route");
+    const { post, read } = await import("../helpers/app");
+
+    const { status, body } = await read(
+      await POST(
+        post("http://x/api/bookings", {
+          branchId: branch.id,
+          startsAt: new Date(Date.now() - 86_400_000).toISOString(),
+          members: [{ serviceId: svc.id, addonIds: [] }],
+          customer: { name: "Time Traveller", phone: "0530000024", email: "t@example.test" },
+        }),
+      ),
+    );
+    await fx.claimBookingsOf(branch.id);
+
+    expect({ status, error: body.error }).toEqual({ status: 400, error: "slot-in-past" });
+    expect(await liveBookings(branch.id), "a booking for yesterday was written").toHaveLength(0);
+  });
+
+  it("still accepts a slot chosen seconds ago and submitted just after it", async () => {
+    // The grace. A customer who picks 14:00 and confirms at 14:00:03 had an
+    // honestly available slot; refusing that is a bug nobody can reproduce.
+    const branch = await fx.branch({ stationCount: 1 });
+    const svc = await fx.service({ durationMin: 60 });
+    const { POST } = await import("@/app/api/bookings/route");
+    const { post } = await import("../helpers/app");
+
+    const res = await POST(
+      post("http://x/api/bookings", {
+        branchId: branch.id,
+        startsAt: new Date(Date.now() - 3_000).toISOString(),
+        members: [{ serviceId: svc.id, addonIds: [] }],
+        customer: { name: "Just In Time", phone: "0530000025", email: "j@example.test" },
+      }),
+    );
+    await fx.claimBookingsOf(branch.id);
+    expect(res.status, "a three-second-old slot was refused").not.toBe(400);
+  });
+
+  it("still lets the salon seat a walk-in into a chair a no-show just freed", async () => {
+    // The flow the guard must NOT break. A no-show frees a slot that has
+    // already begun, and the walk-in drawer seats somebody into it — which is
+    // why the check lives on the public route and not in createBookings.
+    const branch = await fx.branch({ stationCount: 1 });
+    const svc = await fx.service({ durationMin: 60 });
+    const { createBookings } = await import("@/lib/bookings");
+
+    const past = new Date(Date.now() - 30 * 60_000).toISOString();
+    const walkIn = await createBookings({
+      branchId: branch.id,
+      startsAt: past,
+      customer: { name: "Walk-in", phone: "0530000026" },
+      source: "walk_in",
+      status: "confirmed",
+      members: [{ serviceId: svc.id, addonIds: [] }],
+    });
+    await fx.claimBookingsOf(branch.id);
+
+    expect(walkIn.ok, "the salon could not seat a walk-in into a freed chair").toBe(true);
+  });
+
   /**
-   * UNCHECKED START TIME — docs/_testing/known-bugs-booking.md BUG-BOOK-001.
+   * STILL OPEN — the other half of BUG-BOOK-001.
    *
-   * `POST /api/bookings` validates `startsAt` as a datetime and hands it to
-   * `createBookings`, which asks `reserveStations` only whether a chair is
-   * free. Nothing on the path asks whether the availability engine would ever
-   * have *offered* that moment. The browser only shows real slots, but the
-   * route is public HTTP and the body is whatever the caller types.
-   *
-   * Three shapes below, all currently accepted. Marked `fails` so the day a
-   * guard lands they turn green.
+   * Opening hours, closures and an appointment running past closing are the
+   * same hole: the route trusts the start time. Only the past case is guarded
+   * so far, because checking the rest safely means asking the availability
+   * engine, and the station QR add-on books at a projected finish time that
+   * may not sit on the engine's slot grid — a careless check there would break
+   * a real flow to close a smaller hole.
    */
-  it.fails("refuses the three start times the slot engine would never offer", async () => {
+  it.fails("refuses the two start times outside the branch's opening hours", async () => {
     const branch = await fx.branch({ stationCount: 1 });
     const svc = await fx.service({ durationMin: 60 });
     const long = await fx.service({ durationMin: 90 });
 
-    const yesterday = new Date(Date.now() - 86_400_000).toISOString();
     const results = {
-      past: await book(branch.id, svc.id, yesterday, "0530000017"),
       // The fixture branch opens 10:00–22:00 Riyadh; 04:00 UTC is 07:00 local.
       beforeOpening: await book(branch.id, svc.id, "2030-03-02T04:00:00.000Z", "0530000018"),
-      // "The appointment must finish before closing, not merely start before
-      // it" — computeDay, lib/availability.ts:202. 21:30 local + 90 runs over.
+      // 21:30 local + 90 minutes runs past the 22:00 close.
       pastClosing: await book(branch.id, long.id, "2030-03-02T18:30:00.000Z", "0530000019"),
     };
     await fx.claimBookingsOf(branch.id);
 
     expect({
-      past: results.past.ok,
       beforeOpening: results.beforeOpening.ok,
       pastClosing: results.pastClosing.ok,
-    }).toEqual({ past: false, beforeOpening: false, pastClosing: false });
-  });
-
-  // @characterization — pins BUG-BOOK-001 as it stands on 2026-09-02, so the
-  // behaviour cannot drift in some third direction while the bug is open.
-  it("today, all three are written to the books", async () => {
-    const branch = await fx.branch({ stationCount: 1 });
-    const svc = await fx.service({ durationMin: 60 });
-    const long = await fx.service({ durationMin: 90 });
-
-    const past = await book(branch.id, svc.id, new Date(Date.now() - 86_400_000).toISOString(), "0530000021");
-    const early = await book(branch.id, svc.id, "2030-03-03T04:00:00.000Z", "0530000022");
-    const late = await book(branch.id, long.id, "2030-03-03T18:30:00.000Z", "0530000023");
-    await fx.claimBookingsOf(branch.id);
-
-    expect([past.ok, early.ok, late.ok]).toEqual([true, true, true]);
-    expect(await liveBookings(branch.id)).toHaveLength(3);
+    }).toEqual({ beforeOpening: false, pastClosing: false });
   });
 
   it("the availability engine, asked directly, offers none of them", async () => {

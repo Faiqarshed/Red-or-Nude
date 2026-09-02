@@ -1,6 +1,6 @@
 # The test suite
 
-`npm test` → `vitest run`. 551 cases across 11 files, against real local
+`npm test` → `vitest run`. 553 cases across 11 files, against real local
 Postgres. Two of them are `it.fails`, which is deliberate — see Findings.
 
 ```
@@ -37,7 +37,7 @@ Where they already cover something, the suites cite them rather than duplicating
 | Area | File | Cases | Covers |
 |---|---|---|---|
 | auth | `tests/auth/accounts.test.ts` | 24 | register / verify / otp, signup tickets, session salt separation, blocking |
-| booking | `tests/booking/concurrency.test.ts` | 13 | the `reserveStations` row lock, slot boundaries, capacity |
+| booking | `tests/booking/concurrency.test.ts` | 15 | the `reserveStations` row lock, slot boundaries, capacity |
 | lifecycle | `tests/lifecycle/ownership.test.ts` | 19 | `refuseBookingAction`, the cancellation window, the open read |
 | lifecycle | `tests/lifecycle/status.test.ts` | 13 | who may set which status, check-in guard, the floor's three stamps |
 | money | `tests/money/maths.test.ts` | 25 | halalas, inclusive VAT, group splits |
@@ -49,12 +49,12 @@ Where they already cover something, the suites cite them rather than duplicating
 
 ## Findings
 
-One has been fixed, at the owner's instruction. The rest have not.
+Two have been fixed, at the owner's instruction — one fully, one in part. The rest have not.
 
 | ID | Sev | What |
 |---|---|---|
 | ~~[BUG-AUTH-001](known-bugs-auth.md)~~ | ~~**P0**~~ | **Fixed 2026-09-03.** Account takeover via an unverified phone number. Phone is now a label: it may claim a guest row, never open an account |
-| [BUG-BOOK-001](known-bugs-booking.md) | P1 | `POST /api/bookings` trusts `startsAt` — the past, before opening, and past closing are all accepted |
+| [BUG-BOOK-001](known-bugs-booking.md) | P1 | **Partly fixed 2026-09-03.** `POST /api/bookings` trusted `startsAt`. The past is now refused; before-opening and past-closing are still accepted |
 | [BUG-LIFE-001](known-bugs-lifecycle.md) | P2 | The dev login bypass is gated on `NODE_ENV !== "production"`, not an explicit opt-in |
 | [BUG-JOBS-001](known-bugs-jobs.md) | P2 | `staff-codes` was never added to `vercel.json`, so monthly staff codes have never been minted |
 | [BUG-AUTH-002](known-bugs-auth.md) | P3 | A phone number with extra digits is silently truncated and accepted |

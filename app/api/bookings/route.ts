@@ -94,6 +94,37 @@ export async function POST(request: Request) {
 
   const { stationToken, ...data } = parsed.data;
 
+  /**
+   * No appointment in the past.
+   *
+   * `startsAt` arrives from the body and is only checked for being a valid
+   * datetime. Everything downstream asks one question — is a chair free across
+   * this window — and a chair is very free at four o'clock yesterday morning,
+   * so a crafted POST wrote real rows onto real technicians' days for times the
+   * slot picker would never have offered.
+   *
+   * Guarded here rather than in `createBookings`, which must keep accepting a
+   * past start: a no-show frees a slot that has already begun, and the walk-in
+   * drawer seats somebody into it. That is the same distinction
+   * app/api/availability/route.ts already draws when it passes `leadTimeMin: 0`
+   * for signed-in staff and the branch's real lead time for everyone else —
+   * staff reach the salon floor through the admin actions, and this route is
+   * the public one.
+   *
+   * The grace is for the submit race, not for the customer: a slot chosen at
+   * 14:00 and confirmed at 14:00:03 was honestly available when it was picked,
+   * and refusing it would be a bug report nobody could reproduce. It is small
+   * enough that it cannot be used to book a slot that has meaningfully passed.
+   *
+   * Only the start is checked. Opening hours, closures and an appointment that
+   * would run past closing are the same class of hole and are still open —
+   * see docs/_testing/known-bugs-booking.md BUG-BOOK-001.
+   */
+  const SUBMIT_GRACE_MS = 2 * 60_000;
+  if (new Date(data.startsAt).getTime() < Date.now() - SUBMIT_GRACE_MS) {
+    return NextResponse.json({ error: "slot-in-past" }, { status: 400 });
+  }
+
   let stationId: string | null = null;
   if (stationToken) {
     const [station] = await db
