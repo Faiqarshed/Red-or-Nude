@@ -170,7 +170,10 @@ export class Fixtures {
     const [row] = await db
       .insert(bookings)
       .values({
-        code: `RON-${tag().toUpperCase().slice(0, 6)}`,
+        // Not truncated: tag() puts its uniqueness counter last, so slicing is
+        // exactly how two bookings made in the same millisecond collide on
+        // bookings_code_unique.
+        code: `RON-${tag().toUpperCase()}`,
         startsAt,
         endsAt: opts.endsAt ?? new Date(new Date(startsAt).getTime() + 3_600_000),
         ...opts,
