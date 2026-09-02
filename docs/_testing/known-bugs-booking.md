@@ -5,7 +5,7 @@ instruction. BUG-BOOK-001 was partly fixed on 2026-09-03 — the past-date half.
 
 ---
 
-## BUG-BOOK-001 — the booking route trusts the client's start time  ·  P1  ·  PARTLY FIXED 2026-09-03
+## BUG-BOOK-001 — the booking route trusts the client's start time  ·  P1  ·  FIXED 2026-09-03
 
 **Where** `app/api/bookings/route.ts:125` → `lib/bookings.ts:622`
 **Tests** `tests/booking/concurrency.test.ts` — "refuses a booking in the past,
@@ -83,6 +83,29 @@ can reach. The admin walk-in path calls `createBookings` directly and must keep
 being able to seat someone right now, so a check pushed down into the library
 would break the counter — see the `leadTimeMin` override at
 `lib/availability.ts:281` for the existing precedent on that distinction.
+
+### The rest of the fix, later the same day
+
+`refuseOutsideHours(branchId, startsAt, endsAt)` in `lib/availability.ts`,
+called from `createBookings` behind a new `enforceOpeningHours` flag that only
+the public route sets.
+
+**Deliberately not "would computeDay have offered this start".** That drags in
+the slot grid, the lead time and the free-chair edges, and the station QR add-on
+(brief 2.7) books at a projected finish time that sits on none of them —
+checking a public booking against the grid would refuse a customer sitting in
+the chair. This asks the smaller question the grid is built on: is the branch
+open, is it inside a closure, does the appointment *finish* before closing.
+
+**Why a flag rather than always-on.** The counter must keep seating people
+outside hours; the no-show release and the walk-in drawer both call
+`createBookings` directly. Off by default, on for the public route — the same
+shape as the `leadTimeMin` override in `getDayAvailability`. Asserted in both
+directions, including "still lets the counter seat someone outside hours".
+
+**Why in `createBookings` rather than the route.** Only that function knows how
+long the appointment runs — service plus add-ons plus removal — and it is the
+end that has to clear closing time.
 
 ---
 

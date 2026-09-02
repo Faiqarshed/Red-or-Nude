@@ -1,10 +1,10 @@
 # Known bugs — booking lifecycle and admin access
 
-Found by `tests/lifecycle/`. Not fixed — reported.
+Found by `tests/lifecycle/`. Reported first, fixed on the owner's instruction.
 
 ---
 
-## BUG-LIFE-001 — the dev login bypass is gated on `NODE_ENV`, not on an opt-in  ·  P2
+## BUG-LIFE-001 — the dev login bypass is gated on `NODE_ENV`, not on an opt-in  ·  P2  ·  FIXED 2026-09-03
 
 **Where** `lib/auth/guard.ts:20-35` (`devFallbackStaff`)
 **Test** `tests/lifecycle/status.test.ts` — "hands an unauthenticated caller the
@@ -48,6 +48,16 @@ passes for the wrong reason unless the test stubs `NODE_ENV`.** Both suites that
 touch admin actions do stub it — see `tests/admin/helpers.ts:74-85`, which
 documents this, and `tests/lifecycle/status.test.ts`. Anyone adding a new
 authorization test must do the same or they are asserting nothing.
+
+### The fix, 2026-09-03
+
+Both conditions now have to hold: a non-production build **and**
+`ADMIN_DEV_LOGIN=1`, set by hand. A machine that has not opted in cannot be
+opted into by accident, and forgetting the variable produces a login screen
+rather than an open one. Added to `.env.example` with a warning against setting
+it on a deployed box. The testing consequence below is unchanged and still
+applies — an authorization test that does not stub `NODE_ENV` still asserts
+nothing.
 
 ---
 

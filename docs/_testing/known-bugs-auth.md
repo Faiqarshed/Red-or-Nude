@@ -3,7 +3,7 @@
 Found by `tests/auth/`. Reported first, fixed only on the owner's instruction —
 a test that finds a real bug is never quietly edited to pass. BUG-AUTH-001 was
 fixed on 2026-09-03, in its own commit, after the behaviour had been
-demonstrated and the design agreed. BUG-AUTH-002 stands.
+demonstrated and the design agreed. Both are now fixed.
 
 ---
 
@@ -107,7 +107,7 @@ claimed **already belongs to a verified account**.
 
 ---
 
-## BUG-AUTH-002 — a mistyped phone number is silently truncated  ·  P3
+## BUG-AUTH-002 — a mistyped phone number is silently truncated  ·  P3  ·  FIXED 2026-09-03
 
 **Where** `lib/phone.ts:29-37`
 **Test** `tests/auth/accounts.test.ts` — "silently truncates a phone number with
@@ -121,6 +121,16 @@ worse; refusing would be right.
 
 Low severity on its own. It sharpens BUG-AUTH-001, though — an attacker does not
 need the victim's number exactly, only a string that truncates to it.
+
+### The fix, 2026-09-03
+
+The 9-digit cap now lives only on the *field*. `toNationalDigits` still
+truncates, because PhoneField calls it on every keystroke and a customer must
+see what will be stored. `validateSaudiMobile` no longer inherits that cap: it
+counts the digits actually supplied and returns `length` for ten or more. An API
+caller posting raw JSON that no field ever truncated now gets a 400 instead of a
+different number from the one they sent. `scripts/check-fields.ts` asserted the
+old behaviour and was updated with it.
 
 ---
 

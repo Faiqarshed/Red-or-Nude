@@ -178,6 +178,13 @@ export async function POST(request: Request) {
     customerId: customer?.id ?? null,
     stationId,
     source: "web",
+    // The other half of the start-time guard above. That one refuses the past;
+    // this refuses a moment the branch is not open for — a closed weekday, an
+    // hour before opening, a service that would run past closing, or an Eid
+    // closure. Set here and nowhere else: the counter's own callers reach
+    // createBookings directly and must keep being able to seat somebody into a
+    // slot the public could never have picked.
+    enforceOpeningHours: true,
     // The whole point: a web booking holds the chair but is not a booking until
     // it has been paid for.
     status: "pending",

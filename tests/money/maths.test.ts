@@ -70,30 +70,27 @@ describe("halalas are integers, and no float path exists", () => {
     }
   });
 
-  // @characterization — CWS-5, undocumented, pins behaviour as of 2026-09-02.
-  // halalasToSar deliberately returns a float, and sarToHalalas rounds one back.
-  // The round trip is exact for whole halalas and lossy at the half-halala the
-  // gift-card custom amount can express. See BUG-MONEY-006.
-  it("round-trips whole halalas exactly, and loses the half-halala", () => {
+  // halalasToSar deliberately returns a float and sarToHalalas rounds one back.
+  // The round trip is exact for whole halalas; a half-halala is not
+  // representable in the currency at all and rounds up, the same way every time.
+  it("round-trips whole halalas exactly, and rounds the half-halala up", () => {
     for (const h of [0, 1, 99, 100, 25_000, 199_999, 2_147_483_647]) {
       expect(sarToHalalas(halalasToSar(h))).toBe(h);
     }
-    // Half-halala inputs do not round consistently, because `sar * 100` lands
-    // either side of .5 depending on the IEEE-754 representation of `sar`.
-    // Neighbouring amounts go opposite ways with nothing to distinguish them:
-    //
-    //    1.005 * 100 = 100.49999999999999  -> 100  (down)
-    //    1.015 * 100 = 101.49999999999999  -> 101  (down)
-    //    1.045 * 100 = 104.5               -> 105  (up)
-    //   10.005 * 100 = 1000.5000000000001  -> 1001 (up)
-    //
-    // Harmless while every form is limited to two decimals, which is the only
-    // reason this is a characterization and not a failing test. See
-    // docs/_testing/known-bugs-money.md BUG-MONEY-006.
-    expect(sarToHalalas(1.005)).toBe(100);
-    expect(sarToHalalas(1.015)).toBe(101);
+    // Half-halala inputs round half-UP, consistently. Was BUG-MONEY-006: with a
+    // bare Math.round(sar * 100) these four went 100 / 101 / 105 / 1001 —
+    // neighbouring amounts landing opposite ways because `sar * 100` falls
+    // either side of .5 depending on its IEEE-754 representation. Snapping to
+    // four decimals first discards that error and keeps the real half.
+    expect(sarToHalalas(1.005)).toBe(101);
+    expect(sarToHalalas(1.015)).toBe(102);
     expect(sarToHalalas(1.045)).toBe(105);
     expect(sarToHalalas(10.005)).toBe(1001);
+
+    // The ordinary two-decimal amounts every form actually submits.
+    for (const [sar, halalas] of [[0, 0], [1, 100], [12.34, 1234], [250, 25_000], [99.99, 9_999]] as const) {
+      expect(sarToHalalas(sar), `${sar} SAR`).toBe(halalas);
+    }
   });
 });
 

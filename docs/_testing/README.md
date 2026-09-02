@@ -1,7 +1,7 @@
 # The test suite
 
-`npm test` → `vitest run`. 553 cases across 11 files, against real local
-Postgres. Two of them are `it.fails`, which is deliberate — see Findings.
+`npm test` → `vitest run`. 559 cases across 11 files, against real local
+Postgres. All of them pass: every bug the suite found has been fixed.
 
 ```
 npm test                      # everything
@@ -49,16 +49,20 @@ Where they already cover something, the suites cite them rather than duplicating
 
 ## Findings
 
-Two have been fixed, at the owner's instruction — one fully, one in part. The rest have not.
+All six are fixed. Each was reported first, demonstrated, and fixed in its own commit.
 
-| ID | Sev | What |
-|---|---|---|
-| ~~[BUG-AUTH-001](known-bugs-auth.md)~~ | ~~**P0**~~ | **Fixed 2026-09-03.** Account takeover via an unverified phone number. Phone is now a label: it may claim a guest row, never open an account |
-| [BUG-BOOK-001](known-bugs-booking.md) | P1 | **Partly fixed 2026-09-03.** `POST /api/bookings` trusted `startsAt`. The past is now refused; before-opening and past-closing are still accepted |
-| [BUG-LIFE-001](known-bugs-lifecycle.md) | P2 | The dev login bypass is gated on `NODE_ENV !== "production"`, not an explicit opt-in |
-| [BUG-JOBS-001](known-bugs-jobs.md) | P2 | `staff-codes` was never added to `vercel.json`, so monthly staff codes have never been minted |
-| [BUG-AUTH-002](known-bugs-auth.md) | P3 | A phone number with extra digits is silently truncated and accepted |
-| [BUG-MONEY-006](known-bugs-money.md) | P3 | `sarToHalalas` rounds half-halalas inconsistently — harmless while forms are two-decimal |
+| ID | Sev | What | Fix |
+|---|---|---|---|
+| [BUG-AUTH-001](known-bugs-auth.md) | **P0** | Account takeover: prove any inbox, post the victim's phone number, inherit their row, bookings and points | Phone is a label — it may claim a guest row, never open an account. `setWhere` makes it race-proof |
+| [BUG-BOOK-001](known-bugs-booking.md) | P1 | `POST /api/bookings` trusted `startsAt` — the past, before opening, past closing, closed days and closures all accepted | Past refused at the route; hours and closures via `refuseOutsideHours`, behind a flag only the public route sets |
+| [BUG-LIFE-001](known-bugs-lifecycle.md) | P2 | The dev login bypass switched itself on whenever `NODE_ENV` was not `production` | Needs `ADMIN_DEV_LOGIN=1` as well — asked for, not merely not-prevented |
+| [BUG-JOBS-001](known-bugs-jobs.md) | P2 | `staff-codes` was never in `vercel.json`, so monthly staff codes had never been minted | Scheduled `0 1 1 * *`, the entry its own comment specifies |
+| [BUG-AUTH-002](known-bugs-auth.md) | P3 | A phone number with extra digits was silently truncated and accepted | The cap stays on the field; the validator counts what was actually sent |
+| [BUG-MONEY-006](known-bugs-money.md) | P3 | `sarToHalalas` rounded half-halalas in whichever direction IEEE-754 landed | Snap to four decimals first, then round — consistently half-up |
+
+Six more were found by `/code-review` on this branch — four of them mistakes in
+this work, two pre-existing holes in the test-database safety gate. All fixed;
+see the commit log.
 
 Each `known-bugs-*.md` also has a "not bugs" section recording what was
 investigated and found sound, so the same ground is not walked twice.
@@ -77,20 +81,32 @@ investigated and found sound, so the same ground is not walked twice.
 
 ## Not covered
 
-Honest gaps, in rough priority order:
+Honest gaps, in rough priority order. Nothing here is known to be broken — it is
+simply untested.
 
-- **Reschedule and refill routes** — `lib/cancellation.ts` is covered and the
-  cancel route is, but `/api/my-bookings/reschedule` and `/refill` have no
-  route-level tests.
-- **Promo codes** — `promoDiscount` / `promoRefusal` boundaries, `max_uses`
-  under concurrency, and the window edges. `scripts/check-promo.ts` covers part.
-- **Reviews** — the `reviews_booking_unique` race under two concurrent "End"
-  presses, token IDOR, and submit-twice.
-- **Assignment** — `chooseTechnician` / `planAssignments` fairness and time-off
-  handling. `scripts/check-assign.ts` covers part.
-- **Gift card purchase and the station QR flow** end to end.
-- **Localization** — no test asserts every `ar` key has an `en` twin.
-- **RSC payload leaks** (Phase 6.6) and **cache poisoning** (6.7) — neither was
-  reached.
-- **Mutation testing.** Coverage says which lines ran; nothing here says which
+- **Reschedule and refill routes** — `lib/cancellation.ts` and the cancel route
+  are covered; `/api/my-bookings/reschedule` and `/refill` have no route-level
+  tests.
+- **Promo codes** — `promoDiscount` / `promoRefusal` boundaries, `max_uses` under
+  concurrency, window edges. `scripts/check-promo.ts` covers part.
+- **Reviews** — the `reviews_booking_unique` race under two concurrent End
+  presses, token IDOR, submit-twice.
+- **Assignment** — `chooseTechnician` / `planAssignments` fairness and time-off.
+  `scripts/check-assign.ts` covers part.
+- **Gift card purchase and the station QR flow** end to end. The QR flow's
+  timing is now covered at the route; the rest of it is not.
+- **Localization** — nothing asserts every `ar` key has an `en` twin.
+- **RSC payload leaks** (Phase 6.6) and **cache poisoning** (6.7) — not reached.
+- **Mutation testing.** Coverage says which lines ran; nothing says which
   assertions would survive a mutant.
+
+## The one thing left open on purpose
+
+A phone number attached to a **guest** row — someone who gave it at the desk and
+never made an account — can still be claimed by a stranger, who inherits that
+guest's walk-in bookings. No account, no login, no points.
+
+It is the same behaviour that lets a real walk-in keep her history when she signs
+up online later, which is why it was left. Closing it means dropping the guest
+merge, requiring staff confirmation, or verifying the phone by SMS. See
+BUG-AUTH-001.

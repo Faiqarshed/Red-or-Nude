@@ -17,13 +17,26 @@ export type SessionStaff = {
 };
 
 /**
- * Local dev only (`next dev`; never true for `next start`/deployed builds):
- * stand in for a real session so the login screen isn't required. Picks the
- * seeded CEO account (falling back to any active staff row) so capability
- * checks still exercise real RBAC instead of an all-access shortcut.
+ * Stand in for a real session so `next dev` doesn't need the login screen.
+ * Picks the seeded CEO account (falling back to any active staff row) so
+ * capability checks still exercise real RBAC instead of an all-access shortcut.
+ *
+ * **Asked for, not merely not-prevented.** This used to switch itself on
+ * whenever `NODE_ENV !== "production"` and nothing else. That reads as "local
+ * dev only" and is not the same thing: `next start` sets NODE_ENV itself, so
+ * the guarantee belonged to the Next CLI rather than to this code. Anything
+ * running the app another way — a staging box with the variable unset, a Docker
+ * image with its own entrypoint, a plain `node` server — served a full admin
+ * panel to anyone who asked, with no login and no error.
+ *
+ * Now it takes both: a non-production build AND `ADMIN_DEV_LOGIN=1` set by
+ * hand. A machine that has not opted in cannot be opted in by accident, and the
+ * failure mode of forgetting the variable is a login screen rather than an open
+ * one. See .env.example.
  */
 async function devFallbackStaff(): Promise<SessionStaff | null> {
   if (process.env.NODE_ENV === "production") return null;
+  if (process.env.ADMIN_DEV_LOGIN !== "1") return null;
 
   const [owner] = await db.select().from(staff).where(eq(staff.role, "ceo")).limit(1);
   const [row] = owner

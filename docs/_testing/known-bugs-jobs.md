@@ -1,10 +1,10 @@
 # Known bugs — scheduled jobs
 
-Found by `tests/jobs/`. Not fixed — reported.
+Found by `tests/jobs/`. Reported first, fixed on the owner's instruction.
 
 ---
 
-## BUG-JOBS-001 — `staff-codes` is never scheduled, so no staff code is ever issued  ·  P2
+## BUG-JOBS-001 — `staff-codes` is never scheduled, so no staff code is ever issued  ·  P2  ·  FIXED 2026-09-03
 
 **Where** `vercel.json:4` versus `app/api/cron/staff-codes/route.ts:3-4`
 **Test** `tests/jobs/cron-auth.test.ts` — "schedules staff-codes on the 1st, as
@@ -29,6 +29,15 @@ do.
 configuration is not a test's call, and because Vercel's Hobby plan allows a
 limited number of cron entries — whoever adds it should check that budget
 against `tech-reminders` below.
+
+### The fix, 2026-09-03
+
+The entry the route's comment specifies, added to `vercel.json` verbatim:
+`{ "path": "/api/cron/staff-codes", "schedule": "0 1 1 * *" }`. The test asserts
+both the entry and the exact schedule, so the two cannot drift apart again.
+
+For whoever manages the Vercel plan: that is the second cron entry, and
+`tech-reminders` still wants a quarter-hourly run that no plan tier offers.
 
 ---
 

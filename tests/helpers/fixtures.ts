@@ -81,8 +81,15 @@ export class Fixtures {
     return row;
   }
 
-  /** A branch with a full week of 10:00–22:00 hours and `stationCount` chairs. */
-  async branch(opts: { stationCount?: number; name?: string } = {}) {
+  /**
+   * A branch with a full week of hours and `stationCount` chairs.
+   *
+   * Opens 10:00–22:00 by default, which is what the salon actually does. Pass
+   * `alwaysOpen` for a case whose start time is `Date.now()` — the suite runs at
+   * whatever hour it runs, and a test asserting something else entirely should
+   * not go red at two in the morning because the branch is legitimately shut.
+   */
+  async branch(opts: { stationCount?: number; name?: string; alwaysOpen?: boolean } = {}) {
     const [row] = await db
       .insert(branches)
       .values({
@@ -96,7 +103,12 @@ export class Fixtures {
     for (let weekday = 0; weekday < 7; weekday++) {
       const [h] = await db
         .insert(branchHours)
-        .values({ branchId: row.id, weekday, opens: "10:00:00", closes: "22:00:00" })
+        .values({
+          branchId: row.id,
+          weekday,
+          opens: opts.alwaysOpen ? "00:00:00" : "10:00:00",
+          closes: opts.alwaysOpen ? "23:59:00" : "22:00:00",
+        })
         .returning();
       this.track(branchHours, h);
     }

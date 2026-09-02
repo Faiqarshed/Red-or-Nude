@@ -155,8 +155,9 @@ describe("the set of scheduled jobs", () => {
     // "NOT scheduled in vercel.json. It wants a quarter-hourly run, and
     // Vercel's Hobby plan refuses any cron more frequent than once a day."
     "tech-reminders": "deliberately-not",
-    // The odd one out: its comment gives the exact entry to add, and the entry
-    // is not there. See docs/_testing/known-bugs-jobs.md BUG-JOBS-001.
+    // "Schedule this for the 1st of the month in vercel.json" — added
+    // 2026-09-03, closing BUG-JOBS-001. Until then the monthly staff discount
+    // codes had never been minted, and nothing errored to say so.
     "staff-codes": "scheduled",
   };
 
@@ -170,23 +171,17 @@ describe("the set of scheduled jobs", () => {
     const actual = Object.fromEntries(
       JOBS.map((j) => [j, scheduled.has(`/api/cron/${j}`) ? "scheduled" : "deliberately-not"]),
     );
-    // staff-codes is expected to differ until BUG-JOBS-001 is closed, so this
-    // asserts the two that are unambiguous and leaves the finding to the case
-    // below rather than failing the whole file on a known gap.
-    expect(actual["assign-day"]).toBe(SCHEDULING["assign-day"]);
-    expect(actual["refill-reminders"]).toBe(SCHEDULING["refill-reminders"]);
-    expect(actual["tech-reminders"]).toBe(SCHEDULING["tech-reminders"]);
+    expect(actual).toEqual(SCHEDULING);
   });
 
-  // BUG-JOBS-001. staff-codes carries the vercel.json entry to add, in its own
-  // header comment, and it was never added — so the salon's monthly ~90% staff
-  // codes are never minted. Marked fails so adding the entry turns it green.
-  it.fails("schedules staff-codes on the 1st, as its comment instructs", async () => {
+  it("schedules staff-codes on the 1st, as its comment instructs", async () => {
     const { readFileSync } = await import("node:fs");
     const vercel = JSON.parse(readFileSync("vercel.json", "utf8")) as {
       crons?: Array<{ path: string; schedule: string }>;
     };
     const entry = (vercel.crons ?? []).find((c) => c.path === "/api/cron/staff-codes");
     expect(entry, "staff-codes has no cron entry, so no staff code is ever issued").toBeDefined();
+    // The month boundary the route's own comment specifies.
+    expect(entry!.schedule).toBe("0 1 1 * *");
   });
 });

@@ -265,7 +265,9 @@ describe("times a booking must never be accepted at", () => {
   it("still accepts a slot chosen seconds ago and submitted just after it", async () => {
     // The grace. A customer who picks 14:00 and confirms at 14:00:03 had an
     // honestly available slot; refusing that is a bug nobody can reproduce.
-    const branch = await fx.branch({ stationCount: 1 });
+    // alwaysOpen because the start time here is the real clock, and this case
+    // is about the grace, not about whether the salon is open at that hour.
+    const branch = await fx.branch({ stationCount: 1, alwaysOpen: true });
     const svc = await fx.service({ durationMin: 60 });
     const { POST } = await import("@/app/api/bookings/route");
     const { post } = await import("../helpers/app");
@@ -310,7 +312,7 @@ describe("times a booking must never be accepted at", () => {
     // chair — and nothing refreshes it while the customer picks a service and
     // fills in the payment form. A two-minute grace refused real customers
     // standing in the salon; ten minutes stale is an ordinary checkout.
-    const branch = await fx.branch({ stationCount: 1 });
+    const branch = await fx.branch({ stationCount: 1, alwaysOpen: true });
     const svc = await fx.service({ durationMin: 60 });
     const { POST } = await import("@/app/api/bookings/route");
     const { post, read } = await import("../helpers/app");
@@ -386,33 +388,108 @@ describe("times a booking must never be accepted at", () => {
     expect(await liveBookings(branch.id)).toHaveLength(0);
   });
 
-  /**
-   * STILL OPEN — the other half of BUG-BOOK-001.
-   *
-   * Opening hours, closures and an appointment running past closing are the
-   * same hole: the route trusts the start time. Only the past case is guarded
-   * so far, because checking the rest safely means asking the availability
-   * engine, and the station QR add-on books at a projected finish time that
-   * may not sit on the engine's slot grid — a careless check there would break
-   * a real flow to close a smaller hole.
-   */
-  it.fails("refuses the two start times outside the branch's opening hours", async () => {
+  it("refuses the start times outside the branch's opening hours", async () => {
+    // The other half of BUG-BOOK-001. Checked against branch_hours and closures
+    // rather than the slot grid, so the station QR add-on — which books at a
+    // projected finish time that sits on no grid — is held to the same rule
+    // without being refused for missing it.
     const branch = await fx.branch({ stationCount: 1 });
     const svc = await fx.service({ durationMin: 60 });
     const long = await fx.service({ durationMin: 90 });
+    const { POST } = await import("@/app/api/bookings/route");
+    const { post, read } = await import("../helpers/app");
 
-    const results = {
-      // The fixture branch opens 10:00–22:00 Riyadh; 04:00 UTC is 07:00 local.
-      beforeOpening: await book(branch.id, svc.id, "2030-03-02T04:00:00.000Z", "0530000018"),
-      // 21:30 local + 90 minutes runs past the 22:00 close.
-      pastClosing: await book(branch.id, long.id, "2030-03-02T18:30:00.000Z", "0530000019"),
-    };
+    const send = async (serviceId: string, startsAt: string, phone: string) =>
+      read(
+        await POST(
+          post("http://x/api/bookings", {
+            branchId: branch.id,
+            startsAt,
+            members: [{ serviceId, addonIds: [] }],
+            customer: { name: "Out Of Hours", phone, email: "o@example.test" },
+          }),
+        ),
+      );
+
+    // The fixture branch opens 10:00–22:00 Riyadh; 04:00 UTC is 07:00 local.
+    const early = await send(svc.id, "2030-03-02T04:00:00.000Z", "0530000030");
+    // 21:30 local + 90 minutes runs past the 22:00 close. The appointment must
+    // *finish* before closing, not merely start before it.
+    const late = await send(long.id, "2030-03-02T18:30:00.000Z", "0530000031");
     await fx.claimBookingsOf(branch.id);
 
-    expect({
-      beforeOpening: results.beforeOpening.ok,
-      pastClosing: results.pastClosing.ok,
-    }).toEqual({ beforeOpening: false, pastClosing: false });
+    expect(early.status).toBe(400);
+    expect(early.body.error).toBe("outside-hours");
+    expect(late.status).toBe(400);
+    expect(late.body.error, "an appointment running past closing was sold").toBe("outside-hours");
+    expect(await liveBookings(branch.id), "an out-of-hours booking was written").toHaveLength(0);
+  });
+
+  it("refuses a day the branch is shut", async () => {
+    const branch = await fx.branch({ stationCount: 1 });
+    const svc = await fx.service({ durationMin: 60 });
+    const { branchHours } = await import("@/lib/db/schema");
+    // weekday 0 = Saturday, and 2030-03-02 is a Saturday.
+    await db
+      .update(branchHours)
+      .set({ closed: true })
+      .where(and(eq(branchHours.branchId, branch.id), eq(branchHours.weekday, 0)));
+
+    const { POST } = await import("@/app/api/bookings/route");
+    const { post, read } = await import("../helpers/app");
+    const { status, body } = await read(
+      await POST(
+        post("http://x/api/bookings", {
+          branchId: branch.id,
+          startsAt: SLOT,
+          members: [{ serviceId: svc.id, addonIds: [] }],
+          customer: { name: "Closed Day", phone: "0530000032", email: "c@example.test" },
+        }),
+      ),
+    );
+    await fx.claimBookingsOf(branch.id);
+    expect({ status, error: body.error }).toEqual({ status: 400, error: "closed-day" });
+  });
+
+  it("refuses a booking inside a closure, including an all-branch one", async () => {
+    const branch = await fx.branch({ stationCount: 1 });
+    const svc = await fx.service({ durationMin: 60 });
+    const { closures } = await import("@/lib/db/schema");
+    const [eid] = await db
+      .insert(closures)
+      .values({
+        // Null branch = every branch. Eid, not one salon's maintenance day.
+        branchId: null,
+        startsAt: new Date("2030-03-02T09:00:00.000Z"),
+        endsAt: new Date("2030-03-02T15:00:00.000Z"),
+      })
+      .returning();
+    fx.claim(closures, eid.id);
+
+    const { POST } = await import("@/app/api/bookings/route");
+    const { post, read } = await import("../helpers/app");
+    const { status, body } = await read(
+      await POST(
+        post("http://x/api/bookings", {
+          branchId: branch.id,
+          startsAt: SLOT, // 11:00 UTC, inside the closure
+          members: [{ serviceId: svc.id, addonIds: [] }],
+          customer: { name: "Eid", phone: "0530000033", email: "e@example.test" },
+        }),
+      ),
+    );
+    await fx.claimBookingsOf(branch.id);
+    expect({ status, error: body.error }).toEqual({ status: 400, error: "closure" });
+  });
+
+  it("still lets the counter seat someone outside hours", async () => {
+    // enforceOpeningHours is off by default, so the admin walk-in path and the
+    // no-show release keep working. This is the flag's whole reason for being.
+    const branch = await fx.branch({ stationCount: 1 });
+    const svc = await fx.service({ durationMin: 60 });
+    const atDawn = await book(branch.id, svc.id, "2030-03-02T04:00:00.000Z", "0530000034");
+    await fx.claimBookingsOf(branch.id);
+    expect(atDawn.ok, "the counter lost the ability to seat outside hours").toBe(true);
   });
 
   it("the availability engine, asked directly, offers none of them", async () => {

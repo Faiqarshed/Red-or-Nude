@@ -1,10 +1,10 @@
 # Known bugs — money
 
-Found by `tests/money/`. Not fixed — reported.
+Found by `tests/money/`. Reported first, fixed on the owner's instruction.
 
 ---
 
-## BUG-MONEY-006 — half-halala amounts round inconsistently  ·  P3
+## BUG-MONEY-006 — half-halala amounts round inconsistently  ·  P3  ·  FIXED 2026-09-03
 
 **Where** `lib/money.ts:9` — `sarToHalalas = (sar) => Math.round(sar * 100)`
 **Test** `tests/money/maths.test.ts` — "round-trips whole halalas exactly, and
@@ -30,6 +30,14 @@ an unpredictable direction.
 The exact fix is `Math.round((sar * 100).toFixed(2) as unknown as number)` or,
 better, parsing the decimal string rather than the float. Not applied: it is a
 source change, and the money path is not somewhere to make an unrequested one.
+
+### The fix, 2026-09-03
+
+`Math.round(Number((sar * HALALAS_PER_SAR).toFixed(4)))`. Snapping to four
+decimals first discards the representation error while keeping the real half, so
+all four rows above round up and the rule is the same rule every time. Four
+decimals rather than two because the input is riyals — two would re-round the
+value being converted rather than clean up the multiplication.
 
 ---
 

@@ -279,11 +279,12 @@ describe("POST /api/account/register", () => {
     }
   });
 
-  // @characterization — lib/phone.ts:26 says trailing digits past nine are
-  // "dropped rather than silently reordered". Dropping them is still silent:
-  // a mistyped extra digit registers a *different* number without complaint,
-  // and that number is what an OTP would be sent to. See BUG-AUTH-002.
-  it("silently truncates a phone number with extra digits on the end", async () => {
+  it("refuses a phone number with extra digits rather than truncating it", async () => {
+    // Was BUG-AUTH-002. toNationalDigits caps at nine for the *field*, so typing
+    // an eleventh digit does nothing and the customer sees what will be stored.
+    // The validator no longer inherits that cap: an API caller posts raw JSON no
+    // field ever truncated, and judging it on the first nine silently registered
+    // a different number from the one sent — the one the salon would ring.
     const { POST } = await import("@/app/api/account/register/route");
     const res = await POST(
       post(REGISTER, {
@@ -292,10 +293,10 @@ describe("POST /api/account/register", () => {
         phone: "05120000119999",
       }),
     );
-    expect(res.status).toBe(200);
-    const [row] = await db.select().from(customers).where(eq(customers.phone, "0512000011"));
-    fx.claim(customers, row.id);
-    expect(row.phone).toBe("0512000011");
+    expect(res.status).toBe(400);
+
+    const rows = await db.select().from(customers).where(eq(customers.phone, "0512000011"));
+    expect(rows, "a truncated number was registered anyway").toHaveLength(0);
   });
 
   it("refuses malformed JSON and a missing name", async () => {
