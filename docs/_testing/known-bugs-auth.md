@@ -6,12 +6,13 @@ patched in the same change that found it.
 
 ---
 
-## BUG-AUTH-001 — account takeover via the register route  ·  **P0**
+## BUG-AUTH-001 — account takeover via the register route  ·  **P0**  ·  FIXED 2026-09-03
 
-**Where** `app/api/account/register/route.ts:74-101`
+**Where** `app/api/account/register/route.ts:70-125`
 **Test** `tests/auth/accounts.test.ts` — "refuses a phone whose row already has a
-different verified address" (`it.fails`), with the current behaviour pinned by
-"today, that same request takes the account over".
+different verified address", plus three more covering the untouched victim row,
+the withheld session cookie, and two signups racing for one guest number.
+**Demo** `npx tsx --conditions=react-server scripts/prove-takeover.ts`
 
 ### The attack
 
@@ -57,6 +58,44 @@ succeeds, nothing throws, and the 409 is unreachable by this path.
 
 The pre-flight check above it (`already-registered`, line 62) asks whether the
 *attacker's* address is taken. It never asks what the phone's row already is.
+
+### The fix, 2026-09-03
+
+The phone number is treated as a **label**, not a key. Nothing on the route
+proves the caller owns it — they typed it — so it may claim a guest row and may
+never open a row that already belongs to somebody.
+
+Two parts, because a check alone would race:
+
+1. Before the upsert, refuse when the number already belongs to a row with
+   `email_verified_at` set. This produces the `phone-in-use` 409 that was
+   already written and unreachable.
+2. `setWhere: isNull(customers.emailVerifiedAt)` on the `onConflictDoUpdate`.
+   Postgres evaluates it against the conflicting row while holding it, so two
+   concurrent signups for one number cannot both pass. When it declines,
+   nothing is returned and the route answers 409 rather than dereferencing an
+   undefined row.
+
+**When SMS OTP lands** (brief §2.8 calls it a later upgrade) this inverts and
+three things must move together, or the hole reopens facing the other way. They
+are written out in full in the route's own comment: the check follows whichever
+channel was *proved* rather than following the phone column; an account must
+always keep at least one proved channel, so a recycled number can only be
+released from an account that has a verified address; and the unproved channel
+returns to being a label, reserving nothing, because locking one lets a stranger
+squat somebody's number.
+
+### Still open — the guest row
+
+A number attached to a *guest* row (someone who gave it at the desk and never
+made an account) can still be claimed by a stranger, who inherits that guest's
+walk-in bookings. Much smaller than the takeover — no account, no login, no
+sign-in stolen — and it is the same behaviour that makes the legitimate case
+work: a walk-in who later signs up online keeps her history.
+
+Three ways to close it if it ever matters: drop the guest merge entirely
+(costs the feature), require staff confirmation to merge, or verify the phone
+by SMS. Deliberately left as-is.
 
 ### Note
 

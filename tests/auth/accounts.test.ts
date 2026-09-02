@@ -145,11 +145,12 @@ describe("POST /api/account/register", () => {
    * It cannot see one row's address being changed to a free one, so nothing
    * throws and the 409 is never reached.
    *
-   * Marked `fails` deliberately: it asserts the behaviour the comment promises,
-   * so the day the guard lands this test goes green and the fix is visible in
-   * the diff rather than silent.
+   * FIXED 2026-09-03: the route now asks whether the number already belongs to
+   * a verified account before the upsert, and `setWhere` makes the update
+   * itself refuse an account row so the check cannot be raced. This test was
+   * `it.fails` until then.
    */
-  it.fails("refuses a phone whose row already has a different verified address", async () => {
+  it("refuses a phone whose row already has a different verified address", async () => {
     const victim = await fx.customer({
       verified: true,
       name: "Victim",
@@ -174,10 +175,9 @@ describe("POST /api/account/register", () => {
     expect(row.name).toBe("Victim");
   });
 
-  // @characterization — pins the takeover as it behaves on 2026-09-02, so the
-  // register route is not silently changed in some third direction while
-  // BUG-AUTH-001 is open. Delete this when the test above goes green.
-  it("today, that same request takes the account over", async () => {
+  it("leaves the victim's row untouched when it refuses", async () => {
+    // A 409 is not enough on its own — the row is what matters. Re-read every
+    // field the takeover used to overwrite.
     const victim = await fx.customer({
       verified: true,
       name: "Victim",
@@ -194,12 +194,56 @@ describe("POST /api/account/register", () => {
         }),
       ),
     );
-    expect({ status, body }).toEqual({ status: 200, body: { ok: true } });
+    expect({ status, body }).toEqual({ status: 409, body: { error: "phone-in-use" } });
 
     const [row] = await db.select().from(customers).where(eq(customers.id, victim.id));
-    expect(row.email).toBe("attacker6@example.test");
-    expect(row.name).toBe("Attacker");
-    expect(row.emailVerifiedAt).not.toBeNull();
+    expect(row.name).toBe("Victim");
+    expect(row.email).toBe("victim6@example.test");
+    expect(row.emailVerifiedAt?.getTime()).toBe(victim.emailVerifiedAt?.getTime());
+  });
+
+  it("hands out no session cookie when it refuses", async () => {
+    // The takeover's real prize was the cookie. Refusing without withholding it
+    // would be no fix at all.
+    await fx.customer({ verified: true, phone: "0512000009", email: "cookie@example.test" });
+    const { POST } = await import("@/app/api/account/register/route");
+    const res = await POST(
+      post(REGISTER, {
+        ticket: await ticketFor("nocookie@example.test"),
+        name: "Attacker",
+        phone: "0512000009",
+      }),
+    );
+    expect(res.status).toBe(409);
+    expect(res.headers.get("set-cookie"), "a refused signup was still signed in").toBeNull();
+  });
+
+  it("survives two signups racing for the same guest number", async () => {
+    // The SELECT above can be raced: both callers read "no account here". The
+    // setWhere on the upsert is what actually decides it, so exactly one may win
+    // and the loser must not overwrite the winner.
+    await fx.customer({ phone: "0512000010", name: "Walk-in Guest", email: null });
+
+    const { POST } = await import("@/app/api/account/register/route");
+    const [a, b] = await Promise.all([
+      POST(post(REGISTER, {
+        ticket: await ticketFor("racer-a@example.test"),
+        name: "Racer A",
+        phone: "0512000010",
+      })),
+      POST(post(REGISTER, {
+        ticket: await ticketFor("racer-b@example.test"),
+        name: "Racer B",
+        phone: "0512000010",
+      })),
+    ]);
+
+    const statuses = [a.status, b.status].sort();
+    expect(statuses, "both racers were given the same number").toEqual([200, 409]);
+
+    const rows = await db.select().from(customers).where(eq(customers.phone, "0512000010"));
+    expect(rows, "the race split one number across two rows").toHaveLength(1);
+    expect(["racer-a@example.test", "racer-b@example.test"]).toContain(rows[0].email);
   });
 
   it("ignores privileged columns posted alongside the profile", async () => {

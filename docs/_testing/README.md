@@ -1,7 +1,7 @@
 # The test suite
 
-`npm test` → `vitest run`. 549 cases across 11 files, against real local
-Postgres. Three of them are `it.fails`, which is deliberate — see Findings.
+`npm test` → `vitest run`. 551 cases across 11 files, against real local
+Postgres. Two of them are `it.fails`, which is deliberate — see Findings.
 
 ```
 npm test                      # everything
@@ -36,7 +36,7 @@ Where they already cover something, the suites cite them rather than duplicating
 
 | Area | File | Cases | Covers |
 |---|---|---|---|
-| auth | `tests/auth/accounts.test.ts` | 22 | register / verify / otp, signup tickets, session salt separation, blocking |
+| auth | `tests/auth/accounts.test.ts` | 24 | register / verify / otp, signup tickets, session salt separation, blocking |
 | booking | `tests/booking/concurrency.test.ts` | 13 | the `reserveStations` row lock, slot boundaries, capacity |
 | lifecycle | `tests/lifecycle/ownership.test.ts` | 19 | `refuseBookingAction`, the cancellation window, the open read |
 | lifecycle | `tests/lifecycle/status.test.ts` | 13 | who may set which status, check-in guard, the floor's three stamps |
@@ -49,11 +49,11 @@ Where they already cover something, the suites cite them rather than duplicating
 
 ## Findings
 
-Nothing below has been fixed.
+One has been fixed, at the owner's instruction. The rest have not.
 
 | ID | Sev | What |
 |---|---|---|
-| [BUG-AUTH-001](known-bugs-auth.md) | **P0** | Account takeover: prove any inbox, post the victim's phone number, inherit their row, bookings and points |
+| ~~[BUG-AUTH-001](known-bugs-auth.md)~~ | ~~**P0**~~ | **Fixed 2026-09-03.** Account takeover via an unverified phone number. Phone is now a label: it may claim a guest row, never open an account |
 | [BUG-BOOK-001](known-bugs-booking.md) | P1 | `POST /api/bookings` trusts `startsAt` — the past, before opening, and past closing are all accepted |
 | [BUG-LIFE-001](known-bugs-lifecycle.md) | P2 | The dev login bypass is gated on `NODE_ENV !== "production"`, not an explicit opt-in |
 | [BUG-JOBS-001](known-bugs-jobs.md) | P2 | `staff-codes` was never added to `vercel.json`, so monthly staff codes have never been minted |
