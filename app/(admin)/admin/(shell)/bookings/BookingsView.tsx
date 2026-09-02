@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
@@ -23,6 +23,7 @@ import {
   scoreTone,
 } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { statusPulse } from "@/lib/booking-pulse";
 import { cn } from "@/lib/cn";
 import { UTC_OFFSET_HOURS, localTime, riyadhDateKey } from "@/lib/time";
 import { pick } from "@/lib/localized";
@@ -297,7 +298,9 @@ function BookingTable({
                         // the pair reads as a block; the rule under the party
                         // stays, and so does every rule between singles.
                         last ? "border-b border-black/[0.04] last:border-0" : "",
-                        size > 1 && "bg-sky/[0.035]",
+                        // Status colour beats the party tint; the rail and badge
+                        // still mark the group.
+                        statusPulse(b) || (size > 1 && "bg-sky/[0.035]"),
                       )}
                     >
                       <td
@@ -396,6 +399,21 @@ export default function BookingsView({
   // The salon's today, not the browser's: a receptionist on a laptop still set
   // to another timezone must not be sent to yesterday's board.
   const todayKey = riyadhDateKey(new Date());
+
+  // The colours change on other people's screens, and this page is
+  // force-dynamic, so a re-render is the whole mechanism. Two guards the front
+  // desk's copy does not need: a past date never changes, and a hidden tab is
+  // ~4,300 overnight queries painting pixels nobody is looking at.
+  //
+  // ponytail: polling, not push. A subscription earns its keep only if the
+  // salon ever wants this faster than 20 seconds.
+  useEffect(() => {
+    if (date !== todayKey) return;
+    const id = setInterval(() => {
+      if (!document.hidden) router.refresh();
+    }, 20_000);
+    return () => clearInterval(id);
+  }, [date, todayKey, router]);
 
   const go = (next: { date?: string; branch?: string }) => {
     const sp = new URLSearchParams(params.toString());
@@ -701,17 +719,18 @@ export default function BookingsView({
                             style={{ top, height: Math.max(height, 22) }}
                             className={cn(
                               "absolute inset-x-1 overflow-hidden rounded-lg border px-2 py-1 text-start transition-shadow hover:shadow-md",
-                              b.status === "completed"
-                                ? "border-[#1f7a4d]/30 bg-[#1f7a4d]/10"
-                                : b.status === "in_progress"
-                                  ? "border-sky/40 bg-sky/15"
+                              // `||` rather than another branch in the chain, so
+                              // only one background utility ever lands.
+                              statusPulse(b) ||
+                                (b.status === "completed"
+                                  ? "border-[#1f7a4d]/30 bg-[#1f7a4d]/10"
                                   // A pending booking is a chair held for someone
                                   // who has not paid. It occupies the grid exactly
                                   // like a confirmed one, so until now the only way
                                   // to tell them apart was to open the drawer.
                                   : b.status === "pending"
                                     ? "border-dashed border-[#b7791f]/50 bg-[#fdf6e7]"
-                                    : "border-red/25 bg-red/[0.07]",
+                                    : "border-red/25 bg-red/[0.07]"),
                               // A party is two blocks in two chair columns that
                               // the grid cannot join. A ring around both, in a
                               // colour no status uses, is what makes them read

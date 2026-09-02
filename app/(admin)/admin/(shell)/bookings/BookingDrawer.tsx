@@ -5,6 +5,7 @@ import { CalendarClock, ChevronRight, Phone, Trash2, Users } from "lucide-react"
 import { Badge, Button, scoreTone } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { serviceClock } from "@/lib/booking-clock";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
 import { formatCountdown, formatDuration, localTime } from "@/lib/time";
@@ -126,16 +127,9 @@ export function BookingFacts({ booking, now }: { booking: BookingRow; now: numbe
   const { t, lang } = useAdminI18n();
   const f = t.frontDesk;
 
-  const startedMs = booking.startedAt ? new Date(booking.startedAt).getTime() : null;
-  // Finished is the settled figure — Start to Finish, not counting however long
-  // the ticket then sat waiting for reception to close it. Still running, it
-  // counts up off `now`, so an overrunning service is visible while there is
-  // still time to do something about it.
-  const tookMs =
-    startedMs !== null && booking.finishedAt
-      ? new Date(booking.finishedAt).getTime() - startedMs
-      : null;
-  const runningMs = startedMs !== null && !booking.finishedAt ? now - startedMs : null;
+  // Check-in to finish — the visit, not the technician's working time. See
+  // lib/booking-clock.ts for why those are deliberately different numbers.
+  const { runningMs, tookMs } = serviceClock(booking, now);
   const remainingMs = runningMs === null ? null : new Date(booking.endsAt).getTime() - now;
 
   const row = (label: string, value: string | null | undefined): [string, string][] =>
