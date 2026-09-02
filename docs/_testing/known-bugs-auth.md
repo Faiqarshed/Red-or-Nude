@@ -1,8 +1,9 @@
 # Known bugs — auth and accounts
 
-Found by `tests/auth/`. Nothing here has been fixed: the skill's rule is that a
-test which finds a real bug is reported, not quietly edited to pass, and not
-patched in the same change that found it.
+Found by `tests/auth/`. Reported first, fixed only on the owner's instruction —
+a test that finds a real bug is never quietly edited to pass. BUG-AUTH-001 was
+fixed on 2026-09-03, in its own commit, after the behaviour had been
+demonstrated and the design agreed. BUG-AUTH-002 stands.
 
 ---
 
