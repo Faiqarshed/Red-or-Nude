@@ -77,24 +77,14 @@ export const SETTING_DEFAULTS = {
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
 
 /**
- * Every stored setting, cached in the process for a minute.
+ * Every stored setting — the whole twenty-row table, not the keys asked for, so
+ * the three or four callers in one render share a read. See docs/PERFORMANCE.md.
  *
- * The whole table, not the keys asked for. It is about twenty rows and it is
- * read on nearly every request — often three or four times in one render, by a
- * page, its data loader and sweepNoShows, each asking for different keys and so
- * each paying its own round trip. Neon's query insights had this at 245 calls
- * across a short session: every one of them 0ms of database work and a full
- * trip to Frankfurt.
+ * Not `unstable_cache`: next/cache reaches into React's server-only build,
+ * which throws outside the Next runtime, and half of scripts/check-*.ts reaches
+ * this file through lib/bookings. Do not "fix" this back.
  *
- * A plain map rather than `unstable_cache`, deliberately. next/cache reaches
- * into React's server-only build, which throws the moment anything outside the
- * Next runtime imports it — and half of scripts/check-*.ts reaches this file
- * through lib/bookings. A framework-free cache keeps the test suite runnable
- * and costs four lines.
- *
- * ponytail: per-instance and lost on cold start, exactly like lib/throttle.ts.
- * Nothing writes this table outside the seed, so the only staleness is a
- * hand-edited row taking up to a minute to land.
+ * ponytail: per-instance, lost on cold start, and nothing writes this table.
  */
 const TTL_MS = 60_000;
 let cache: { rows: { key: string; value: unknown }[]; at: number } | null = null;

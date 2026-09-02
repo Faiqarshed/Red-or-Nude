@@ -1,7 +1,7 @@
 // Shell layout: everything under /admin except the login page.
 // requireStaff() is the real gate — middleware only redirects anonymous hits.
 
-import { listBranches } from "@/lib/branches";
+import { listBranches } from "@/lib/admin/branch-scope";
 import { requireStaff } from "@/lib/auth/guard";
 import Shell from "@/components/admin/Shell";
 import { signOutAction } from "../actions";

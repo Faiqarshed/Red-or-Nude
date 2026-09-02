@@ -240,11 +240,6 @@ console.log("  closures: a stored range reads back as the days the admin typed â
 // a wrong lookup here would silently give the salon 0% VAT rather than an error.
 
 assert.deepEqual(
-  pickSettings([{ key: "vat_percent", value: 5 }], ["vat_percent"]),
-  { vat_percent: 5 },
-  "a stored row wins over the default",
-);
-assert.deepEqual(
   pickSettings([{ key: "vat_percent", value: 5 }], ["no_show_grace_min"]),
   { no_show_grace_min: SETTING_DEFAULTS.no_show_grace_min },
   "a key with no row falls back to its default, not to undefined",

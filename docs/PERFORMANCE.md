@@ -87,7 +87,9 @@ list for the top bar on every admin page render, and `branchScope` reads it
 again for the filter. Two round trips per page for a list that changes when the
 company opens a third salon.
 
-`lib/branches.ts` now holds one cached loader and all three callers use it.
+`lib/admin/branch-scope.ts` now holds one cached loader and both callers use
+it. It went in as its own `lib/branches.ts` first; that was a module existing to
+hold a single function, next door to the one that already owned the concept.
 
 ### `/admin/bookings` stopped reading every add-on ever sold
 
@@ -100,9 +102,15 @@ survived this long. It is also linear in the salon's lifetime: it never gets
 faster, only slower, and the day it becomes a problem is a day when nothing has
 changed and everything is suddenly slow.
 
-Now bounded by a subquery over the same branch and day the page already
-filtered by. A subquery rather than a second `await` on the booking ids, so it
-still runs beside the other reads instead of waiting a round trip for them.
+Now bounded to the ids of the day just read, the way `front-desk/data.ts`
+already did it.
+
+This was first written as a subquery inside the existing `Promise.all`, which
+saved a round trip by not waiting for those ids. It was reverted: the subquery
+had to restate the branch-and-day predicate the main query three lines above
+already had, and two copies of a filter drift apart the first time someone
+changes one. A round trip is about a millisecond once the functions sit in
+`fra1`; a screen quietly labelling the wrong day is not worth saving it.
 
 `booking_addons` needs no new index for this: `booking_id` is already the
 leading column of its composite primary key.

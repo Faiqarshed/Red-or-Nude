@@ -32,10 +32,7 @@ const query = z.object({
 });
 
 export async function GET(request: Request) {
-  // The heaviest public read there is — a month view walks a month of bookings
-  // against every chair — and the last route without a budget. Generous,
-  // because a customer clicking through the calendar legitimately fires several
-  // of these a minute; it is the scripted thousand this is here to stop.
+  // Heaviest public read there is; generous because a calendar click fires several.
   if (throttled(`availability:${clientIp(request)}`, { max: 60 })) {
     return NextResponse.json({ error: "too-many" }, { status: 429 });
   }

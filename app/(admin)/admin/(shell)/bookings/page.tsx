@@ -58,7 +58,7 @@ export default async function BookingsPage({
   const dayStart = localToUtc(date, "00:00");
   const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
 
-  const [stationRows, rows, [noShowCount], addonLinks, serviceRows, addonRows, removalRows] = await Promise.all([
+  const [stationRows, rows, [noShowCount], serviceRows, addonRows, removalRows] = await Promise.all([
     db
       .select()
       .from(stations)
@@ -128,34 +128,25 @@ export default async function BookingsPage({
           isNull(bookings.noShowResolvedAt),
         ),
       ),
-    // Bounded to this day's bookings. Unfiltered until now, which meant reading
-    // every add-on row in the database to label one screen — harmless at seed
-    // size, linear in the salon's whole history. See docs/PERFORMANCE.md.
-    //
-    // A subquery rather than a second await on the ids, so it still runs beside
-    // the other reads instead of waiting a round trip for them.
-    db
-      .select({ bookingId: bookingAddons.bookingId, name: bookingAddons.name })
-      .from(bookingAddons)
-      .where(
-        inArray(
-          bookingAddons.bookingId,
-          db
-            .select({ id: bookings.id })
-            .from(bookings)
-            .where(
-              and(
-                eq(bookings.branchId, branchId),
-                gte(bookings.startsAt, dayStart),
-                lt(bookings.startsAt, dayEnd),
-              ),
-            ),
-        ),
-      ),
     db.select().from(services).where(eq(services.active, true)).orderBy(asc(services.sort)),
     db.select().from(addons).where(eq(addons.active, true)).orderBy(asc(addons.sort)),
     db.select().from(removalTypes).where(eq(removalTypes.active, true)).orderBy(asc(removalTypes.sort)),
   ]);
+
+  // Bounded to the day just read. Unfiltered until now, which meant reading
+  // every add-on row in the database to label one screen — see
+  // docs/PERFORMANCE.md. One extra round trip, the way the front desk does it.
+  const addonLinks = rows.length
+    ? await db
+        .select({ bookingId: bookingAddons.bookingId, name: bookingAddons.name })
+        .from(bookingAddons)
+        .where(
+          inArray(
+            bookingAddons.bookingId,
+            rows.map((r) => r.id),
+          ),
+        )
+    : [];
 
   // Resolve the parent reference of any refills on this day. A self-join would
   // do it in one query, but aliasing a self-referencing table defeats Drizzle's
