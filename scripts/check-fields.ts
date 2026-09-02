@@ -22,6 +22,7 @@ import {
   validateExpiry,
 } from "@/lib/card";
 import { refillDaysLeft, refillWindowEnd } from "@/lib/refill";
+import { SETTING_DEFAULTS, pickSettings } from "@/lib/settings";
 import { closureDays } from "@/lib/time";
 import {
   formatNational,
@@ -232,5 +233,45 @@ assert.deepEqual(
   "a one-day closure starts and ends on that day",
 );
 console.log("  closures: a stored range reads back as the days the admin typed ✓");
+
+// Settings now arrive as the whole table rather than the keys asked for — one
+// cached read serving every caller (docs/PERFORMANCE.md). The merge is what
+// keeps that safe: a key with no stored row must fall back to its default, and
+// a wrong lookup here would silently give the salon 0% VAT rather than an error.
+
+assert.deepEqual(
+  pickSettings([{ key: "vat_percent", value: 5 }], ["vat_percent"]),
+  { vat_percent: 5 },
+  "a stored row wins over the default",
+);
+assert.deepEqual(
+  pickSettings([{ key: "vat_percent", value: 5 }], ["no_show_grace_min"]),
+  { no_show_grace_min: SETTING_DEFAULTS.no_show_grace_min },
+  "a key with no row falls back to its default, not to undefined",
+);
+assert.deepEqual(
+  pickSettings([], ["vat_percent", "currency"]),
+  { vat_percent: SETTING_DEFAULTS.vat_percent, currency: SETTING_DEFAULTS.currency },
+  "an empty table is all defaults",
+);
+assert.deepEqual(
+  // The whole table is passed in now, so unrelated rows must not confuse the pick.
+  pickSettings(
+    [
+      { key: "currency", value: "USD" },
+      { key: "vat_percent", value: 20 },
+      { key: "timezone", value: "Europe/Berlin" },
+    ],
+    ["vat_percent"],
+  ),
+  { vat_percent: 20 },
+  "the right row is picked out of a full table",
+);
+assert.deepEqual(
+  pickSettings([{ key: "vat_percent", value: 0 }], ["vat_percent"]),
+  { vat_percent: 0 },
+  "a stored zero is a value, not a missing row",
+);
+console.log("  settings: stored rows win, missing keys fall back to defaults ✓");
 
 console.log("\nAll field boundary checks passed.");

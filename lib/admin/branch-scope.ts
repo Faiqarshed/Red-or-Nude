@@ -12,13 +12,11 @@
 // off their screen — the same honesty rule /admin/bookings already applied.
 
 import "server-only";
-import { asc } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { branches, type Localized } from "@/lib/db/schema";
+import { listBranches, type BranchOption } from "@/lib/branches";
 import { scopedBranchId } from "@/lib/auth/rbac";
 import type { StaffRole } from "@/lib/db/schema";
 
-export type BranchOption = { id: string; name: Localized };
+export type { BranchOption };
 
 export type BranchScope = {
   /** Null means every branch — the CEO's default, and what the queries expect. */
@@ -34,10 +32,7 @@ export async function branchScope(
   const pinned = scopedBranchId(user.role, user.branchId);
   if (pinned) return { branchId: pinned, options: [] };
 
-  const rows = await db
-    .select({ id: branches.id, name: branches.name })
-    .from(branches)
-    .orderBy(asc(branches.sort));
+  const rows = await listBranches();
 
   // An id that is not a branch is treated as "all", not as an error: a stale
   // link after a branch is removed should show the whole salon rather than an

@@ -13,6 +13,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { stations } from "@/lib/db/schema";
 import { createBookings } from "@/lib/bookings";
+import { clientIp, throttled } from "@/lib/throttle";
 import { currentCustomer } from "@/lib/account/guard";
 
 export const dynamic = "force-dynamic";
@@ -71,6 +72,15 @@ const body = z.object({
 });
 
 export async function POST(request: Request) {
+  // The one write the public can reach unauthenticated, and it is the expensive
+  // kind: a transaction that locks every chair at the branch while it reserves
+  // one. Unbudgeted, a script could hold the whole floor's lock in a loop and
+  // no genuine customer would get a chair. Low, because a real person books
+  // once and then pays.
+  if (throttled(`booking:${clientIp(request)}`, { max: 10 })) {
+    return NextResponse.json({ error: "too-many" }, { status: 429 });
+  }
+
   let payload: unknown;
   try {
     payload = await request.json();

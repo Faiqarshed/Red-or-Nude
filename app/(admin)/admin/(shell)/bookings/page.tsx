@@ -128,9 +128,30 @@ export default async function BookingsPage({
           isNull(bookings.noShowResolvedAt),
         ),
       ),
+    // Bounded to this day's bookings. Unfiltered until now, which meant reading
+    // every add-on row in the database to label one screen — harmless at seed
+    // size, linear in the salon's whole history. See docs/PERFORMANCE.md.
+    //
+    // A subquery rather than a second await on the ids, so it still runs beside
+    // the other reads instead of waiting a round trip for them.
     db
       .select({ bookingId: bookingAddons.bookingId, name: bookingAddons.name })
-      .from(bookingAddons),
+      .from(bookingAddons)
+      .where(
+        inArray(
+          bookingAddons.bookingId,
+          db
+            .select({ id: bookings.id })
+            .from(bookings)
+            .where(
+              and(
+                eq(bookings.branchId, branchId),
+                gte(bookings.startsAt, dayStart),
+                lt(bookings.startsAt, dayEnd),
+              ),
+            ),
+        ),
+      ),
     db.select().from(services).where(eq(services.active, true)).orderBy(asc(services.sort)),
     db.select().from(addons).where(eq(addons.active, true)).orderBy(asc(addons.sort)),
     db.select().from(removalTypes).where(eq(removalTypes.active, true)).orderBy(asc(removalTypes.sort)),

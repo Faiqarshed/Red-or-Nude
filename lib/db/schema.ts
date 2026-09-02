@@ -531,6 +531,14 @@ export const bookings = pgTable(
     byBranchTime: index("bookings_branch_time_idx").on(t.branchId, t.startsAt),
     byStatus: index("bookings_status_idx").on(t.status),
     byGroup: index("bookings_group_idx").on(t.groupId),
+    // The two lookups the branch/time index cannot serve, because neither
+    // starts from a branch: a technician's own day (/admin/my-day, the floor
+    // board, the commission figures) and a customer's own history
+    // (/my-bookings, the refill window). Both scan the whole table without
+    // these, which is free today and is not once the salon has a year of
+    // bookings behind it. See docs/PERFORMANCE.md.
+    byTechnicianTime: index("bookings_technician_time_idx").on(t.technicianId, t.startsAt),
+    byCustomer: index("bookings_customer_idx").on(t.customerId),
   }),
 );
 
