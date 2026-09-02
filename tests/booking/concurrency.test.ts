@@ -304,6 +304,88 @@ describe("times a booking must never be accepted at", () => {
     expect(walkIn.ok, "the salon could not seat a walk-in into a freed chair").toBe(true);
   });
 
+  it("gives the station QR add-on a wider window than the calendar", async () => {
+    // Regression guard. The station page freezes startsAt when the sticker is
+    // scanned — the current appointment's projected finish, or `now` on an empty
+    // chair — and nothing refreshes it while the customer picks a service and
+    // fills in the payment form. A two-minute grace refused real customers
+    // standing in the salon; ten minutes stale is an ordinary checkout.
+    const branch = await fx.branch({ stationCount: 1 });
+    const svc = await fx.service({ durationMin: 60 });
+    const { POST } = await import("@/app/api/bookings/route");
+    const { post, read } = await import("../helpers/app");
+
+    const scannedTenMinutesAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+    const body = {
+      branchId: branch.id,
+      startsAt: scannedTenMinutesAgo,
+      members: [{ serviceId: svc.id, addonIds: [] }],
+      customer: { name: "In The Chair", phone: "0530000027", email: "c@example.test" },
+    };
+
+    // Without a token this is the calendar flow, and ten minutes is refused.
+    const plain = await read(await POST(post("http://x/api/bookings", body)));
+    expect(plain.status).toBe(400);
+    expect(plain.body.error).toBe("slot-in-past");
+
+    // With the chair's own sticker it is the add-on flow, and it goes through.
+    const withToken = await POST(
+      post("http://x/api/bookings", {
+        ...body,
+        stationToken: branch.stations[0].qrToken,
+      }),
+    );
+    await fx.claimBookingsOf(branch.id);
+    expect(withToken.status, "the add-on flow was refused a ten-minute-old scan").toBe(201);
+  });
+
+  it("still refuses a station booking from far enough back to be junk", async () => {
+    // The wider window is not an open door: the token is on a public sticker
+    // anyone can photograph, so yesterday is still yesterday.
+    const branch = await fx.branch({ stationCount: 1 });
+    const svc = await fx.service({ durationMin: 60 });
+    const { POST } = await import("@/app/api/bookings/route");
+    const { post, read } = await import("../helpers/app");
+
+    const { status, body } = await read(
+      await POST(
+        post("http://x/api/bookings", {
+          branchId: branch.id,
+          startsAt: new Date(Date.now() - 86_400_000).toISOString(),
+          members: [{ serviceId: svc.id, addonIds: [] }],
+          customer: { name: "Yesterday", phone: "0530000028", email: "y@example.test" },
+          stationToken: branch.stations[0].qrToken,
+        }),
+      ),
+    );
+    await fx.claimBookingsOf(branch.id);
+    expect({ status, error: body.error }).toEqual({ status: 400, error: "slot-in-past" });
+  });
+
+  it("does not let a made-up station token buy anything but a 404", async () => {
+    // The grace is keyed on the token being present, not valid. A bogus one
+    // gets the wider window and is then refused by the station lookup.
+    const branch = await fx.branch({ stationCount: 1 });
+    const svc = await fx.service({ durationMin: 60 });
+    const { POST } = await import("@/app/api/bookings/route");
+    const { post, read } = await import("../helpers/app");
+
+    const { status, body } = await read(
+      await POST(
+        post("http://x/api/bookings", {
+          branchId: branch.id,
+          startsAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+          members: [{ serviceId: svc.id, addonIds: [] }],
+          customer: { name: "Forger", phone: "0530000029", email: "f@example.test" },
+          stationToken: "00000000-0000-0000-0000-000000000000",
+        }),
+      ),
+    );
+    await fx.claimBookingsOf(branch.id);
+    expect({ status, error: body.error }).toEqual({ status: 404, error: "unknown-station" });
+    expect(await liveBookings(branch.id)).toHaveLength(0);
+  });
+
   /**
    * STILL OPEN — the other half of BUG-BOOK-001.
    *

@@ -27,7 +27,7 @@ vi.mock("next/cache", async () => (await import("./helpers")).nextCacheMock);
 vi.mock("next/headers", async () => (await import("./helpers")).nextHeadersMock);
 
 import { db } from "@/lib/db";
-import { auditLog, type StaffRole } from "@/lib/db/schema";
+import { auditLog, bookings, branchHours, stations, type StaffRole } from "@/lib/db/schema";
 import { can, type Capability } from "@/lib/auth/rbac";
 import { Fixtures } from "../helpers/fixtures";
 import { ROLES, actingAs, asNobody, restoreSession, sessionFor, type Actor } from "./helpers";
@@ -334,9 +334,22 @@ it("covers every exported Server Action in the twelve admin action files", async
 });
 
 // Nothing this file did should have survived it, beyond the fixtures.
-it("left no booking, staff row or audit entry behind against the nonexistent id", async () => {
-  const rows = await db.select().from(auditLog).where(inArray(auditLog.entityId, [NOWHERE]));
-  // The ones that did get through wrote against a uuid that is not a row —
-  // harmless, but they are swept in afterAll rather than left in the table.
-  expect(Array.isArray(rows)).toBe(true);
+it("created no row against the nonexistent id, whatever got past the guards", async () => {
+  // Every action above is invoked against NOWHERE — a well-formed uuid that is
+  // not a row. The ones a role *is* allowed to call therefore run their real
+  // body against nothing, and must come back empty-handed rather than writing
+  // an orphan. Foreign keys enforce most of it; this asserts they are actually
+  // declared on the tables these actions reach for.
+  //
+  // Deliberately not asserted over audit_log: entity_id carries no foreign key
+  // by design (it has to survive the row it describes being deleted), so
+  // entries against NOWHERE legitimately exist here and are swept in afterAll.
+  const orphans = await Promise.all([
+    db.select({ id: stations.id }).from(stations).where(eq(stations.branchId, NOWHERE)),
+    db.select({ id: branchHours.id }).from(branchHours).where(eq(branchHours.branchId, NOWHERE)),
+    db.select({ id: bookings.id }).from(bookings).where(eq(bookings.branchId, NOWHERE)),
+    db.select({ id: stations.id }).from(stations).where(eq(stations.id, NOWHERE)),
+    db.select({ id: bookings.id }).from(bookings).where(eq(bookings.id, NOWHERE)),
+  ]);
+  expect(orphans.flat(), "an action wrote a row against an id that is not a row").toEqual([]);
 });

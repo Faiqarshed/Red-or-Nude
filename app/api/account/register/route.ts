@@ -6,7 +6,7 @@
 // here. That is the entire security property of this route.
 
 import { NextResponse } from "next/server";
-import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { customers } from "@/lib/db/schema";
@@ -100,13 +100,13 @@ export async function POST(request: Request) {
    *      recycled number is only safe once its owner has a verified address;
    *   3. the unproved channel goes back to being a label, and labels reserve
    *      nothing — locking one lets a stranger squat somebody's number.
+   *
+   * Enforced by the `setWhere` on the upsert below and nowhere else. A SELECT
+   * ahead of it would read better and buy nothing: it races the write it
+   * guards, and the write already produces the identical 409 without it — so
+   * it would only add a round trip to every registration that was never in
+   * danger.
    */
-  const [claimed] = await db
-    .select({ id: customers.id })
-    .from(customers)
-    .where(and(eq(customers.phone, phone), isNotNull(customers.emailVerifiedAt)))
-    .limit(1);
-  if (claimed) return NextResponse.json({ error: "phone-in-use" }, { status: 409 });
 
   let customer;
   try {

@@ -20,7 +20,10 @@ vi.mock("next/cache", async () => (await import("../helpers/app")).cacheMock);
 // Nothing may leave the box. Every job here either mails or notifies.
 vi.mock("@/lib/notify", () => ({ notify: async () => {} }));
 vi.mock("@/lib/email", () => ({ sendMail: async () => ({ ok: true }) }));
-vi.mock("@/lib/assign/email", () => ({ sendAssignmentEmail: async () => ({ ok: true }) }));
+// Nothing mocks @/lib/assign/email on purpose: it exports renderAssignmentEmail,
+// which is a pure template with no I/O of its own. The boundary that matters is
+// sendMail above, and a mock naming an export the module does not have would be
+// replaced silently and protect nothing.
 
 const SECRET = "test-cron-secret-do-not-ship";
 

@@ -104,24 +104,44 @@ export async function POST(request: Request) {
    * slot picker would never have offered.
    *
    * Guarded here rather than in `createBookings`, which must keep accepting a
-   * past start: a no-show frees a slot that has already begun, and the walk-in
-   * drawer seats somebody into it. That is the same distinction
-   * app/api/availability/route.ts already draws when it passes `leadTimeMin: 0`
-   * for signed-in staff and the branch's real lead time for everyone else —
-   * staff reach the salon floor through the admin actions, and this route is
-   * the public one.
+   * past start because its direct callers rely on it: `scripts/check-booking.ts`
+   * pins "no-show: freed chair is immediately rebookable", and the chair a
+   * no-show frees is on a slot that has already begun. The admin walk-in path
+   * reaches that library directly through a Server Action and never through
+   * this route, so guarding the route leaves it untouched.
    *
-   * The grace is for the submit race, not for the customer: a slot chosen at
-   * 14:00 and confirmed at 14:00:03 was honestly available when it was picked,
-   * and refusing it would be a bug report nobody could reproduce. It is small
-   * enough that it cannot be used to book a slot that has meaningfully passed.
+   * (Not via `leadTimeMin`. `computeDay` blocks a past slot unconditionally and
+   * `leadTimeMin: 0` only relaxes `too-soon` — lib/availability.ts keeps the two
+   * blockers apart on purpose. The staff exemption is a different mechanism
+   * from this one; the reason the guard sits here is the direct library caller,
+   * not the availability grid.)
+   *
+   * TWO GRACES, because two flows freeze `startsAt` at very different distances
+   * from the moment it is submitted.
+   *
+   *   • The calendar picks a slot minutes-to-weeks ahead, so the only honest
+   *     lateness is the submit race — chosen at 14:00, confirmed at 14:00:03.
+   *     Two minutes covers that and cannot reach a slot that meaningfully passed.
+   *
+   *   • The station QR add-on (brief §2.7) freezes `startsAt` when the sticker
+   *     is scanned: the current appointment's projected finish, or `now` when
+   *     the chair is empty (app/(site)/station/[token]/page.tsx). Nothing
+   *     refreshes it while the customer picks a service and fills in the payment
+   *     form, so by submit time it is routinely minutes old and legitimately so.
+   *     Two minutes would refuse ordinary customers standing in the salon.
+   *
+   * Keyed on the token being present, not valid — an unknown or retired one is
+   * refused a few lines below, so a made-up token buys the wider window and then
+   * a 404.
    *
    * Only the start is checked. Opening hours, closures and an appointment that
    * would run past closing are the same class of hole and are still open —
    * see docs/_testing/known-bugs-booking.md BUG-BOOK-001.
    */
   const SUBMIT_GRACE_MS = 2 * 60_000;
-  if (new Date(data.startsAt).getTime() < Date.now() - SUBMIT_GRACE_MS) {
+  const STATION_GRACE_MS = 60 * 60_000;
+  const grace = stationToken ? STATION_GRACE_MS : SUBMIT_GRACE_MS;
+  if (new Date(data.startsAt).getTime() < Date.now() - grace) {
     return NextResponse.json({ error: "slot-in-past" }, { status: 400 });
   }
 
