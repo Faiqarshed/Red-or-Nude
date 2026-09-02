@@ -863,24 +863,20 @@ function LaneRow({
           <span
             className={cn(
               "block text-[17px] font-semibold",
-              // Amber outranks the over-run red here: a service that has not
-              // started cannot be overrunning, it is a queue.
-              unstarted ? "text-[#8a5a06]" : overMin > 0 ? "text-red" : "text-[#2c6a88]",
+              // Red first, amber second. The salon's rule is that a customer's
+              // time starts when she checks in, however late anyone picks her
+              // up — so a booking nobody has started is not exempt from
+              // overrunning, it is the worst way to overrun. Amber is for the
+              // ones still inside their hour, where "waiting" is the whole
+              // story; past the hour the story is that she is late being seen,
+              // and the badge underneath already says why.
+              overMin > 0 ? "text-red" : unstarted ? "text-[#8a5a06]" : "text-[#2c6a88]",
             )}
           >
             {runningMin === null ? "—" : formatDuration(runningMin * 60_000, lang)}
           </span>
-          {/* The over-run line has to answer to `unstarted` as well, or the row
-              says "waiting for a technician" in amber and "over by 30" in red
-              at the same time. Nothing has started, so nothing is overrunning:
-              it is still only what the service is booked to take. */}
-          <span
-            className={cn(
-              "block text-[11px]",
-              !unstarted && overMin > 0 ? "text-red" : "text-ink/45",
-            )}
-          >
-            {!unstarted && overMin > 0 ? f.overBy(overMin) : f.ofAbout(expectedMin)}
+          <span className={cn("block text-[11px]", overMin > 0 ? "text-red" : "text-ink/45")}>
+            {overMin > 0 ? f.overBy(overMin) : f.ofAbout(expectedMin)}
           </span>
         </span>
       ) : lane === "ready" ? (

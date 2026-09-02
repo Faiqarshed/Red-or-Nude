@@ -155,14 +155,14 @@ export function BookingFacts({ booking, now }: { booking: BookingRow; now: numbe
     ...row(f.took, tookMs === null ? null : formatDuration(tookMs, lang)),
     // "Running for" is a lie while nobody has pressed Start — the clock counts
     // the visit, so it is already climbing for a customer sitting in reception.
-    // The lane row says so with a badge; this panel says it in the label, and
-    // drops the "of about 60 min" comparison, which is about a service that has
-    // not begun.
+    // Only the label changes: the comparison against the booked length stays,
+    // because the salon measures her time from check-in however late she is
+    // picked up, so that is the yardstick either way.
     ...row(
       booking.startedAt ? f.running : f.notStarted,
       runningMs === null
         ? null
-        : booking.durationMin && booking.startedAt
+        : booking.durationMin
           ? `${formatDuration(runningMs, lang)} · ${f.ofAbout(booking.durationMin)}`
           : formatDuration(runningMs, lang),
     ),

@@ -272,7 +272,7 @@ const ar = {
     took: "استغرقت",
     running: "جارية منذ",
     readyToClose: "جاهزة للإغلاق",
-    today: "بقية اليوم",
+    today: "بقية حجوزات اليوم",
     statCompleted: "خدمات منتهية اليوم",
     statInService: "جارٍ تنفيذها الآن",
     statUpcoming: "حجوزات قادمة اليوم",
@@ -856,8 +856,9 @@ const en: AdminStrings = {
     took: "Took",
     running: "Running for",
     readyToClose: "Ready to close",
-    // Not today — today is the four lanes above; this is what they left behind.
-    today: "Rest of today",
+    // Not today — today is the four lanes above. This is what they left behind:
+    // later appointments, plus the day's closed, cancelled and no-show rows.
+    today: "Everything else today",
     statCompleted: "Finished today",
     statInService: "In service now",
     statUpcoming: "Still to come today",
