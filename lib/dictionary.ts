@@ -390,6 +390,7 @@ const ar = {
     designsTitle: "التصاميم الموسمية",
     choose: "اختر",
     noSlots: "لا توجد مواعيد متاحة في هذا اليوم",
+    slotsFailed: "تعذر تحميل المواعيد. حاولي مرة أخرى.",
     noticeHint: (mins: string, earliest: string) =>
       `الحجز يحتاج مهلة ${mins} — أقرب موعد متاح ${earliest}.`,
     noticeMinutes: (n: number) => `${n} دقيقة`,
@@ -869,6 +870,7 @@ const en: Content = {
     designsTitle: "Seasonal Designs",
     choose: "Choose",
     noSlots: "No times available on this day",
+    slotsFailed: "Couldn’t load times. Please try again.",
     noticeHint: (mins: string, earliest: string) =>
       `Bookings need ${mins} notice — the earliest available is ${earliest}.`,
     noticeMinutes: (n: number) => `${n} minutes'`,
