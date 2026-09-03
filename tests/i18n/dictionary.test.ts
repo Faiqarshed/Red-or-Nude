@@ -62,11 +62,13 @@ describe("the dictionary has two complete halves", () => {
     // Array length is the one shape the type checker cannot hold: an `en`
     // dictionary with two of three cards still satisfies `typeof ar`.
     const lengths = (rows: Leaf[]) => {
+      // Every `[n]` in the path, not just the first — a nested list inside a
+      // card is still a list whose length has to match.
       const counts = new Map<string, number>();
       for (const { path } of rows) {
-        const m = path.matchAll(/^(.*?)\[(\d+)\]/g);
-        for (const [, prefix, index] of m) {
-          counts.set(prefix, Math.max(counts.get(prefix) ?? 0, Number(index) + 1));
+        for (const m of path.matchAll(/\[(\d+)\]/g)) {
+          const prefix = path.slice(0, m.index);
+          counts.set(prefix, Math.max(counts.get(prefix) ?? 0, Number(m[1]) + 1));
         }
       }
       return counts;

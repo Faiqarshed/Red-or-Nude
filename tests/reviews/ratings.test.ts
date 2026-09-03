@@ -51,7 +51,12 @@ beforeEach(() => {
   outbox.length = 0;
   mailResult = { ok: true };
 });
-afterEach(() => fx.cleanup());
+afterEach(async () => {
+  // Unstubbed here rather than at the end of the one case that stubs, so a
+  // failing assertion cannot leak an environment variable into the next file.
+  vi.unstubAllEnvs();
+  await fx.cleanup();
+});
 
 /** A finished appointment, ready to be asked about. */
 async function finished(over: Partial<typeof bookings.$inferInsert> = {}) {
@@ -147,7 +152,7 @@ describe("inviting a rating", () => {
     expect(outbox, "a customer with no address was emailed anyway").toHaveLength(0);
   });
 
-  it("writes to the customer in her own language, defaulting to Arabic", async () => {
+  it("writes to the customer in her own language, both of them", async () => {
     const en = await finished();
     await db.update(customers).set({ lang: "en" }).where(eq(customers.id, en.cust.id));
     await inviteFor(en.booking.id);
@@ -158,7 +163,9 @@ describe("inviting a rating", () => {
     await db.update(customers).set({ lang: "ar" }).where(eq(customers.id, ar.cust.id));
     await inviteFor(ar.booking.id);
     // A missing ar half is a blank screen for the primary audience, not a
-    // fallback.
+    // fallback. The `?? "ar"` fallback in invite.ts is not exercised here and
+    // cannot be: `customers.lang` is notNull with an `ar` default, and the
+    // left-join null case leaves earlier as `no-email`.
     expect(outbox[0].html).toContain('dir="rtl"');
     expect(outbox[0].subject.length).toBeGreaterThan(0);
   });
@@ -170,7 +177,6 @@ describe("inviting a rating", () => {
     const { booking } = await finished({ notes: "reply-to: attacker@example.test" });
     await inviteFor(booking.id);
     expect(outbox[0].replyTo).toBe("salon@example.test");
-    vi.unstubAllEnvs();
   });
 
   it("never throws into the receptionist's End press, whatever the mail does", async () => {
@@ -427,27 +433,24 @@ describe("POST /api/reviews — the token is the whole credential", () => {
     const { review } = await invited();
     const { POST } = await import("@/app/api/reviews/route");
 
+    // Both requests are in flight before either is read — an `await` inside the
+    // array would run the first to completion and quietly make this the
+    // sequential test above.
     const [a, b] = await Promise.all([
-      read(
-        await POST(
-          post("http://x/api/reviews", { token: review.token, serviceRating: 5, comment: "A" }),
-        ),
-      ),
-      read(
-        await POST(
-          post("http://x/api/reviews", { token: review.token, serviceRating: 1, comment: "B" }),
-        ),
-      ),
-    ]);
+      POST(post("http://x/api/reviews", { token: review.token, serviceRating: 5, comment: "A" })),
+      POST(post("http://x/api/reviews", { token: review.token, serviceRating: 1, comment: "B" })),
+    ]).then((rs) => Promise.all(rs.map(read)));
 
     const codes = [a.status, b.status].sort();
     expect(codes, "both taps were recorded as answers").toEqual([200, 409]);
 
     const [row] = await db.select().from(reviews).where(eq(reviews.id, review.id));
-    // Whichever won, the stored answer is one whole answer and not a mix.
-    expect(row.comment === "A" ? row.serviceRating : row.serviceRating).toBe(
-      row.comment === "A" ? 5 : 1,
-    );
+    // Whichever won, the stored answer is one whole answer and not a mix of the
+    // two: the comment and the score have to come from the same tap.
+    expect(
+      { comment: row.comment, serviceRating: row.serviceRating },
+      "the two taps were interleaved into one answer",
+    ).toEqual(row.comment === "A" ? { comment: "A", serviceRating: 5 } : { comment: "B", serviceRating: 1 });
   });
 
   it("leaves every other appointment's review alone", async () => {

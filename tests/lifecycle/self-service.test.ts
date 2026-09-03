@@ -21,7 +21,7 @@
 // (refill).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { auditLog, bookings, otps } from "@/lib/db/schema";
 import { Fixtures } from "../helpers/fixtures";
@@ -32,8 +32,35 @@ vi.mock("next/cache", async () => (await import("../helpers/app")).cacheMock);
 vi.mock("@/lib/notify", () => ({ notify: async () => {} }));
 
 const fx = new Fixtures();
-beforeEach(resetAppContext);
-afterEach(() => fx.cleanup());
+
+/**
+ * Every booking this file made. Audit rows and OTPs are not fixtures — the code
+ * under test writes them — so they are swept by entity id or they accumulate in
+ * a shared database. In `afterEach` rather than at the end of each case, so a
+ * failing test still cleans up after itself.
+ */
+const made: string[] = [];
+
+beforeEach(() => {
+  resetAppContext();
+  made.length = 0;
+});
+
+afterEach(async () => {
+  if (made.length) {
+    const { bookingSubject } = await import("@/lib/otp");
+    await db.delete(auditLog).where(inArray(auditLog.entityId, made));
+    await db.delete(otps).where(inArray(otps.subject, made.map(bookingSubject)));
+  }
+  await fx.cleanup();
+});
+
+/** `fx.booking`, with the id recorded for the sweep above. */
+async function mkBooking(opts: Parameters<Fixtures["booking"]>[0]) {
+  const row = await fx.booking(opts);
+  made.push(row.id);
+  return row;
+}
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -63,7 +90,7 @@ const later = (ms: number) => new Date(Date.now() + ms);
 describe("POST /api/my-bookings/reschedule — the credential", () => {
   it("refuses a caller with neither session nor code, and moves nothing", async () => {
     const { branch, svc, cust } = await scene();
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -94,7 +121,7 @@ describe("POST /api/my-bookings/reschedule — the credential", () => {
     // must be worth no more than no session at all.
     const { branch, svc, cust: victim } = await scene();
     const attacker = await fx.customer({ verified: true });
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: victim.id,
@@ -122,7 +149,7 @@ describe("POST /api/my-bookings/reschedule — the credential", () => {
 
   it("lets a guest through with a code issued for that exact booking", async () => {
     const { branch, svc } = await scene();
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: null,
@@ -143,7 +170,6 @@ describe("POST /api/my-bookings/reschedule — the credential", () => {
       ),
     );
     expect(status).toBe(200);
-    await db.delete(otps).where(eq(otps.subject, bookingSubject(target.id)));
   });
 
   it("refuses an unknown reference as `wrong`, not as a 404", async () => {
@@ -229,7 +255,7 @@ describe("POST /api/my-bookings/reschedule — the window and the lead time", ()
     // three-hour cutoff, so it is the salon's to move — even though the
     // destination is a fortnight out and perfectly bookable.
     const { branch, svc, cust } = await scene();
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -261,7 +287,7 @@ describe("POST /api/my-bookings/reschedule — the window and the lead time", ()
 
   it("refuses to move an already-cancelled booking, with its own reason", async () => {
     const { branch, svc, cust } = await scene();
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -288,7 +314,7 @@ describe("POST /api/my-bookings/reschedule — the window and the lead time", ()
     // the floor this guards is the past itself, and a hand-crafted request is
     // the only way to reach it.
     const { branch, svc, cust } = await scene();
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -326,7 +352,7 @@ describe("POST /api/my-bookings/reschedule — the move itself", () => {
     // The new chair is deliberately not in the response: the customer is told
     // their time, and the table is on the ticket they already hold.
     const { branch, svc, cust } = await scene();
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -364,7 +390,7 @@ describe("POST /api/my-bookings/reschedule — the move itself", () => {
     // Nothing is charged and nothing is refunded, so a move must not disturb
     // the bill or hand the customer a new place in the queue.
     const { branch, svc, cust } = await scene();
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -400,7 +426,7 @@ describe("POST /api/my-bookings/reschedule — the move itself", () => {
     // free. Keeping the old chair would refuse a slot that is genuinely open.
     const { branch, svc, cust } = await scene({ stationCount: 2 });
     const to = later(14 * DAY);
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -408,7 +434,7 @@ describe("POST /api/my-bookings/reschedule — the move itself", () => {
       startsAt: later(7 * DAY),
       stationId: branch.stations[1].id,
     });
-    await fx.booking({
+    await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       status: "confirmed",
@@ -435,7 +461,7 @@ describe("POST /api/my-bookings/reschedule — the move itself", () => {
   it("refuses a slot with no free chair and leaves the original where it was", async () => {
     const { branch, svc, cust } = await scene({ stationCount: 1 });
     const to = later(14 * DAY);
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -443,7 +469,7 @@ describe("POST /api/my-bookings/reschedule — the move itself", () => {
       startsAt: later(7 * DAY),
       stationId: branch.stations[0].id,
     });
-    await fx.booking({
+    await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       status: "confirmed",
@@ -476,7 +502,7 @@ describe("POST /api/my-bookings/reschedule — the move itself", () => {
     // double-booked would look like a decision and be a clash.
     const { branch, svc, cust } = await scene();
     const tech = await fx.staff("technician", branch.id);
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -505,7 +531,7 @@ describe("POST /api/my-bookings/reschedule — the move itself", () => {
     const { branch, svc, cust } = await scene({ stationCount: 2 });
     const groupId = crypto.randomUUID();
     const from = later(7 * DAY);
-    const anchor = await fx.booking({
+    const anchor = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -514,7 +540,7 @@ describe("POST /api/my-bookings/reschedule — the move itself", () => {
       endsAt: new Date(from.getTime() + 60 * 60_000),
       groupId,
     });
-    const companion = await fx.booking({
+    const companion = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -555,7 +581,7 @@ describe("POST /api/my-bookings/reschedule — the move itself", () => {
 
   it("records who moved it, as the customer rather than a member of staff", async () => {
     const { branch, svc, cust } = await scene();
-    const target = await fx.booking({
+    const target = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -583,9 +609,6 @@ describe("POST /api/my-bookings/reschedule — the move itself", () => {
       from: target.startsAt.toISOString(),
       to: to.toISOString(),
     });
-
-    // Written by the code under test against a booking this fixture owns.
-    await db.delete(auditLog).where(eq(auditLog.entityId, target.id));
   });
 });
 
@@ -667,14 +690,14 @@ describe("which bookings have spent their window — claimedWindows", () => {
     // The window is claimed by a refill that still exists. A cancelled or
     // no-show refill returns it, exactly as bookings_refill_of_unique has it.
     const { branch, svc, cust } = await scene({ refillDays: 30 });
-    const parent = await fx.booking({
+    const parent = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
       status: "completed",
       startsAt: new Date(Date.now() - DAY),
     });
-    const child = await fx.booking({
+    const child = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -711,7 +734,7 @@ describe("POST /api/my-bookings/refill", () => {
     const svc = await fx.service({ priceHalalas: 25_000, durationMin: 60, refillDays });
     return {
       svc,
-      booking: await fx.booking({
+      booking: await mkBooking({
         branchId: branch.id,
         serviceId: svc.id,
         customerId,
@@ -781,7 +804,6 @@ describe("POST /api/my-bookings/refill", () => {
     );
     expect(status).toBe(200);
     expect(body.refill.daysLeft).toBe(29);
-    await db.delete(otps).where(eq(otps.subject, bookingSubject(booking.id)));
   });
 
   it("refuses an unknown reference as `wrong`", async () => {
@@ -827,7 +849,7 @@ describe("POST /api/my-bookings/refill", () => {
     const cust = await fx.customer({ verified: true });
     const branch = await fx.branch();
     const svc = await fx.service({ refillDays: 30 });
-    const booking = await fx.booking({
+    const booking = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       customerId: cust.id,
@@ -848,7 +870,7 @@ describe("POST /api/my-bookings/refill", () => {
     const cust = await fx.customer({ verified: true });
     const { svc, booking } = await served(cust.id);
     const [parent] = await db.select().from(bookings).where(eq(bookings.id, booking.id));
-    await fx.booking({
+    await mkBooking({
       branchId: parent.branchId,
       serviceId: svc.id,
       customerId: cust.id,
@@ -870,7 +892,7 @@ describe("POST /api/my-bookings/refill", () => {
     const cust = await fx.customer({ verified: true });
     const { svc, booking: original } = await served(cust.id);
     const [parent] = await db.select().from(bookings).where(eq(bookings.id, original.id));
-    const theRefill = await fx.booking({
+    const theRefill = await mkBooking({
       branchId: parent.branchId,
       serviceId: svc.id,
       customerId: cust.id,

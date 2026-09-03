@@ -69,8 +69,8 @@ Six more were found by `/code-review` on this branch — four of them mistakes i
 this work, two pre-existing holes in the test-database safety gate. All fixed;
 see the commit log.
 
-The five surfaces added on 2026-09-03 (reschedule, refill, promos, reviews,
-assignment eligibility, localization) found **no new bugs**. What they turned up
+The five suites added on 2026-09-03 — reschedule and refill, promo codes,
+reviews, assignment eligibility, and the dictionary — found **no new bugs**. What they turned up
 instead was four pieces of behaviour that are deliberate and undocumented, each
 pinned with a `// @characterization` test rather than asserted as spec:
 
@@ -117,7 +117,20 @@ simply untested.
   start order is optimal, and every surplus found was genuinely unassignable.
   Left untested rather than faked.
 - **Mutation testing.** Coverage says which lines ran; nothing says which
-  assertions would survive a mutant.
+  assertions would survive a mutant. Three behaviours were probed by hand on
+  2026-09-03 and all three were caught: dropping `isNull(reviews.submittedAt)`
+  from the review route, checking the reschedule window against the destination
+  instead of the origin, and bounding `pickTechnician`'s busy query to today.
+- **Audit and OTP rows left behind by the older suites.** Measured 2026-09-03:
+  a full run adds ~11 `audit_log` rows and ~3 `otps` rows to the test database.
+  `tests/lifecycle/ownership.test.ts` accounts for one of them and
+  `tests/auth/accounts.test.ts` for the OTPs; the rest are spread across the
+  status, confirm and concurrency suites. These rows are written by the code
+  under test, not by fixtures, so they have to be swept by entity id —
+  `tests/lifecycle/self-service.test.ts` and `tests/assign/floor.test.ts` show
+  the pattern in an `afterEach`, which also survives a failing assertion.
+  Deliberately **not** fixed by sweeping on a `LIKE` or a bare table delete: an
+  over-broad `WHERE` is the exact shape of the 2026-09-01 incident.
 
 ## The one thing left open on purpose
 

@@ -39,8 +39,30 @@ vi.mock("next/cache", async () => (await import("../helpers/app")).cacheMock);
 vi.mock("@/lib/notify", () => ({ notify: async () => {} }));
 
 const fx = new Fixtures();
-beforeEach(resetAppContext);
-afterEach(() => fx.cleanup());
+
+/**
+ * Every booking this file made. `assignDay` writes an audit row per assignment
+ * and those are not fixtures, so they are swept by entity id. In `afterEach`
+ * rather than at the end of each case, so a failing test still cleans up.
+ */
+const made: string[] = [];
+
+beforeEach(() => {
+  resetAppContext();
+  made.length = 0;
+});
+
+afterEach(async () => {
+  if (made.length) await db.delete(auditLog).where(inArray(auditLog.entityId, made));
+  await fx.cleanup();
+});
+
+/** `fx.booking`, with the id recorded for the sweep above. */
+async function mkBooking(opts: Parameters<Fixtures["booking"]>[0]) {
+  const row = await fx.booking(opts);
+  made.push(row.id);
+  return row;
+}
 
 /** A slot `hour` hours into today in Riyadh — the day assignDay deals. */
 async function today(hour: number, mins = 45) {
@@ -61,11 +83,6 @@ async function daysOff(staffId: string, startsOn: string, endsOn: string) {
 
 const techOf = async (id: string) =>
   (await db.select({ t: bookings.technicianId }).from(bookings).where(eq(bookings.id, id)))[0].t;
-
-/** The trail assignDay leaves. Removed by entity id, never by emptying a table. */
-async function forgetAudit(bookingIds: string[]) {
-  if (bookingIds.length) await db.delete(auditLog).where(inArray(auditLog.entityId, bookingIds));
-}
 
 // ============================================================= days off
 
@@ -140,7 +157,7 @@ describe("pickTechnician — the walk-in at the desk", () => {
     const svc = await fx.service();
     // Two on her list already, none on hers.
     for (const hour of [11, 13]) {
-      await fx.booking({
+      await mkBooking({
         branchId: branch.id,
         serviceId: svc.id,
         technicianId: busy.id,
@@ -194,7 +211,7 @@ describe("pickTechnician — the walk-in at the desk", () => {
     const tech = await fx.staff("technician", branch.id);
     const svc = await fx.service();
     const yesterday = await today(-13);
-    await fx.booking({
+    await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       technicianId: tech.id,
@@ -215,7 +232,7 @@ describe("pickTechnician — the walk-in at the desk", () => {
     const there = await fx.branch();
     const tech = await fx.staff("technician", here.id);
     const svc = await fx.service();
-    await fx.booking({
+    await mkBooking({
       branchId: there.id,
       serviceId: svc.id,
       technicianId: tech.id,
@@ -234,7 +251,7 @@ describe("pickTechnician — the walk-in at the desk", () => {
     const tech = await fx.staff("technician", branch.id);
     const svc = await fx.service();
     for (const status of ["completed", "cancelled", "no_show", "confirmed"] as const) {
-      await fx.booking({
+      await mkBooking({
         branchId: branch.id,
         serviceId: svc.id,
         technicianId: tech.id,
@@ -269,7 +286,7 @@ describe("assignDay — the dawn run", () => {
     const mine = await fx.staff("technician", branch.id);
     const theirs = await fx.staff("technician", branch.id);
     const svc = await fx.service();
-    const named = await fx.booking({
+    const named = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       technicianId: theirs.id,
@@ -279,7 +296,6 @@ describe("assignDay — the dawn run", () => {
 
     const { assignDay } = await import("@/lib/assign");
     await assignDay(branch.id);
-    await forgetAudit([named.id]);
 
     expect(await techOf(named.id), "the run overwrote a receptionist's choice").toBe(theirs.id);
     expect(mine.id).not.toBe(theirs.id);
@@ -289,7 +305,7 @@ describe("assignDay — the dawn run", () => {
     const branch = await fx.branch();
     await fx.staff("technician", branch.id);
     const svc = await fx.service();
-    const hold = await fx.booking({
+    const hold = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       status: "pending",
@@ -298,7 +314,6 @@ describe("assignDay — the dawn run", () => {
 
     const { assignDay } = await import("@/lib/assign");
     const result = await assignDay(branch.id);
-    await forgetAudit([hold.id]);
 
     expect(await techOf(hold.id), "a pending hold was given a technician").toBeNull();
     expect(result.assigned).toBe(0);
@@ -310,7 +325,7 @@ describe("assignDay — the dawn run", () => {
     await fx.staff("technician", branch.id, { active: false });
     await fx.staff("technician", other.id);
     const svc = await fx.service();
-    const open = await fx.booking({
+    const open = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       status: "confirmed",
@@ -319,7 +334,6 @@ describe("assignDay — the dawn run", () => {
 
     const { assignDay } = await import("@/lib/assign");
     const result = await assignDay(branch.id);
-    await forgetAudit([open.id]);
 
     expect(await techOf(open.id)).toBeNull();
     expect(result).toEqual({ assigned: 0, unassigned: 1 });
@@ -331,7 +345,7 @@ describe("assignDay — the dawn run", () => {
     const { riyadhDateKey } = await import("@/lib/time");
     await daysOff(away.id, riyadhDateKey(), riyadhDateKey());
     const svc = await fx.service();
-    const open = await fx.booking({
+    const open = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       status: "confirmed",
@@ -340,7 +354,6 @@ describe("assignDay — the dawn run", () => {
 
     const { assignDay } = await import("@/lib/assign");
     const result = await assignDay(branch.id);
-    await forgetAudit([open.id]);
 
     expect(await techOf(open.id), "a technician on leave was dealt a customer").toBeNull();
     expect(result).toEqual({ assigned: 0, unassigned: 1 });
@@ -352,7 +365,7 @@ describe("assignDay — the dawn run", () => {
     const branch = await fx.branch();
     const tech = await fx.staff("technician", branch.id);
     const svc = await fx.service();
-    const open = await fx.booking({
+    const open = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       status: "confirmed",
@@ -369,7 +382,6 @@ describe("assignDay — the dawn run", () => {
     expect(trail[0].actorId, "the job was logged as a member of staff").toBeNull();
     expect(trail[0].diff!.technicianId).toEqual({ from: null, to: tech.id });
 
-    await forgetAudit([open.id]);
   });
 
   it("is safe to run twice — the second run has nothing left to do", async () => {
@@ -378,7 +390,7 @@ describe("assignDay — the dawn run", () => {
     const branch = await fx.branch({ stationCount: 2 });
     await fx.staff("technician", branch.id);
     const svc = await fx.service();
-    const open = await fx.booking({
+    const open = await mkBooking({
       branchId: branch.id,
       serviceId: svc.id,
       status: "confirmed",
@@ -399,6 +411,5 @@ describe("assignDay — the dawn run", () => {
 
     const trail = await db.select().from(auditLog).where(eq(auditLog.entityId, open.id));
     expect(trail, "one assignment was audited twice").toHaveLength(1);
-    await forgetAudit([open.id]);
   });
 });
