@@ -72,6 +72,8 @@ export default async function BookingsPage({
         startsAt: bookings.startsAt,
         endsAt: bookings.endsAt,
         status: bookings.status,
+        // Technician done is not ticket closed — see lib/booking-pulse.ts.
+        finishedAt: bookings.finishedAt,
         source: bookings.source,
         stationId: bookings.stationId,
         serviceName: bookings.serviceName,
@@ -206,6 +208,7 @@ export default async function BookingsPage({
           startsAt: r.startsAt.toISOString(),
           endsAt: r.endsAt.toISOString(),
           status: r.status,
+          finishedAt: r.finishedAt?.toISOString() ?? null,
           source: r.source,
           stationId: r.stationId,
           serviceName: r.serviceName,

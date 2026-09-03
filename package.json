@@ -27,6 +27,7 @@
     "check:station": "tsx --conditions=react-server scripts/check-station.ts",
     "check:loyalty": "tsx --conditions=react-server scripts/check-loyalty.ts",
     "check:chat": "tsx --conditions=react-server scripts/check-chat.ts",
+    "check:pulse": "tsx scripts/check-pulse.ts",
     "db:migrate:test": "node scripts/migrate-test.mjs"
   },
   "dependencies": {

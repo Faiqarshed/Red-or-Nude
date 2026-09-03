@@ -12,6 +12,7 @@ import { ChevronDown, Users } from "lucide-react";
 import { Card, EmptyState, PageHeader, Badge, BranchFilter, Button, Thumb } from "@/components/admin/ui";
 import { STATUS_TONE } from "../bookings/BookingsView";
 import BookingDrawer, { BookingFacts } from "../bookings/BookingDrawer";
+import { serviceClock } from "@/lib/booking-clock";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { formatCountdown, formatDuration, localTime } from "@/lib/time";
@@ -517,6 +518,8 @@ export default function FrontDeskView({
             {rest.map((r) => {
               const ready = readyToClose(r);
               const lockReason = techLockReason(r);
+              const { runningMs, tookMs } = serviceClock(r, now);
+              const clockMs = runningMs ?? tookMs;
               return (
                 <li
                   key={r.id}
@@ -552,22 +555,15 @@ export default function FrontDeskView({
                         {r.stationLabel ? ` · ${r.stationLabel}` : ""}
                       </span>
 
-                      {/* What the technician's own clock says. Finished is the
-                          settled figure — start to finish, not counting however
-                          long the ticket then sat waiting to be closed. Still
-                          running, it counts up off the same `now` as everything
-                          else here, so the desk can see a service overrunning
-                          while there is still time to do something about it. */}
-                      {r.startedAt ? (
+                      {/* How long she has been here — see lib/booking-clock.ts. */}
+                      {clockMs !== null ? (
                         <span
                           className={cn(
                             "mt-0.5 block text-[11px] tabular-nums",
-                            r.finishedAt ? "text-ink/45" : "text-sky",
+                            runningMs !== null ? "text-sky" : "text-ink/45",
                           )}
                         >
-                          {r.finishedAt
-                            ? `${f.took} ${formatDuration(new Date(r.finishedAt).getTime() - new Date(r.startedAt).getTime(), lang)}`
-                            : `${f.running} ${formatDuration(now - new Date(r.startedAt).getTime(), lang)}`}
+                          {runningMs !== null ? f.running : f.took} {formatDuration(clockMs, lang)}
                         </span>
                       ) : null}
                     </span>
@@ -807,14 +803,13 @@ function LaneRow({
   const lateMin = Math.max(0, Math.round((now - startedAt) / 60_000));
   const expectedMin = Math.max(0, Math.round((new Date(r.endsAt).getTime() - startedAt) / 60_000));
 
-  const runningMs = r.startedAt ? now - new Date(r.startedAt).getTime() : null;
+  // How long she has been here, wait included — see lib/booking-clock.ts.
+  const { runningMs, tookMs } = serviceClock(r, now);
   const runningMin = runningMs === null ? null : Math.max(0, Math.round(runningMs / 60_000));
   const overMin = runningMin !== null && expectedMin > 0 ? runningMin - expectedMin : 0;
 
-  const tookMs =
-    r.startedAt && r.finishedAt
-      ? new Date(r.finishedAt).getTime() - new Date(r.startedAt).getTime()
-      : null;
+  // Checked in, nobody has pressed Start. The lane holds both on purpose.
+  const unstarted = lane === "service" && !r.startedAt;
 
   return (
     <div className="flex items-center gap-3 px-4 py-3 text-start">
@@ -847,6 +842,13 @@ function LaneRow({
               {f.minutesLate(lateMin)} · {f.noShowIn(Math.max(0, graceMin - lateMin))}
             </span>
           ) : null}
+
+          {/* Amber matches the checked-in pulse on /admin/bookings. */}
+          {unstarted ? (
+            <span className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-[#b7791f]/[0.12] px-2.5 py-0.5 text-xs font-semibold text-[#8a5a06]">
+              {f.notStarted}
+            </span>
+          ) : null}
         </span>
       </button>
 
@@ -861,7 +863,14 @@ function LaneRow({
           <span
             className={cn(
               "block text-[17px] font-semibold",
-              overMin > 0 ? "text-red" : "text-[#2c6a88]",
+              // Red first, amber second. The salon's rule is that a customer's
+              // time starts when she checks in, however late anyone picks her
+              // up — so a booking nobody has started is not exempt from
+              // overrunning, it is the worst way to overrun. Amber is for the
+              // ones still inside their hour, where "waiting" is the whole
+              // story; past the hour the story is that she is late being seen,
+              // and the badge underneath already says why.
+              overMin > 0 ? "text-red" : unstarted ? "text-[#8a5a06]" : "text-[#2c6a88]",
             )}
           >
             {runningMin === null ? "—" : formatDuration(runningMin * 60_000, lang)}
