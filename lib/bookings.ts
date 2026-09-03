@@ -22,7 +22,7 @@ import {
   ticketCounters,
   type Localized,
 } from "@/lib/db/schema";
-import { reserveStations, utcToLocalDate } from "@/lib/availability";
+import { refuseOutsideHours, reserveStations, utcToLocalDate } from "@/lib/availability";
 import { canCancel, cancelDeadline } from "@/lib/cancellation";
 import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
@@ -68,6 +68,15 @@ export type CreateBookingsInput = {
    * source.
    */
   status?: "pending" | "confirmed";
+  /**
+   * Refuse an appointment the branch is not open for.
+   *
+   * Off by default: the admin walk-in drawer and the no-show release seat people
+   * into moments the public could never pick, and both call this directly. The
+   * public route sets it, because there the start time arrives in a request body
+   * and the slot picker in the browser is not a gate.
+   */
+  enforceOpeningHours?: boolean;
   /**
    * The code of the booking this one refills. Set only by the refill button in
    * the customer's history — the window, the price and the one-per-booking rule
@@ -125,6 +134,14 @@ export type CreateBookingError =
   | "invalid-service"
   | "slot-taken"
   | "blocked"
+  /**
+   * The salon is not open for this appointment. Only ever returned to a caller
+   * that passed `enforceOpeningHours` — the counter is allowed to seat somebody
+   * outside them, see the check in createBookings.
+   */
+  | "closed-day"
+  | "outside-hours"
+  | "closure"
   /** The offer itself has lapsed, or was never on this booking. */
   | "refill-expired"
   /** The offer is open, but the appointment chosen falls outside its window. */
@@ -693,6 +710,28 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   // chair gets taken out from under them mid-appointment.
   const endsAtPer = guests.map((g) => new Date(startsAt.getTime() + g.durationMin * 60_000));
   const latestEndsAt = new Date(Math.max(...endsAtPer.map((d) => d.getTime())));
+
+  /**
+   * Is the salon even open for this? Asked only when the caller asks for it.
+   *
+   * Off by default because the counter needs it off: a walk-in seated into the
+   * chair a no-show just freed is legitimate, and so is an admin correcting the
+   * books. Those callers reach this function directly. The public route turns it
+   * on, because there the start time is whatever arrived in a request body.
+   *
+   * Same shape as the `leadTimeMin` override in getDayAvailability — one
+   * implementation, and the caller says which audience it is serving.
+   *
+   * Checked here rather than in the route because only this function knows how
+   * long the appointment runs: the duration is the service plus its add-ons plus
+   * removal, resolved a few lines above. The route would have to recompute it.
+   */
+  if (input.enforceOpeningHours) {
+    // Returned, not thrown: this runs above the try that turns a BookingAbort
+    // back into a result, so throwing here would escape as a 500.
+    const refusal = await refuseOutsideHours(input.branchId, startsAt, latestEndsAt);
+    if (refusal) return { ok: false, error: refusal };
+  }
 
   // The promo comes off last, on top of whatever the group or refill discount
   // already took — the codes are occasion offers, not alternatives to the other

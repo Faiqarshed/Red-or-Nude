@@ -417,6 +417,65 @@ export async function reserveStations(
  * `reserveStations(..., { onlyStationId })` is what decides what to *keep*, and
  * it runs again under a lock when the booking is actually written.
  */
+export type HoursRefusal = "closed-day" | "outside-hours" | "closure";
+
+/**
+ * Does this appointment fit inside the day the branch is actually open?
+ *
+ * Deliberately *not* "would computeDay have offered this start". That question
+ * drags in the slot grid, the lead time and the free-chair edges, and the
+ * station QR add-on (brief §2.7) books at a projected finish time that sits on
+ * none of them — checking a public booking against the grid would refuse a
+ * customer sitting in the chair. This asks the smaller question the grid is
+ * built on top of, so both flows can be held to it.
+ *
+ * The end is checked, not only the start: an appointment must *finish* before
+ * closing, which is the same rule computeDay applies via `latestStart`. A
+ * booking that runs past midnight therefore fails here too, since `close` is
+ * the closing time of the day it began.
+ *
+ * Read-only, and no substitute for `reserveStations` — this says the salon is
+ * open, not that a chair is free.
+ */
+export async function refuseOutsideHours(
+  branchId: string,
+  startsAt: Date,
+  endsAt: Date,
+): Promise<HoursRefusal | null> {
+  const [hourRows, closureRows] = await Promise.all([
+    db
+      .select({ opens: branchHours.opens, closes: branchHours.closes, closed: branchHours.closed })
+      .from(branchHours)
+      .where(
+        and(eq(branchHours.branchId, branchId), eq(branchHours.weekday, riyadhWeekday(startsAt))),
+      ),
+    db
+      .select({ id: closures.id })
+      .from(closures)
+      .where(
+        and(
+          // A null branch is a closure across every branch — Eid, not a
+          // maintenance day at one salon.
+          or(eq(closures.branchId, branchId), isNull(closures.branchId)),
+          lt(closures.startsAt, endsAt),
+          gt(closures.endsAt, startsAt),
+        ),
+      )
+      .limit(1),
+  ]);
+
+  const hours = hourRows[0];
+  if (!hours || hours.closed) return "closed-day";
+
+  const localDay = utcToLocalDate(startsAt);
+  const open = localToUtc(localDay, hours.opens.slice(0, 5));
+  const close = localToUtc(localDay, hours.closes.slice(0, 5));
+  if (startsAt < open || endsAt > close) return "outside-hours";
+
+  if (closureRows.length) return "closure";
+  return null;
+}
+
 export async function stationFreeWindow(
   branchId: string,
   stationId: string,

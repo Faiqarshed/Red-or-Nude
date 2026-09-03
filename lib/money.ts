@@ -6,7 +6,30 @@ export const HALALAS_PER_SAR = 100;
 /** VAT rate as a percentage. Overridable from Settings; this is the KSA default. */
 export const DEFAULT_VAT_PERCENT = 15;
 
-export const sarToHalalas = (sar: number): number => Math.round(sar * HALALAS_PER_SAR);
+/**
+ * Riyals in, halalas out, rounded half-up.
+ *
+ * The `toFixed` is not decoration. `Math.round(sar * 100)` alone rounds
+ * half-halalas in whichever direction IEEE-754 happens to land, and neighbouring
+ * amounts go opposite ways with nothing to tell them apart:
+ *
+ *     1.005 * 100 = 100.49999999999999  ->  100   (down)
+ *     1.015 * 100 = 101.49999999999999  ->  101   (down)
+ *     1.045 * 100 = 104.5               ->  105   (up)
+ *    10.005 * 100 = 1000.5000000000001  ->  1001  (up)
+ *
+ * Snapping to four decimals first discards the representation error while
+ * keeping the real half, so every one of those rounds up and the rule is the
+ * same rule twice. Four rather than two because the input is riyals: two would
+ * re-round the value being converted rather than clean up the multiplication.
+ *
+ * Only reachable from admin input today — prices, gift-card amounts, promo
+ * minimums — where the forms allow two decimals and this never fires. It fires
+ * the day someone pastes a three-decimal figure, and a price a halala out in an
+ * unpredictable direction is not something anyone would think to look for.
+ */
+export const sarToHalalas = (sar: number): number =>
+  Math.round(Number((sar * HALALAS_PER_SAR).toFixed(4)));
 export const halalasToSar = (halalas: number): number => halalas / HALALAS_PER_SAR;
 
 /**

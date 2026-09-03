@@ -17,6 +17,16 @@
  * hand-written rows that only look like bookings.
  */
 
+// Must come first: this points DATABASE_URL at the local test database and
+// refuses to run if there isn't one. See scripts/_test-db.ts.
+//
+// Placement is load-bearing, not decorative. This sat at the bottom of the
+// file and worked only because ES modules hoist a static import above the
+// top-level main() call — while every other dependency here is a dynamic
+// `await import()` inside main(). An edit tidying this one to match its
+// neighbours would have removed the gate without removing the line.
+import "./_test-db";
+
 /** Every seeded account signs in with this. Fixture data; not a secret. */
 const PASSWORD = "salon1234";
 
@@ -187,7 +197,3 @@ async function main() {
 }
 
 main().then(() => process.exit(0));
-
-// Must come first: this points DATABASE_URL at the local test database and
-// refuses to run if there isn't one. See scripts/_test-db.ts.
-import "./_test-db";

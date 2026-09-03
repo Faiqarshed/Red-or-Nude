@@ -27,18 +27,36 @@ export const NATIONAL_LENGTH = 9;
  * and dashes. Trailing digits past 9 are dropped rather than silently reordered.
  */
 export function toNationalDigits(input: string): string {
+  return nationalDigits(input).slice(0, NATIONAL_LENGTH);
+}
+
+/**
+ * The same normalisation without the 9-digit cap, so the validator can see how
+ * many digits were really supplied.
+ *
+ * The cap belongs on the *field* — PhoneField calls toNationalDigits on every
+ * keystroke, so typing an eleventh digit simply does nothing and the customer
+ * sees what will be stored. The cap does not belong in the *check*: an API
+ * caller posts raw JSON that no field ever truncated, and judging that on the
+ * first nine digits silently registered a different number from the one sent.
+ * `05120000119999` became `0512000011`, with a 200 and no complaint, and that
+ * is the number the salon would ring and the OTP would go to.
+ */
+function nationalDigits(input: string): string {
   let d = input.replace(/\D/g, "");
   if (d.startsWith("00966")) d = d.slice(5);
   else if (d.startsWith("966")) d = d.slice(3);
   // A single leading zero is the national trunk prefix, not part of the number.
   if (d.startsWith("0")) d = d.slice(1);
-  return d.slice(0, NATIONAL_LENGTH);
+  return d;
 }
 
 export type PhoneError = "required" | "length" | "prefix";
 
 export function validateSaudiMobile(national: string): PhoneError | null {
-  const d = toNationalDigits(national);
+  // Uncapped on purpose — see nationalDigits. Ten digits is a wrong number, not
+  // a nine-digit number with something harmless on the end.
+  const d = nationalDigits(national);
   if (!d) return "required";
   if (d.length !== NATIONAL_LENGTH) return "length";
   // Every Saudi mobile starts with 5; 01x–04x are landlines and can't receive
