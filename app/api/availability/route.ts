@@ -9,6 +9,7 @@ import { z } from "zod";
 import { getDayAvailability, getMonthAvailability } from "@/lib/availability";
 import { sweepNoShows } from "@/lib/bookings";
 import { getSettings } from "@/lib/settings";
+import { clientIp, throttled } from "@/lib/throttle";
 import { currentStaff } from "@/lib/auth/guard";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +32,11 @@ const query = z.object({
 });
 
 export async function GET(request: Request) {
+  // Heaviest public read there is; generous because a calendar click fires several.
+  if (throttled(`availability:${clientIp(request)}`, { max: 60 })) {
+    return NextResponse.json({ error: "too-many" }, { status: 429 });
+  }
+
   const params = Object.fromEntries(new URL(request.url).searchParams);
   const parsed = query.safeParse(params);
   if (!parsed.success) {

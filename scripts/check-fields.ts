@@ -22,6 +22,7 @@ import {
   validateExpiry,
 } from "@/lib/card";
 import { refillDaysLeft, refillWindowEnd } from "@/lib/refill";
+import { SETTING_DEFAULTS, pickSettings } from "@/lib/settings";
 import { closureDays } from "@/lib/time";
 import {
   formatNational,
@@ -131,11 +132,15 @@ for (const input of [
 assert.equal(validateSaudiMobile("512345678"), null);
 assert.equal(validateSaudiMobile(""), "required");
 assert.equal(validateSaudiMobile("51234567"), "length", "8 digits is short");
-// Overlong input is truncated to 9 digits first, so it is judged on what the
-// field actually shows — "4512345678" becomes "451234567" and fails on prefix.
-// The customer sees the truncated value in the field, so nothing is silently
-// accepted behind their back.
-assert.equal(validateSaudiMobile("4512345678"), "prefix");
+// Overlong input is refused as a wrong number rather than judged on its first
+// nine digits. The field still caps what can be typed — PhoneField normalises
+// on every keystroke — so this case only arises from an API caller posting raw
+// JSON, where truncating meant registering a different number from the one
+// sent: "05120000119999" quietly became "0512000011".
+assert.equal(validateSaudiMobile("4512345678"), "length", "10 digits is a wrong number");
+assert.equal(validateSaudiMobile("05120000119999"), "length", "and so is 14");
+// The field's own cap is unchanged: what a customer can type still stops at 9.
+assert.equal(toNationalDigits("05120000119999"), "512000011");
 // Landlines can't receive the SMS or WhatsApp this number exists for.
 assert.equal(validateSaudiMobile("112345678"), "prefix");
 assert.equal(validateSaudiMobile("412345678"), "prefix");
@@ -232,5 +237,40 @@ assert.deepEqual(
   "a one-day closure starts and ends on that day",
 );
 console.log("  closures: a stored range reads back as the days the admin typed ✓");
+
+// Settings now arrive as the whole table rather than the keys asked for — one
+// cached read serving every caller (docs/PERFORMANCE.md). The merge is what
+// keeps that safe: a key with no stored row must fall back to its default, and
+// a wrong lookup here would silently give the salon 0% VAT rather than an error.
+
+assert.deepEqual(
+  pickSettings([{ key: "vat_percent", value: 5 }], ["no_show_grace_min"]),
+  { no_show_grace_min: SETTING_DEFAULTS.no_show_grace_min },
+  "a key with no row falls back to its default, not to undefined",
+);
+assert.deepEqual(
+  pickSettings([], ["vat_percent", "currency"]),
+  { vat_percent: SETTING_DEFAULTS.vat_percent, currency: SETTING_DEFAULTS.currency },
+  "an empty table is all defaults",
+);
+assert.deepEqual(
+  // The whole table is passed in now, so unrelated rows must not confuse the pick.
+  pickSettings(
+    [
+      { key: "currency", value: "USD" },
+      { key: "vat_percent", value: 20 },
+      { key: "timezone", value: "Europe/Berlin" },
+    ],
+    ["vat_percent"],
+  ),
+  { vat_percent: 20 },
+  "the right row is picked out of a full table",
+);
+assert.deepEqual(
+  pickSettings([{ key: "vat_percent", value: 0 }], ["vat_percent"]),
+  { vat_percent: 0 },
+  "a stored zero is a value, not a missing row",
+);
+console.log("  settings: stored rows win, missing keys fall back to defaults ✓");
 
 console.log("\nAll field boundary checks passed.");

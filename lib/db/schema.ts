@@ -531,6 +531,9 @@ export const bookings = pgTable(
     byBranchTime: index("bookings_branch_time_idx").on(t.branchId, t.startsAt),
     byStatus: index("bookings_status_idx").on(t.status),
     byGroup: index("bookings_group_idx").on(t.groupId),
+    // Neither lookup starts from a branch, so byBranchTime cannot serve them.
+    byTechnicianTime: index("bookings_technician_time_idx").on(t.technicianId, t.startsAt),
+    byCustomer: index("bookings_customer_idx").on(t.customerId),
   }),
 );
 

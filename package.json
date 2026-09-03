@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
@@ -18,7 +20,7 @@
     "check:invoice": "tsx --conditions=react-server scripts/check-invoice-email.ts",
     "check:roles": "tsx --conditions=react-server scripts/check-roles.ts",
     "check:assign": "tsx --conditions=react-server scripts/check-assign.ts",
-    "check:fields": "tsx scripts/check-fields.ts",
+    "check:fields": "tsx --conditions=react-server scripts/check-fields.ts",
     "check:cancel": "tsx scripts/check-cancel.ts",
     "check:mail": "tsx --conditions=react-server scripts/check-mail.ts",
     "preview:giftcard": "tsx --conditions=react-server scripts/preview-giftcard.ts",
@@ -62,6 +64,7 @@
     "postcss": "8.4.39",
     "tailwindcss": "3.4.6",
     "tsx": "^4.23.1",
-    "typescript": "5.5.3"
+    "typescript": "5.5.3",
+    "vitest": "^4.1.11"
   }
 }

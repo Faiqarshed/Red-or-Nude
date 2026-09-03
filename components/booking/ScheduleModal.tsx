@@ -65,6 +65,8 @@ export default function ScheduleModal({
   const [time, setTime] = useState<string | null>(initialTime);
   const [days, setDays] = useState<Record<string, boolean> | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
+  /** The lookup failed — throttled, offline, a bad gateway. Not an empty day. */
+  const [failed, setFailed] = useState(false);
   /** The salon's booking notice, from the server. 0 for staff, who are exempt. */
   const [leadTimeMin, setLeadTimeMin] = useState(0);
 
@@ -138,21 +140,32 @@ export default function ScheduleModal({
   }, [branchId, monthKey, durationMin, guests]);
 
   // Slots for the selected day.
+  //
+  // A failed lookup is not an empty day. Falling back to `[]` rendered "no times
+  // available" — the salon telling a customer it is fully booked because a fetch
+  // was throttled or the network blinked. The two now render differently and
+  // only one of them turns people away.
   useEffect(() => {
     if (!date) return setSlots(null);
     let cancelled = false;
     setSlots(null);
+    setFailed(false);
     fetch(
       `/api/availability?branchId=${branchId}&date=${date}&duration=${durationMin}&guests=${guests}`,
     )
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
       .then((d) => {
         if (cancelled) return;
         setSlots(d.slots ?? []);
         setLeadTimeMin(typeof d.leadTimeMin === "number" ? d.leadTimeMin : 0);
       })
       .catch(() => {
-        if (!cancelled) setSlots([]);
+        if (cancelled) return;
+        setFailed(true);
+        setSlots([]);
       });
     return () => {
       cancelled = true;
@@ -251,6 +264,8 @@ export default function ScheduleModal({
 
       {!date ? null : slots === null ? (
         <p className="py-6 text-center text-sm text-ink/40">…</p>
+      ) : failed ? (
+        <p className="py-6 text-center text-sm text-ink/45">{c.modals.slotsFailed}</p>
       ) : slots.length === 0 ? (
         <p className="py-6 text-center text-sm text-ink/45">{c.modals.noSlots}</p>
       ) : (

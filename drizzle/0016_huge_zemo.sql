@@ -1,0 +1,2 @@
+CREATE INDEX "bookings_technician_time_idx" ON "bookings" USING btree ("technician_id","starts_at");--> statement-breakpoint
+CREATE INDEX "bookings_customer_idx" ON "bookings" USING btree ("customer_id");

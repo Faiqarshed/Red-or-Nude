@@ -20,6 +20,28 @@ import type { StaffRole } from "@/lib/db/schema";
 
 export type BranchOption = { id: string; name: Localized };
 
+/**
+ * The branch picker's options, cached in the process for a minute.
+ *
+ * Read twice on every admin page render — once by the shell layout for the top
+ * bar, once below — for a list that changes when the company opens a third
+ * salon. See docs/PERFORMANCE.md.
+ *
+ * ponytail: per-instance, lost on cold start, and nothing writes `branches`.
+ */
+const TTL_MS = 60_000;
+let cache: { rows: BranchOption[]; at: number } | null = null;
+
+export async function listBranches(): Promise<BranchOption[]> {
+  if (cache && Date.now() - cache.at < TTL_MS) return cache.rows;
+  const rows = await db
+    .select({ id: branches.id, name: branches.name })
+    .from(branches)
+    .orderBy(asc(branches.sort));
+  cache = { rows, at: Date.now() };
+  return rows;
+}
+
 export type BranchScope = {
   /** Null means every branch — the CEO's default, and what the queries expect. */
   branchId: string | null;
@@ -34,10 +56,7 @@ export async function branchScope(
   const pinned = scopedBranchId(user.role, user.branchId);
   if (pinned) return { branchId: pinned, options: [] };
 
-  const rows = await db
-    .select({ id: branches.id, name: branches.name })
-    .from(branches)
-    .orderBy(asc(branches.sort));
+  const rows = await listBranches();
 
   // An id that is not a branch is treated as "all", not as an error: a stale
   // link after a branch is removed should show the whole salon rather than an

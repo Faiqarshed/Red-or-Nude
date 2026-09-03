@@ -1,5 +1,4 @@
 import "server-only";
-import { inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { settings } from "@/lib/db/schema";
 
@@ -77,19 +76,46 @@ export const SETTING_DEFAULTS = {
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
 
-/** Read several settings at once, falling back to the defaults above. */
-export async function getSettings<K extends SettingKey>(
-  keys: K[],
-): Promise<{ [P in K]: (typeof SETTING_DEFAULTS)[P] }> {
-  const rows = await db
-    .select()
-    .from(settings)
-    .where(inArray(settings.key, keys as unknown as string[]));
+/**
+ * Every stored setting — the whole twenty-row table, not the keys asked for, so
+ * the three or four callers in one render share a read. See docs/PERFORMANCE.md.
+ *
+ * Not `unstable_cache`: next/cache reaches into React's server-only build,
+ * which throws outside the Next runtime, and half of scripts/check-*.ts reaches
+ * this file through lib/bookings. Do not "fix" this back.
+ *
+ * ponytail: per-instance, lost on cold start, and nothing writes this table.
+ */
+const TTL_MS = 60_000;
+let cache: { rows: { key: string; value: unknown }[]; at: number } | null = null;
 
+async function loadSettings() {
+  if (cache && Date.now() - cache.at < TTL_MS) return cache.rows;
+  const rows = await db.select().from(settings);
+  cache = { rows, at: Date.now() };
+  return rows;
+}
+
+/**
+ * Merge stored rows over the defaults. Pure, so the fallback rule — which is
+ * what stops a missing row reading as zero VAT — is checkable without a
+ * database. See scripts/check-fields.ts.
+ */
+export function pickSettings<K extends SettingKey>(
+  rows: { key: string; value: unknown }[],
+  keys: K[],
+): { [P in K]: (typeof SETTING_DEFAULTS)[P] } {
   const out = {} as { [P in K]: (typeof SETTING_DEFAULTS)[P] };
   for (const key of keys) {
     const row = rows.find((r) => r.key === key);
     out[key] = (row?.value ?? SETTING_DEFAULTS[key]) as (typeof SETTING_DEFAULTS)[K];
   }
   return out;
+}
+
+/** Read several settings at once, falling back to the defaults above. */
+export async function getSettings<K extends SettingKey>(
+  keys: K[],
+): Promise<{ [P in K]: (typeof SETTING_DEFAULTS)[P] }> {
+  return pickSettings(await loadSettings(), keys);
 }
