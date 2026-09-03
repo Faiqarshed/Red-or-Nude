@@ -96,7 +96,45 @@ work: a walk-in who later signs up online keeps her history.
 
 Three ways to close it if it ever matters: drop the guest merge entirely
 (costs the feature), require staff confirmation to merge, or verify the phone
-by SMS. Deliberately left as-is.
+by SMS. Deliberately left as-is, decided 2026-09-03.
+
+#### In plain words: why one code is a hole and two codes are a cost
+
+Think of a customer's row as a door with two keys on it: an **email** and a
+**phone number**.
+
+Today only the email is a real key — you have to prove it with a code. The phone
+is a name tag: you type it and nobody checks.
+
+| What is code-checked | What you get |
+|---|---|
+| Email only (**today**) | The phone is the way in. Type someone's number, take their row. |
+| Phone only | The email becomes the way in. Same hole, other side. |
+| **Both** | Closed. The cost is that signing up now needs two codes. |
+| Neither | Anyone can be anyone. |
+
+**Example.** Noura walks into the salon and gives her number at the desk. She
+never makes an account. A stranger signs up online, proves *his own* inbox with
+a code, and types **Noura's number** in the phone box. He now sees the two
+appointments Noura had. He does not get an account of hers — she never had one —
+but her history is his.
+
+**The trap is doing half of it.** If SMS is added and the phone becomes the
+proved key, but the typed email is still allowed to find an existing row, the
+same thing happens the other way round: prove any phone, type the victim's email
+address, take the row. So the rule has to be *whichever one you proved is the
+only one allowed to find an existing customer* — the check follows the code, not
+the column. That is what the three numbered points in the route's own comment
+(`app/api/account/register/route.ts:92-105`) exist to say.
+
+**And one more, even with both.** A phone number can be given to somebody else
+later. Whoever holds Noura's old number and proves it still gets her walk-in
+history, because a guest row has nothing else on it to fall back on. Two codes
+close the guessing; nothing closes recycling except a second proved channel, and
+a walk-in row has none.
+
+So the decision is: **one code and a small hole, or two codes and the friction**.
+Today it is one code, on purpose, and this is the hole it leaves.
 
 ### Note
 

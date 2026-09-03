@@ -1,6 +1,6 @@
 # The test suite
 
-`npm test` → `vitest run`. 559 cases across 11 files, against real local
+`npm test` → `vitest run`. 673 cases across 16 files, against real local
 Postgres. All of them pass: every bug the suite found has been fixed.
 
 ```
@@ -46,6 +46,11 @@ Where they already cover something, the suites cite them rather than duplicating
 | admin | `tests/admin/rbac-matrix.test.ts` | 342 | 43 server actions × signed-out and all four roles |
 | jobs | `tests/jobs/cron-auth.test.ts` | 39 | four cron routes × eight refusals |
 | schema | `tests/schema/constraints.test.ts` | 282 | every unique, FK, notNull, enum and delete rule on 34 tables |
+| lifecycle | `tests/lifecycle/self-service.test.ts` | 39 | reschedule and refill at the route, the refill window, `claimedWindows` |
+| rewards | `tests/rewards/promos.test.ts` | 29 | promo window through Postgres, the lookup, `countPromoUse`, the cap race, re-pricing at the charge |
+| reviews | `tests/reviews/ratings.test.ts` | 22 | the `reviews_booking_unique` race, the token, submit-twice |
+| assign | `tests/assign/floor.test.ts` | 17 | `offOn`, `pickTechnician` eligibility, `assignDay`'s three filters |
+| i18n | `tests/i18n/dictionary.test.ts` | 7 | every `ar` key has an `en` twin, and the reverse |
 
 ## Findings
 
@@ -63,6 +68,18 @@ All six are fixed. Each was reported first, demonstrated, and fixed in its own c
 Six more were found by `/code-review` on this branch — four of them mistakes in
 this work, two pre-existing holes in the test-database safety gate. All fixed;
 see the commit log.
+
+The five surfaces added on 2026-09-03 (reschedule, refill, promos, reviews,
+assignment eligibility, localization) found **no new bugs**. What they turned up
+instead was four pieces of behaviour that are deliberate and undocumented, each
+pinned with a `// @characterization` test rather than asserted as spec:
+
+| Where | Pinned |
+|---|---|
+| `lib/promo.ts:128-136` | The cap is checked at hold and counted at confirmation, so two customers racing the last use of a capped code both get it. A documented, accepted ceiling (REQ-PRM-011 / A01). |
+| `lib/promo.ts:75` | A negative code `value` is floored at zero rather than refused, so a mistyped code cannot *increase* a bill (REQ-PRM-035). |
+| `lib/reviews/invite.ts` | The insert runs before the booking is read, so an unknown booking id trips the foreign key and is caught as `failed` — the declared `not-found` outcome is unreachable (REQ-REV-206). |
+| staff codes | A promo code carrying a `staff_id` is an ordinary promo code; nothing links it to an HR record, so anyone it is forwarded to can spend it (REQ-STC-009 / REQ-PRM-A02). |
 
 Each `known-bugs-*.md` also has a "not bugs" section recording what was
 investigated and found sound, so the same ground is not walked twice.
@@ -84,19 +101,21 @@ investigated and found sound, so the same ground is not walked twice.
 Honest gaps, in rough priority order. Nothing here is known to be broken — it is
 simply untested.
 
-- **Reschedule and refill routes** — `lib/cancellation.ts` and the cancel route
-  are covered; `/api/my-bookings/reschedule` and `/refill` have no route-level
-  tests.
-- **Promo codes** — `promoDiscount` / `promoRefusal` boundaries, `max_uses` under
-  concurrency, window edges. `scripts/check-promo.ts` covers part.
-- **Reviews** — the `reviews_booking_unique` race under two concurrent End
-  presses, token IDOR, submit-twice.
-- **Assignment** — `chooseTechnician` / `planAssignments` fairness and time-off.
-  `scripts/check-assign.ts` covers part.
 - **Gift card purchase and the station QR flow** end to end. The QR flow's
   timing is now covered at the route; the rest of it is not.
-- **Localization** — nothing asserts every `ar` key has an `en` twin.
-- **RSC payload leaks** (Phase 6.6) and **cache poisoning** (6.7) — not reached.
+- **`/review/[token]` and every other page component.** The suite has no JSX
+  transform — `vitest.config.mts` configures no React plugin, deliberately,
+  because nothing else here renders components. Importing a `.tsx` page fails to
+  parse, so REQ-REV-270…275 (including the Phase 6.6 payload check on the review
+  page) are N/A at this layer rather than untested by oversight. Adding a
+  component harness is a change to the shared config.
+- **RSC payload leaks** (Phase 6.6) and **cache poisoning** (6.7) — not reached
+  beyond the JSON boundaries the route tests already assert on.
+- **`planAssignments` under a pre-assigned floor.** The `ponytail:` note on it
+  warns that greedy first-fit "can come back null where reshuffling earlier ones
+  would have fitted it". No such case was constructible: colouring intervals in
+  start order is optimal, and every surplus found was genuinely unassignable.
+  Left untested rather than faked.
 - **Mutation testing.** Coverage says which lines ran; nothing says which
   assertions would survive a mutant.
 
@@ -108,5 +127,12 @@ guest's walk-in bookings. No account, no login, no points.
 
 It is the same behaviour that lets a real walk-in keep her history when she signs
 up online later, which is why it was left. Closing it means dropping the guest
-merge, requiring staff confirmation, or verifying the phone by SMS. See
-BUG-AUTH-001.
+merge, requiring staff confirmation, or verifying the phone by SMS.
+
+**Decided 2026-09-03: left open.** SMS is the only fix that does not cost the
+feature, and no provider is wired — `lib/notify/index.ts:4` still has Unifonic
+vs Meta's Cloud API open. BUG-AUTH-001 now carries a plain-words table of the
+trade (one code and a small hole, or two codes and the friction), a worked
+example, and the trap in doing half of it: whichever channel is *proved* must be
+the only one allowed to resolve an account, or the same hole reopens facing the
+other way.
