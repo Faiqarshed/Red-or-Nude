@@ -23,6 +23,7 @@ export default function Summary({
   members,
   appointment,
   onEditSchedule,
+  onEditMember,
   grossTotal,
   total,
   agree,
@@ -32,7 +33,23 @@ export default function Summary({
 }: {
   members: MemberSelection[];
   appointment: string;
-  onEditSchedule: () => void;
+  /**
+   * Omitted where the appointment is not this panel's to change — the group
+   * page, where each guest picks her own in her own panel. Without it the row
+   * renders as a plain line: the same idiom as Card in GuestPicker, and for the
+   * same reason. A button that opens a picker for something already picked four
+   * times over is not a shortcut, it is a question nobody asked.
+   */
+  onEditSchedule?: () => void;
+  /**
+   * Open guest `i`'s time picker. Given by the group page, where each guest has
+   * her own hour: they live here rather than one-per-accordion-panel so all four
+   * can be read at once, beside the price, instead of by opening four drawers.
+   *
+   * Her branch stays in her panel, with the services — it decides which chairs
+   * and which hours exist, so it belongs next to the thing it constrains.
+   */
+  onEditMember?: (i: number) => void;
   grossTotal: number;
   /** After the group discount. Equal to grossTotal for a single guest. */
   total: number;
@@ -44,6 +61,11 @@ export default function Summary({
   const { c } = useI18n();
   const b = c.booking;
   const discounted = total < grossTotal;
+  // A party whose guests hold their own hours shares only the day, and calling
+  // that row "Appointment" while it shows a date and no time reads as a half
+  // filled-in field. It is not: it is the day, and each guest's own time is on
+  // her own line above.
+  const perGuestTimes = members.some((m) => m.timeLabel);
 
   return (
     <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)]">
@@ -71,6 +93,44 @@ export default function Summary({
                 </p>
               </div>
             </div>
+
+            {/* Where and when *she* sits. A group of four spread over two
+                salons and four hours is otherwise four identical-looking lines
+                on one bill.
+
+                Not offered until she has a service: the calendar is asked for
+                the duration her services add up to, so picking an hour first
+                would be picking against a length that is about to change. */}
+            {onEditMember ? (
+              (() => {
+                const ready = m.service !== null;
+                const Tag = ready ? "button" : "div";
+                return (
+                  <Tag
+                    onClick={ready ? () => onEditMember(i) : undefined}
+                    className={`mt-2 flex w-full items-center justify-between gap-3 rounded-[12px] px-3 py-2.5 text-start text-[12px] ring-1 ${
+                      ready
+                        ? "bg-cream/70 text-ink/70 ring-black/[0.04] transition-colors hover:ring-red/40"
+                        : "bg-black/[0.02] text-ink/30 ring-black/[0.03]"
+                    }`}
+                  >
+                    <span className="truncate">
+                      {/* Says why, not just that it is off. Greyed with her
+                          branch on it reads as the branch being the problem,
+                          which is the one thing it is not. */}
+                      {ready
+                        ? [m.branch, m.timeLabel].filter(Boolean).join(" · ") || b.notSelected
+                        : b.pickServiceFirst}
+                    </span>
+                    {ready && <span className="shrink-0 text-red">{m.timeLabel ? "✎" : "+"}</span>}
+                  </Tag>
+                );
+              })()
+            ) : (m.timeLabel || m.branch) ? (
+              <p className="mt-2 text-start text-[12px] text-ink/55">
+                {[m.branch, m.timeLabel].filter(Boolean).join(" · ")}
+              </p>
+            ) : null}
           </div>
         ))}
       </div>
@@ -78,15 +138,23 @@ export default function Summary({
       {/* The day, for everyone on the bill. In a group each guest may hold her
           own branch and hour, and those live in her own panel — this row is
           what they have in common. */}
-      <button
-        type="button"
-        onClick={onEditSchedule}
-        className="mt-4 w-full rounded-[14px] bg-cream/70 p-4 text-start ring-1 ring-black/[0.04] transition-colors hover:ring-red/40"
-      >
-        <p className="mb-1 text-[11px] text-ink/45">{b.appointment}</p>
-        <p className="text-sm font-semibold text-ink">{appointment}</p>
-      </button>
-      {members.length > 1 && (
+      {(() => {
+        const Tag = onEditSchedule ? "button" : "div";
+        return (
+          <Tag
+            onClick={onEditSchedule}
+            className={`mt-4 w-full rounded-[14px] bg-cream/70 p-4 text-start ring-1 ring-black/[0.04] ${
+              onEditSchedule ? "transition-colors hover:ring-red/40" : ""
+            }`}
+          >
+            <p className="mb-1 text-[11px] text-ink/45">
+              {perGuestTimes ? b.groupDay : b.appointment}
+            </p>
+            <p className="text-sm font-semibold text-ink">{appointment}</p>
+          </Tag>
+        );
+      })()}
+      {members.length > 1 && perGuestTimes && (
         <p className="mt-2 text-start text-[11px] text-ink/45">{b.sameSlotNote}</p>
       )}
 

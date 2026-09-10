@@ -30,6 +30,7 @@ export default function ScheduleModal({
   initialDate,
   initialTime,
   lastDate = null,
+  onlyDate = null,
   onConfirm,
   onClose,
 }: {
@@ -49,6 +50,16 @@ export default function ScheduleModal({
    * stops the customer picking one only to be turned away at payment.
    */
   lastDate?: string | null;
+  /**
+   * Fix the day and pick only a time on it, `YYYY-MM-DD`.
+   *
+   * Set for every guest in a group after the first: a party books one day, so
+   * the second guest is not choosing a date, she is choosing an hour on a date
+   * already chosen. The calendar is hidden rather than shown-with-one-day-
+   * enabled, because a month grid where thirty dates refuse the click is a
+   * puzzle, not a picker.
+   */
+  onlyDate?: string | null;
   /** Returns the local date, the wall-clock time, and the exact UTC instant. */
   onConfirm: (date: string, time: string, startsAt: string) => void;
   onClose: () => void;
@@ -61,7 +72,7 @@ export default function ScheduleModal({
     return { year: base.getUTCFullYear(), month0: base.getUTCMonth() };
   });
 
-  const [date, setDate] = useState<string | null>(initialDate);
+  const [date, setDate] = useState<string | null>(onlyDate ?? initialDate);
   const [time, setTime] = useState<string | null>(initialTime);
   const [days, setDays] = useState<Record<string, boolean> | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
@@ -173,6 +184,12 @@ export default function ScheduleModal({
 
   return (
     <Modal title={c.modals.scheduleTitle} onClose={onClose} className="max-w-[720px]">
+      {onlyDate ? (
+        <p className="mb-5 rounded-[14px] bg-cream/70 p-4 text-center text-sm font-semibold text-ink">
+          {formatDateLabel(onlyDate, lang)}
+        </p>
+      ) : (
+        <>
       <div className="mb-4 flex items-center justify-between">
         <button
           type="button"
@@ -239,8 +256,10 @@ export default function ScheduleModal({
           );
         })}
       </div>
+        </>
+      )}
 
-      <hr className="my-6 border-black/[0.07]" />
+      {onlyDate ? null : <hr className="my-6 border-black/[0.07]" />}
 
       <div className="mb-4 flex items-center justify-between">
         <span className="text-[13px] text-ink/45">
