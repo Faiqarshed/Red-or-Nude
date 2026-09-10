@@ -162,6 +162,8 @@ export type CreateBookingError =
   | "refill-window"
   /** A group was posted with guests on two different days. */
   | "different-day"
+  /** A pack credit was offered against a group booking, which is forbidden. */
+  | "pack-not-in-group"
   /** A discount code was given and does not apply. `promoReason` says why. */
   | "promo-invalid"
   /**
@@ -746,6 +748,25 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     if (input.members.length !== 1 || input.members[0].serviceId !== refillParent.serviceId) {
       return { ok: false, error: "invalid-service" };
     }
+  }
+
+  // A pack credit pays for one woman's own appointment and nothing else.
+  //
+  // Packs are sold and spent on the solo screen (docs/SCOPE-ENHANCEMENT.md §8:
+  // "a pack paying for a group booking" is not in this phase), and no screen
+  // offers a credit on a group booking. But a screen not offering something is
+  // not the same as the engine refusing it: priceMember quotes each guest
+  // against the ledger independently and they are all priced at once, so two
+  // guests naming the same purchase both saw the same credit, both priced their
+  // service to zero, and both wrote a -1. One credit paid for two appointments
+  // and the balance went negative. The partial unique index does not catch it —
+  // it is keyed on the booking, and those are two different bookings.
+  //
+  // Refused rather than ignored, for the reason a bad promo code is: silently
+  // charging full price to someone who asked to spend a credit is the one
+  // outcome nobody would accept.
+  if (input.members.length > 1 && input.members.some((m) => m.customerPackId)) {
+    return { ok: false, error: "pack-not-in-group" };
   }
 
   // Where and when each guest actually sits. Falls back to the party's, so the
