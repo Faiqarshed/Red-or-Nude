@@ -125,8 +125,8 @@ export type PublicPack = {
   priceSar: number;
   validDays: number;
   img: string | null;
-  /** What is in it, in catalogue order, with its own list price. */
-  lines: { serviceId: string; name: Localized; quantity: number; priceSar: number }[];
+  /** What is in it, in catalogue order. */
+  lines: { serviceId: string; name: Localized; quantity: number }[];
   /** What the same services cost bought one at a time. The reason to buy one. */
   listPriceSar: number;
 };
@@ -140,14 +140,16 @@ export async function getPublicPacks(): Promise<PublicPack[]> {
   ]);
 
   return packRows.map((p) => {
+    // Priced while the service row is still to hand — the total is the only
+    // part anybody outside needs, so the per-line price never leaves.
+    let listPriceSar = 0;
     const lines = serviceRows
       .filter((s) => lineRows.some((l) => l.packId === p.id && l.serviceId === s.id))
-      .map((s) => ({
-        serviceId: s.id,
-        name: s.name,
-        quantity: lineRows.find((l) => l.packId === p.id && l.serviceId === s.id)!.quantity,
-        priceSar: halalasToSar(s.priceHalalas),
-      }));
+      .map((s) => {
+        const quantity = lineRows.find((l) => l.packId === p.id && l.serviceId === s.id)!.quantity;
+        listPriceSar += halalasToSar(s.priceHalalas) * quantity;
+        return { serviceId: s.id, name: s.name, quantity };
+      });
 
     return {
       id: p.id,
@@ -157,7 +159,7 @@ export async function getPublicPacks(): Promise<PublicPack[]> {
       validDays: p.validDays,
       img: mediaUrl(p.image),
       lines,
-      listPriceSar: lines.reduce((sum, l) => sum + l.priceSar * l.quantity, 0),
+      listPriceSar,
     };
   });
 }

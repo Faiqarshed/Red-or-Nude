@@ -22,11 +22,7 @@ export default async function PacksPage() {
     <PacksView
       packs={packs}
       signedIn={Boolean(customer)}
-      credits={credits.map((c) => ({
-        serviceName: c.serviceName,
-        left: c.left,
-        expiresAt: c.expiresAt.toISOString(),
-      }))}
+      credits={credits.map((c) => ({ serviceName: c.serviceName, left: c.left }))}
     />
   );
 }

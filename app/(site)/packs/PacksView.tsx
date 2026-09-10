@@ -24,7 +24,7 @@ import type { Localized } from "@/lib/localized";
 
 const METHOD_KEYS = ["cardTitle", "madaTitle", "stcTitle", "appleTitle"] as const;
 
-type Credit = { serviceName: Localized | null; left: number; expiresAt: string };
+type Credit = { serviceName: Localized | null; left: number };
 
 export default function PacksView({
   packs,

@@ -159,7 +159,7 @@ async function main() {
   );
 
   const refused = await quotePackCredit(customer.id, held, svcA.id);
-  assert.ok(!refused.ok && refused.reason === "spent", "run out reads as spent, not as missing");
+  assert.ok(!refused.ok, "a service with nothing left cannot be spent");
 
   // The other service still has its one — this is the whole point of quantities
   // per service rather than a pool.
@@ -176,11 +176,8 @@ async function main() {
     .limit(1);
   if (uncovered && uncovered.id !== svcA.id && uncovered.id !== svcB.id) {
     const never = await quotePackCredit(customer.id, held, uncovered.id);
-    assert.ok(
-      !never.ok && never.reason === "wrong-service",
-      "never covered reads differently from run out",
-    );
-    console.log("  a service the pack never covered says so ✓");
+    assert.ok(!never.ok, "a service the pack never covered cannot be spent");
+    console.log("  a service the pack never covered is refused ✓");
   }
 
   // -- cancelling in time gives it back, once -------------------------------
@@ -203,7 +200,7 @@ async function main() {
     .where(eq(customerPacks.id, held));
   assert.deepEqual(await packCredits(customer.id), [], "nothing is spendable past the deadline");
   const lapsed = await quotePackCredit(customer.id, held, svcB.id);
-  assert.ok(!lapsed.ok && lapsed.reason === "expired", "and it says why");
+  assert.ok(!lapsed.ok, "and nothing on it can be spent");
   console.log("  expired: dead on read, with no job to run ✓");
 
   // -- somebody else's pack --------------------------------------------------
@@ -213,7 +210,7 @@ async function main() {
     .returning({ id: customers.id });
   made.customers.push(stranger.id);
   const theirs = await quotePackCredit(stranger.id, held, svcB.id);
-  assert.ok(!theirs.ok && theirs.reason === "not-found", "a pack that is not yours is not yours");
+  assert.ok(!theirs.ok, "a pack that is not yours is not yours");
   console.log("  another customer's pack is invisible ✓");
 
   // -- a credit actually pays for a booking ---------------------------------

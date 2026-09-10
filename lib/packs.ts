@@ -89,11 +89,16 @@ export async function packCredits(customerId: string, now = new Date()): Promise
     .sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime());
 }
 
-export type PackRefusal = "not-found" | "expired" | "wrong-service" | "spent";
-
 export type PackQuote =
   | { ok: true; customerPackId: string; serviceId: string; left: number }
-  | { ok: false; reason: PackRefusal };
+  /**
+   * Not hers, expired, or nothing left for this service — one answer, because
+   * one is all anybody asks for. The booking screen only ever offers credits she
+   * actually holds, so a refusal here is a request nobody's screen produced.
+   * Give it a reason when a screen exists that says a different sentence for
+   * each.
+   */
+  | { ok: false };
 
 /**
  * May this customer spend a credit from this purchase, on this service?
@@ -109,35 +114,15 @@ export async function quotePackCredit(
   serviceId: string,
   now = new Date(),
 ): Promise<PackQuote> {
+  // packCredits already answers all of it: it reads only her own purchases,
+  // drops the expired ones, and keeps only services with something left. A line
+  // coming back is a credit she can spend, and no line is a refusal.
   const credits = await packCredits(customerId, now);
-
-  // Hers, unexpired and unspent are all one question to the caller, but not to
-  // the customer: "your pack ran out" and "that pack has expired" are different
-  // sentences, and a pack that is not hers must read as neither.
-  const [owned] = await db
-    .select({ expiresAt: customerPacks.expiresAt })
-    .from(customerPacks)
-    .where(and(eq(customerPacks.id, customerPackId), eq(customerPacks.customerId, customerId)))
-    .limit(1);
-
-  if (!owned) return { ok: false, reason: "not-found" };
-  if (owned.expiresAt <= now) return { ok: false, reason: "expired" };
-
   const line = credits.find(
     (c) => c.customerPackId === customerPackId && c.serviceId === serviceId,
   );
-  // A pack that covers this service but has none left, versus one that never
-  // covered it at all.
-  if (!line) {
-    const covered = await db
-      .select({ id: packTxns.id })
-      .from(packTxns)
-      .where(and(eq(packTxns.customerPackId, customerPackId), eq(packTxns.serviceId, serviceId)))
-      .limit(1);
-    return { ok: false, reason: covered.length ? "spent" : "wrong-service" };
-  }
 
-  return { ok: true, customerPackId, serviceId, left: line.left };
+  return line ? { ok: true, customerPackId, serviceId, left: line.left } : { ok: false };
 }
 
 /**
@@ -182,16 +167,11 @@ export async function returnPackCredits(bookingIds: string[], reason: string): P
     .from(packTxns)
     .where(and(inArray(packTxns.bookingId, bookingIds)));
 
-  const given: typeof spent = [];
-  for (const row of spent) {
-    if (row.delta >= 0) continue; // already a grant or a return
-    // One return per spend. Two cancellations of one booking must not mint a
-    // credit the customer never bought.
-    const returned = spent.some(
-      (r) => r.delta > 0 && r.bookingId === row.bookingId && r.serviceId === row.serviceId,
-    );
-    if (!returned) given.push(row);
-  }
+  // One return per spend. Two cancellations of one booking must not mint a
+  // credit the customer never bought.
+  const key = (r: (typeof spent)[number]) => `${r.bookingId}:${r.serviceId}`;
+  const alreadyBack = new Set(spent.filter((r) => r.delta > 0).map(key));
+  const given = spent.filter((r) => r.delta < 0 && !alreadyBack.has(key(r)));
 
   if (given.length === 0) return 0;
 

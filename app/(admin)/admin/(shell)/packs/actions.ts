@@ -142,17 +142,16 @@ export async function setPackActive(id: string, active: boolean): Promise<Action
  * `pack_txns` against the purchase. Removing a pack from the shelf therefore
  * takes nothing away from anyone who bought one — which is exactly why the
  * purchase snapshots rather than joins.
+ *
+ * And why there is nothing to catch here: `pack_services` cascades and
+ * `customer_packs` sets null, so no foreign key can refuse this. The catalog
+ * actions next door do guard their delete, because a service *is* restricted by
+ * booking history.
  */
 export async function deletePack(id: string): Promise<ActionResult> {
   const actor = await requireCan("catalog.manage");
 
-  try {
-    await db.delete(packs).where(eq(packs.id, id));
-  } catch (err) {
-    console.error("[packs] delete blocked", err);
-    return { ok: false, error: "in-use" };
-  }
-
+  await db.delete(packs).where(eq(packs.id, id));
   await recordAudit(actor, { action: "delete", entity: "packs", entityId: id });
   revalidateAll();
   return { ok: true, id };
