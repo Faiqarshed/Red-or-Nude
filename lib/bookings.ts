@@ -33,6 +33,7 @@ import { getSettings } from "@/lib/settings";
 import { halalasToSar, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { quotePromo, type PromoRefusal } from "@/lib/promo";
 import { quoteReward, spendPoints } from "@/lib/loyalty";
+import { quotePackCredit, spendPackCredit } from "@/lib/packs";
 import type { RewardRefusal } from "@/lib/rewards";
 import { formatTicketNo } from "@/lib/tickets";
 import { assignIfToday } from "@/lib/assign";
@@ -67,6 +68,19 @@ export type BookingMember = {
    */
   branchId?: string | null;
   startsAt?: string | null;
+  /**
+   * Pay for this guest's service line with a credit from a membership pack she
+   * already owns (docs/SCOPE-ENHANCEMENT.md §6).
+   *
+   * The purchase, not the pack: a customer may hold two of the same pack, and
+   * the credit comes off one of them. Re-checked here against her own ledger —
+   * nothing the browser sends decides whether a credit exists.
+   *
+   * Only the service line goes to zero. Add-ons, a removal and a coffee are the
+   * same work and the same cost whether or not a pack paid for the service,
+   * exactly as they are on a refill.
+   */
+  customerPackId?: string | null;
 };
 
 export type CreateBookingsInput = {
@@ -252,6 +266,8 @@ type Priced = {
   durationMin: number;
   /** What the service line actually costs — reduced when this is a refill. */
   servicePriceHalalas: number;
+  /** The purchase a credit is coming from, once it has been checked. */
+  packCredit: { customerPackId: string; serviceId: string } | null;
   /** What the discounts are worked out on. Excludes `treatHalalas`. */
   grossHalalas: number;
   /**
@@ -272,6 +288,8 @@ async function priceMember(
   m: BookingMember,
   /** The flat refill price, or null when this is an ordinary booking. */
   refillPriceHalalas: number | null = null,
+  /** Her account, when there is one. A pack credit needs an owner to belong to. */
+  customerId: string | null = null,
 ): Promise<Priced | null> {
   const [service] = await db
     .select()
@@ -292,10 +310,22 @@ async function priceMember(
     ? await db.select().from(designs).where(eq(designs.id, m.designId)).limit(1)
     : [];
 
+  // A credit pays for the service line and nothing else. Quoted against her own
+  // ledger rather than trusted: the browser knowing about a credit is not the
+  // same as her having one, and this is the read the charge is built on.
+  //
+  // A refill priced by a credit would be two discounts on one line, so a pack
+  // wins and the refill price is simply not reached — nothing chains here.
+  const credit =
+    customerId && m.customerPackId
+      ? await quotePackCredit(customerId, m.customerPackId, m.serviceId)
+      : null;
+  const packCredit = credit?.ok ? { customerPackId: credit.customerPackId, serviceId: credit.serviceId } : null;
+
   // A refill is the same service at a flat price, whatever the service costs.
   // Add-ons and removal are extra work either way, so only the service line
   // moves — a refill with a removal on it pays for the removal.
-  const servicePriceHalalas = refillPriceHalalas ?? service.priceHalalas;
+  const servicePriceHalalas = packCredit ? 0 : (refillPriceHalalas ?? service.priceHalalas);
 
   return {
     member: m,
@@ -311,6 +341,7 @@ async function priceMember(
       (removal?.durationMin ?? 0),
     // Catalogue prices, VAT-inclusive as shown on the site.
     servicePriceHalalas,
+    packCredit,
     grossHalalas:
       servicePriceHalalas +
       addonRows.reduce((sum, a) => sum + (a.atCheckout ? 0 : a.priceHalalas), 0) +
@@ -722,7 +753,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
 
   const priced = await Promise.all(
     input.members.map((m) =>
-      priceMember(m, refillParent ? settings.refill_price_halalas : null),
+      priceMember(m, refillParent ? settings.refill_price_halalas : null, input.customerId ?? null),
     ),
   );
   if (priced.some((p) => p === null)) return { ok: false, error: "invalid-service" };
@@ -973,6 +1004,19 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
               name: a.name as Localized,
               priceHalalas: a.priceHalalas,
             })),
+          );
+        }
+
+        // Inside the transaction, against the row just written: a booking that
+        // fails cannot spend a credit, and a credit that fails to record cannot
+        // leave a free booking behind. The partial unique index on
+        // (booking_id, service_id) refuses a second one for the same booking.
+        if (guest.packCredit) {
+          await spendPackCredit(
+            tx,
+            guest.packCredit.customerPackId,
+            guest.packCredit.serviceId,
+            row.id,
           );
         }
 

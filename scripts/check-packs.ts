@@ -25,8 +25,10 @@ import {
   packTxns,
   packs,
   services,
+  stations,
 } from "@/lib/db/schema";
 import { buyPack, packCredits, quotePackCredit, returnPackCredits, spendPackCredit } from "@/lib/packs";
+import { createBookings } from "@/lib/bookings";
 
 const PHONE = "0500000077";
 
@@ -213,6 +215,68 @@ async function main() {
   const theirs = await quotePackCredit(stranger.id, held, svcB.id);
   assert.ok(!theirs.ok && theirs.reason === "not-found", "a pack that is not yours is not yours");
   console.log("  another customer's pack is invisible ✓");
+
+  // -- a credit actually pays for a booking ---------------------------------
+  // Everything above is the ledger on its own. This is the whole path:
+  // createBookings prices the service line to zero, writes the -1 inside its own
+  // transaction, and charges for the extras it did not cover.
+  const [live] = await db
+    .insert(customers)
+    .values({ phone: "0500000079", name: "Live Pack" })
+    .returning({ id: customers.id });
+  made.customers.push(live.id);
+
+  const liveBuy = await buyPack(live.id, pack.id);
+  assert.ok(liveBuy.ok, "setup: bought a pack to spend");
+  // Read rather than assumed: the pack was edited to 99 above, so what she just
+  // bought is whatever it held at *her* purchase, which is the point being made.
+  const beforeBooking = (await packCredits(live.id)).find((c) => c.serviceId === svcA.id)!.left;
+
+  const [chair] = await db
+    .select()
+    .from(stations)
+    .where(and(eq(stations.branchId, branch.id), eq(stations.active, true)))
+    .limit(1);
+  assert.ok(chair, "setup: the branch has a chair");
+
+  const booked = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(Date.UTC(2031, 2, 4, 7, 0)).toISOString(),
+    customer: { phone: "0500000079" },
+    customerId: live.id,
+    source: "web",
+    status: "confirmed",
+    members: [{ serviceId: svcA.id, addonIds: [], customerPackId: liveBuy.customerPackId }],
+  });
+  assert.ok(booked.ok, `booking with a credit failed: ${booked.ok ? "" : booked.error}`);
+  made.bookings.push(booked.bookings[0].id);
+
+  assert.equal(booked.totalHalalas, 0, "the credit paid for the service line");
+  assert.equal(
+    (await packCredits(live.id)).find((c) => c.serviceId === svcA.id)?.left,
+    beforeBooking - 1,
+    "and exactly one credit came off",
+  );
+  console.log("  booked with a credit: charged 0, one credit spent ✓");
+
+  // A pack she does not own cannot pay for anything, however the request is
+  // shaped — this is the check that the browser does not decide.
+  const stolen = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(Date.UTC(2031, 2, 4, 9, 0)).toISOString(),
+    customer: { phone: PHONE },
+    customerId: customer.id,
+    source: "web",
+    status: "confirmed",
+    members: [{ serviceId: svcA.id, addonIds: [], customerPackId: liveBuy.customerPackId }],
+  });
+  assert.ok(stolen.ok, "the booking still stands");
+  made.bookings.push(stolen.bookings[0].id);
+  assert.ok(
+    stolen.totalHalalas > 0,
+    "somebody else's pack pays for nothing — she is charged in full",
+  );
+  console.log("  another customer's pack pays for nothing ✓");
 
   console.log("\ncheck:packs — pack credits hold against Postgres");
 }

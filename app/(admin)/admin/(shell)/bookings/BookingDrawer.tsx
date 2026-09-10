@@ -302,7 +302,9 @@ export default function BookingDrawer({
             ? t.bookings.delHasReview
             : res.error === "has-points"
               ? t.bookings.delHasPoints
-              : t.common.error,
+              : res.error === "has-pack-credit"
+                ? t.bookings.delHasPackCredit
+                : t.common.error,
       );
     });
   };

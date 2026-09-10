@@ -31,6 +31,12 @@ const member = z.object({
    */
   branchId: z.string().uuid().nullable().optional(),
   startsAt: z.string().datetime().nullable().optional(),
+  /**
+   * Pay this guest's service line with a credit from a pack she owns. Which
+   * purchase, not whose — the owner comes from the session cookie, exactly as
+   * `redeemPoints` does, so a request cannot nominate somebody else's pack.
+   */
+  customerPackId: z.string().uuid().nullable().optional(),
 });
 
 const body = z.object({

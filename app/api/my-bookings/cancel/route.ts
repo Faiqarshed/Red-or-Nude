@@ -21,6 +21,7 @@ import { cancelDeadline, cancelRefusal } from "@/lib/cancellation";
 import { getSettings } from "@/lib/settings";
 import { clientIp, throttled } from "@/lib/throttle";
 import { refundBookings } from "@/lib/payments/refund";
+import { returnPackCredits } from "@/lib/packs";
 import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
 import { refuseBookingAction } from "@/lib/booking-auth";
@@ -122,6 +123,21 @@ export async function POST(request: Request) {
   // refundBookings never throws — a failure is logged for the admin to settle.
   const refund = await refundBookings(cancelled, "customer-cancelled");
 
+  // A pack credit comes back exactly where money does, and only where money
+  // does. Inside the window it is returned; cancel later and it is spent, the
+  // same way the fee is kept — the symmetry is the rule, and putting this call
+  // beside the refund is what keeps the two from drifting apart.
+  //
+  // Nothing here can fail the cancellation: the chair is already released, and a
+  // credit that did not come back is a support ticket, not a reason to leave an
+  // appointment standing.
+  let creditsBack = 0;
+  try {
+    creditsBack = await returnPackCredits(cancelled, "customer-cancelled");
+  } catch (err) {
+    console.error("[cancel] could not return pack credits", err);
+  }
+
   await recordAudit(
     { id: null, name: "customer" },
     {
@@ -131,6 +147,7 @@ export async function POST(request: Request) {
       diff: {
         status: { from: anchor.status, to: "cancelled" },
         refundedHalalas: { from: null, to: refund.ok ? refund.amountHalalas : null },
+        packCreditsReturned: { from: null, to: creditsBack || null },
       },
     },
   );
