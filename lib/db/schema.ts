@@ -674,6 +674,11 @@ export const payments = pgTable("payments", {
   id: uuid("id").primaryKey().defaultRandom(),
   bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "set null" }),
   giftCardId: uuid("gift_card_id"),
+  /**
+   * A membership pack sale. Plain uuid rather than a foreign key, like
+   * gift_card_id above: a receipt must outlive the thing it paid for.
+   */
+  customerPackId: uuid("customer_pack_id"),
   provider: text("provider"), // moyasar | tap | manual
   providerRef: text("provider_ref"),
   method: paymentMethod("method"),

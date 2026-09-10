@@ -16,6 +16,8 @@ import {
   designs,
   giftCardDesigns,
   giftCardValues,
+  packServices,
+  packs,
   removalTypes,
   services,
 } from "@/lib/db/schema";
@@ -112,6 +114,52 @@ export async function getPublicCatalog(): Promise<PublicCatalog> {
       img: mediaUrl(r.image),
     })),
   };
+}
+
+// ---- membership packs -------------------------------------------------------
+
+export type PublicPack = {
+  id: string;
+  name: Localized;
+  description: Localized | null;
+  priceSar: number;
+  validDays: number;
+  img: string | null;
+  /** What is in it, in catalogue order, with its own list price. */
+  lines: { serviceId: string; name: Localized; quantity: number; priceSar: number }[];
+  /** What the same services cost bought one at a time. The reason to buy one. */
+  listPriceSar: number;
+};
+
+/** Packs on the shelf, with their contents resolved. Admin-managed, like everything else. */
+export async function getPublicPacks(): Promise<PublicPack[]> {
+  const [packRows, lineRows, serviceRows] = await Promise.all([
+    db.select().from(packs).where(eq(packs.active, true)).orderBy(asc(packs.sort)),
+    db.select().from(packServices),
+    db.select().from(services).orderBy(asc(services.sort)),
+  ]);
+
+  return packRows.map((p) => {
+    const lines = serviceRows
+      .filter((s) => lineRows.some((l) => l.packId === p.id && l.serviceId === s.id))
+      .map((s) => ({
+        serviceId: s.id,
+        name: s.name,
+        quantity: lineRows.find((l) => l.packId === p.id && l.serviceId === s.id)!.quantity,
+        priceSar: halalasToSar(s.priceHalalas),
+      }));
+
+    return {
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      priceSar: halalasToSar(p.priceHalalas),
+      validDays: p.validDays,
+      img: mediaUrl(p.image),
+      lines,
+      listPriceSar: lines.reduce((sum, l) => sum + l.priceSar * l.quantity, 0),
+    };
+  });
 }
 
 // ---- gift cards -------------------------------------------------------------

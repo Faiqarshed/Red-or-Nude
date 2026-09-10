@@ -102,6 +102,21 @@ const ar = {
     nextGuest: "التالي: الضيفة التالية",
   },
 
+  packs: {
+    title: "الباقات",
+    sub: "مجموعة خدمات بسعر واحد، تُستخدم متى شئتِ خلال مدة الباقة. لا يوجد باركود ولا شيء تُبرزينه — تحجزين، ويُخصم رصيد.",
+    empty: "لا توجد باقات متاحة حالياً.",
+    yours: "رصيدك الحالي",
+    leftCount: "متبقٍ {n}",
+    validFor: "صالحة {n} يوماً",
+    checkout: "إتمام الشراء",
+    pickOne: "اختاري باقة للمتابعة",
+    chosen: "الباقة المختارة",
+    signIn: "تسجيل الدخول",
+    signInFirst: "الباقات تُحفظ في حسابك، لذلك يلزم تسجيل الدخول قبل الشراء.",
+    bought: "تم الشراء",
+    boughtNote: "رصيدك جاهز — اختاري الخدمة عند الحجز وسيُخصم تلقائياً.",
+  },
   payment: {
     title: "اختر طريقة الدفع",
     summaryTitle: "ملخص الحجز",
@@ -590,6 +605,21 @@ const en: Content = {
     nextGuest: "Next guest",
   },
 
+  packs: {
+    title: "Packs",
+    sub: "A bundle of services at one price, used whenever you like within the pack's window. No barcode and nothing to present — you book, and a credit comes off.",
+    empty: "No packs on offer right now.",
+    yours: "What you have left",
+    leftCount: "{n} left",
+    validFor: "Valid {n} days",
+    checkout: "Checkout",
+    pickOne: "Pick a pack to continue",
+    chosen: "Your pack",
+    signIn: "Sign in",
+    signInFirst: "Packs are kept in your account, so you'll need to sign in before buying one.",
+    bought: "Bought",
+    boughtNote: "Your credits are ready — pick the service when you book and one comes off.",
+  },
   payment: {
     title: "Select Payment Method",
     summaryTitle: "Booking Summary",

@@ -127,6 +127,13 @@
       "when": 1789036908816,
       "tag": "0017_gray_giant_man",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789037921066,
+      "tag": "0018_tricky_scarlet_spider",
+      "breakpoints": true
     }
   ]
 }
