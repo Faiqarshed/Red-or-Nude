@@ -20,9 +20,9 @@
 import "./_test-db";
 
 import assert from "node:assert";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, staff, staffTimeOff, auditLog } from "@/lib/db/schema";
+import { bookings, branches, staff, staffTimeOff, auditLog } from "@/lib/db/schema";
 import { assignDay, assignIfToday, releaseToday } from "@/lib/assign";
 import { riyadhDayRange, riyadhDateKey } from "@/lib/time";
 
@@ -59,14 +59,24 @@ let BRANCH = "";
 const CROWD = 8;
 
 async function main() {
-  const [anyTech] = await db
-    .select({ branchId: staff.branchId })
+  // Busiest floor first: some checks below hand a customer from one technician
+  // to another, which needs two of them. A one-technician branch is a perfectly
+  // real salon, so those checks are skipped rather than failed — but silently
+  // skipping is how a check rots, hence the line saying which and why.
+  const floors = await db
+    .select({ branchId: staff.branchId, techs: sql<number>`count(*)::int` })
     .from(staff)
     .where(and(eq(staff.role, "technician"), eq(staff.active, true)))
-    .limit(1);
-  if (!anyTech?.branchId) throw new Error("no active technicians — seed the database first");
-  BRANCH = anyTech.branchId;
-  console.log(`branch ${BRANCH.slice(0, 8)}\n`);
+    .groupBy(staff.branchId)
+    .orderBy(sql`count(*) desc`);
+
+  const floor = floors.find((f) => f.branchId);
+  if (!floor?.branchId) throw new Error("no active technicians — seed the database first");
+  BRANCH = floor.branchId;
+  const canHandOver = floor.techs >= 2;
+  console.log(`branch ${BRANCH.slice(0, 8)} — ${floor.techs} technician(s)`);
+  if (!canHandOver) console.log("  (one technician here — hand-over check 5 is skipped)");
+  console.log("");
 
   // 1. a booking paid for after the dawn run gets a technician there and then
   const solo = await put("solo", at(21));
@@ -118,6 +128,7 @@ async function main() {
   // 5. sent home: her waiting customer is emptied and re-dealt to someone else,
   //    and the time-off row is what stops the run handing him straight back.
   const quiet = at(20);
+  if (canHandOver) {
   const hers = await put("home", quiet);
   await assignDay(BRANCH);
   const before = (await techOf(hers))!;
@@ -132,6 +143,7 @@ async function main() {
   assert.ok(after, "5. the released booking found someone");
   assert.notStrictEqual(after, before, "5. …and never the technician who went home");
   console.log(`5. technician sent home       ${before.slice(0, 8)} → ${after!.slice(0, 8)}   PASS`);
+  }
 
   // 6. one dealer per branch. Two runs reading the floor at the same moment
   //    both see the same technician free and both hand her a customer, so the
@@ -201,8 +213,43 @@ async function main() {
   assert.strictEqual(await techOf(seated), onHer, "7. the customer already with her stays hers");
   console.log(`7. sent home, one running late  released ${letGo.length}            PASS`);
 
+  // 8. a technician moves to another branch, and the customer she was holding
+  //    does not go with her. Her old floor no longer lists her, so the booking
+  //    was on nobody's day: assignDay only ever filled EMPTY rows, and this one
+  //    had a name on it — just not a name this branch could use.
+  // An hour nothing above has used: with one technician on the floor, 21:00 is
+  // already check 1's customer and she cannot be in two chairs.
+  const moving = at(18);
+  const stranded = await put("moved", moving);
+  await assignDay(BRANCH);
+  const mover = (await techOf(stranded))!;
+  assert.ok(mover, "8. setup: the booking was assigned to begin with");
 
-  console.log("\ncheck:assign — seven live checks passed against Postgres");
+  const [otherBranch] = await db
+    .select({ id: branches.id })
+    .from(branches)
+    .where(ne(branches.id, BRANCH))
+    .limit(1);
+
+  if (otherBranch) {
+    await db.update(staff).set({ branchId: otherBranch.id }).where(eq(staff.id, mover));
+    try {
+      await assignDay(BRANCH);
+      const rescued = await techOf(stranded);
+      // Either somebody still on this floor took it, or it is back in the
+      // unassigned pile where the desk can see it. What it must never be is
+      // still held by a technician who works somewhere else now.
+      assert.notStrictEqual(rescued, mover, "8. a departed technician keeps nobody's customer");
+      console.log(
+        `8. technician changed branch  ${mover.slice(0, 8)} → ${rescued ? rescued.slice(0, 8) : "unassigned"}   PASS`,
+      );
+    } finally {
+      await db.update(staff).set({ branchId: BRANCH }).where(eq(staff.id, mover));
+    }
+  }
+
+
+  console.log("\ncheck:assign — live checks passed against Postgres");
 }
 
 async function cleanup() {

@@ -238,7 +238,7 @@ export async function assignDay(
 
   // Read, plan and write are one atomic stretch: everything from here to the
   // commit runs on `tx`, behind this branch's lock.
-  const { written, open } = await db.transaction(async (tx) => {
+  const { written, released, open } = await db.transaction(async (tx) => {
     await lockBranch(tx, branchId);
     return deal(tx, branchId, day, inTheDay);
   });
@@ -257,6 +257,21 @@ export async function assignDay(
         entity: "bookings",
         entityId: bookingId,
         diff: { technicianId: { from: null, to: technicianId } },
+      },
+    );
+  }
+
+  // Taking a name off is a real change to a real booking, so it leaves the same
+  // trail as putting one on. Without this, a customer's technician changes and
+  // the only record is that somebody else was later assigned.
+  for (const [bookingId, from] of released) {
+    await recordAudit(
+      { id: null, name: "Automatic assignment" },
+      {
+        action: "release-technician",
+        entity: "bookings",
+        entityId: bookingId,
+        diff: { technicianId: { from, to: null } },
       },
     );
   }
@@ -287,8 +302,8 @@ async function deal(
   branchId: string,
   day: Date,
   inTheDay: ReturnType<typeof and>,
-): Promise<{ written: [string, string][]; open: number }> {
-  const [open, taken, technicians, off] = await Promise.all([
+): Promise<{ written: [string, string][]; released: [string, string][]; open: number }> {
+  const [empty, taken, technicians, off] = await Promise.all([
     tx
       .select({ id: bookings.id, startsAt: bookings.startsAt, endsAt: bookings.endsAt })
       .from(bookings)
@@ -305,7 +320,9 @@ async function deal(
     // dawn, and wrong the moment it runs after a customer cancels.
     tx
       .select({
+        bookingId: bookings.id,
         id: bookings.technicianId,
+        status: bookings.status,
         startsAt: bookings.startsAt,
         endsAt: bookings.endsAt,
       })
@@ -329,13 +346,47 @@ async function deal(
     offOn(day, tx),
   ]);
 
+  // A technician who has moved branch, been switched off or had her role
+  // changed is no longer this floor's to hand work to. The booking she was
+  // holding is not free either, though: `empty` above only sees rows with no
+  // name on them, so it shows on nobody's day — her old branch does not list
+  // her, and her new branch does not have the booking.
+  //
+  // Reclaimed here rather than at each of the three places she can stop being
+  // eligible, because to this floor they are one fact: the name on this row is
+  // not one of ours. Every run re-checks it, so a row cannot stay lost.
+  //
+  // Only `confirmed`. `checked_in` and `in_progress` are a customer sitting in
+  // front of her — whatever the staff record now says, that is happening.
+  const ours = new Set(technicians.map((t) => t.id));
+  const orphaned = taken.filter((r) => r.id && r.status === "confirmed" && !ours.has(r.id));
+
+  if (orphaned.length) {
+    await tx
+      .update(bookings)
+      .set({ technicianId: null, updatedAt: new Date() })
+      .where(inArray(bookings.id, orphaned.map((r) => r.bookingId)));
+  }
+
+  // Freed rows join the queue in start order, like any other unassigned work.
+  const open = [...empty, ...orphaned.map((r) => ({ id: r.bookingId, startsAt: r.startsAt, endsAt: r.endsAt }))]
+    .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
+  const released: [string, string][] = orphaned.map((r) => [r.bookingId, r.id as string]);
+
   const candidates = technicians.map((t) => t.id).filter((id) => !off.has(id));
-  if (open.length === 0 || candidates.length === 0) return { written: [], open: open.length };
+  // Nobody to deal to. The releases above still stand — a booking nobody can be
+  // given to belongs in the branch's unassigned pile, where the desk can see it,
+  // not on a technician who works somewhere else now.
+  if (open.length === 0 || candidates.length === 0) {
+    return { written: [], released, open: open.length };
+  }
 
   const load = new Map<string, number>();
   const held = new Map<string, { startsAt: Date; endsAt: Date }[]>();
   for (const row of taken) {
-    if (!row.id) continue;
+    // A departed technician's hours block nobody: she is not a candidate, and
+    // the row she was on has just been freed.
+    if (!row.id || !ours.has(row.id)) continue;
     load.set(row.id, (load.get(row.id) ?? 0) + 1);
     held.set(row.id, [...(held.get(row.id) ?? []), { startsAt: row.startsAt, endsAt: row.endsAt }]);
   }
@@ -356,7 +407,7 @@ async function deal(
     if (done.length) written.push([bookingId, technicianId]);
   }
 
-  return { written, open: open.length };
+  return { written, released, open: open.length };
 }
 
 /**
