@@ -28,7 +28,8 @@
     "check:loyalty": "tsx --conditions=react-server scripts/check-loyalty.ts",
     "check:chat": "tsx --conditions=react-server scripts/check-chat.ts",
     "check:pulse": "tsx scripts/check-pulse.ts",
-    "db:migrate:test": "node scripts/migrate-test.mjs"
+    "db:migrate:test": "node scripts/migrate-test.mjs",
+    "check:packs": "tsx --conditions=react-server scripts/check-packs.ts"
   },
   "dependencies": {
     "@google/genai": "^2.19.0",
