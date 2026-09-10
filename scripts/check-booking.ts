@@ -464,6 +464,53 @@ async function main() {
       );
     }
 
+    // -- A refusal says which guest could not be seated --------------------
+    // The party is refused as a whole and that part is right: they came out
+    // together. But four guests now hold four hours at up to four branches, and
+    // "that time has gone" does not say which of them to change. So the refusal
+    // carries the guest it was about (docs/SCOPE-ENHANCEMENT.md §5.1).
+    //
+    // Guest 0 can be seated and guest 1 cannot, so a refusal that simply
+    // pointed at the first guest — or at nobody — would still pass the two
+    // assertions above it. The index is the whole point of the check.
+    await cleanup(branch.id);
+    await cleanup(other.id);
+
+    const wall = new Date(base + 2 * 60 * 60_000).toISOString();
+    for (let i = 0; i < otherChairs.length; i++) {
+      const filled = await createBooking({
+        branchId: other.id,
+        serviceId: svcA.id,
+        addonIds: [],
+        startsAt: wall,
+        customer: { phone: TEST_PHONE },
+        source: "walk_in",
+      });
+      assert.ok(filled.ok, "could not fill the other branch's chairs");
+    }
+
+    const refused = await createBookings({
+      branchId: branch.id,
+      startsAt: wall,
+      customer: { phone: TEST_PHONE },
+      source: "web",
+      status: "pending",
+      members: [
+        // Room for her here.
+        { serviceId: svcA.id, addonIds: [] },
+        // Nowhere left to sit over there.
+        { serviceId: svcB.id, addonIds: [], branchId: other.id },
+      ],
+    });
+    assert.ok(!refused.ok, "a party with nowhere to seat one guest must be refused");
+    assert.equal(refused.ok ? "" : refused.error, "slot-taken");
+    assert.equal(
+      refused.ok ? -1 : refused.guestIndex,
+      1,
+      "the refusal names the guest who could not be seated, not the first one",
+    );
+    console.log("  group: the refusal says which guest could not be seated ✓");
+
     await cleanup(other.id);
     console.log("  group: split across two salons, paid for on the web, a ticket from each ✓");
   }

@@ -190,6 +190,13 @@ export type CreateBookingsResult =
       rewardReason?: RewardRefusal;
       /** The balance as it actually is, so the checkout can correct itself. */
       pointsBalance?: number;
+      /**
+       * Which guest the refusal is about, zero-based — set with `slot-taken`
+       * from the per-guest reservation loop. Four chairs at one branch at one
+       * hour fail far more often than two did, and "that time has gone" tells a
+       * party of four nothing they can act on: the checkout names her.
+       */
+      guestIndex?: number;
     };
 
 // ---- the original one-guest API, unchanged for existing callers -------------
@@ -217,7 +224,11 @@ export type CreateBookingResult =
  * out of a bad state is to throw.
  */
 class BookingAbort extends Error {
-  constructor(readonly reason: CreateBookingError) {
+  constructor(
+    readonly reason: CreateBookingError,
+    /** Which guest it was about, when the refusal is about one of them. */
+    readonly guestIndex?: number,
+  ) {
     super(reason);
   }
 }
@@ -879,7 +890,9 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
             excludeStationIds: stationIds.filter((_, j) => clash(i, j)),
           },
         );
-        if (!got) throw new BookingAbort("slot-taken");
+        // Carries `i`: the party is refused as a whole, but the checkout still
+        // has to say which of them could not be seated.
+        if (!got) throw new BookingAbort("slot-taken", i);
         stationIds.push(got[0]);
       }
 
@@ -1052,7 +1065,9 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
 
     return { ok: true, groupId, totalHalalas: billTotal, bookings: created, pointsSpent };
   } catch (err) {
-    if (err instanceof BookingAbort) return { ok: false, error: err.reason };
+    if (err instanceof BookingAbort) {
+      return { ok: false, error: err.reason, guestIndex: err.guestIndex };
+    }
     // Kept as a cheap backstop even though reserveStations now locks: a bug that
     // bypasses the lock should still fail loudly rather than double-book a chair.
     if (isSlotConflict(err)) return { ok: false, error: "slot-taken" };

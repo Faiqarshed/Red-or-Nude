@@ -167,6 +167,9 @@ export async function POST(request: Request) {
         // a stale one can correct itself instead of offering the rung again.
         rewardReason: result.rewardReason,
         pointsBalance: result.pointsBalance,
+        // Which guest lost her chair, so the checkout can name her instead of
+        // refusing a party of four without saying whose time went.
+        guestIndex: result.guestIndex,
       },
       { status },
     );

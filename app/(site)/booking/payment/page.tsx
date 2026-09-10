@@ -355,7 +355,19 @@ export default function PaymentPage() {
             if (typeof data.pointsBalance === "number") setBalance(data.pointsBalance);
             setError(p.promoRejected);
           }
-          else if (res.status === 409) setError(p.slotTaken);
+          // Name her. The party is refused as a whole — that part is right —
+          // but with four guests at four hours, "that time has gone" does not
+          // say which one to change. Falls back to the unnamed line for a solo
+          // booking, where there is only one time it could be.
+          else if (res.status === 409) {
+            const at = data.guestIndex;
+            const who =
+              typeof at === "number" && booking.members.length > 1
+                ? booking.members[at]?.guestName ||
+                  c.booking.guestN.replace("{n}", String(at + 1))
+                : null;
+            setError(who ? p.slotTakenGuest.replace("{name}", who) : p.slotTaken);
+          }
           else if (data.error === "invalid" && data.issues?.includes("customer.phone")) {
             setError(p.invalidPhone);
           } else if (data.error === "invalid" && data.issues?.includes("customer.email")) {
