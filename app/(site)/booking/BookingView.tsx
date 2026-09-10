@@ -20,6 +20,7 @@ import { saveBooking, formatDateLabel, formatTime, weekdayLabel } from "@/lib/bo
 import { pick } from "@/lib/localized";
 import type { RefillOffer } from "@/lib/bookings";
 import type { PublicCatalog, PublicBranch } from "@/lib/catalog";
+import type { Localized } from "@/lib/localized";
 
 // Figma: Desktop-2 booking flow (439:10744, …) plus the English mirror
 // (276:7187 / 433:9679). One interactive page; the selection feeds
@@ -28,15 +29,26 @@ import type { PublicCatalog, PublicBranch } from "@/lib/catalog";
 // The service and add-on grids live in GuestPicker, shared with /booking/group,
 // so the two pages cannot drift on what a guest is allowed to pick.
 
+/** One line of what she can spend here, from lib/packs.ts. */
+export type BookableCredit = {
+  customerPackId: string;
+  packName: Localized;
+  serviceId: string;
+  left: number;
+};
+
 export default function BookingView({
   catalog: fullCatalog,
   branchesAr,
   branchesEn,
+  credits = [],
   refill = null,
 }: {
   catalog: PublicCatalog;
   branchesAr: PublicBranch[];
   branchesEn: PublicBranch[];
+  /** Pack credits she can spend. Empty for a guest, and for a service she has none for. */
+  credits?: BookableCredit[];
   /** Set when the customer arrived from the refill button in their history. */
   refill?: RefillOffer | null;
 }) {
@@ -88,6 +100,8 @@ export default function BookingView({
   const [startsAt, setStartsAt] = useState<string | null>(null);
   const [agree, setAgree] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  /** The purchase she is paying the service line with, if she chose to. */
+  const [useCredit, setUseCredit] = useState<string | null>(null);
 
   // Changing anything that alters how long the chair is needed invalidates a
   // slot that was picked for the old duration.
@@ -97,7 +111,25 @@ export default function BookingView({
     setStartsAt(null);
   };
 
-  const { price, durationMin } = useMemo(() => guestTotals(catalog, guest), [catalog, guest]);
+  const { price: fullPrice, durationMin } = useMemo(
+    () => guestTotals(catalog, guest),
+    [catalog, guest],
+  );
+
+  const service = guest.service !== null ? catalog.services[guest.service] : null;
+  // A credit is for one service. Offered only once she has picked the service it
+  // is for — before that there is nothing to spend it on.
+  //
+  // Not offered on a refill: that line is already 99, and two discounts on one
+  // line is a question nobody has answered. priceMember refuses it server-side
+  // for the same reason.
+  const credit = offer || !service ? null : credits.find((c) => c.serviceId === service.id) ?? null;
+  const spending = credit && useCredit === credit.customerPackId ? credit : null;
+
+  // The credit pays for the service and nothing else — add-ons, a removal and a
+  // coffee are the same work either way. Mirrors priceMember exactly.
+  const price = spending && service ? fullPrice - service.price : fullPrice;
+
   const member = useMemo(
     () => toMemberSelection(catalog, guest, lang),
     [catalog, guest, lang],
@@ -115,7 +147,7 @@ export default function BookingView({
     saveBooking({
       branchId,
       startsAt,
-      members: [member],
+      members: [{ ...member, price, customerPackId: spending?.customerPackId ?? null }],
       branch: branches.find((br) => br.id === branchId)?.name ?? null,
       dateLabel: date ? formatDateLabel(date, lang) : null,
       timeLabel: time ? formatTime(time, c.date) : null,
@@ -204,6 +236,42 @@ export default function BookingView({
                 clearSchedule();
               }}
             />
+          )}
+
+          {/* Spend a credit on this service. Only when she has one for the
+              service she picked — a row saying "you have no credits" is an
+              advert, and this is a booking screen. */}
+          {credit && (
+            <label
+              className={`flex cursor-pointer items-center justify-between gap-3 rounded-[20px] bg-white p-5 text-start ring-1 transition-all ${
+                spending ? "ring-2 ring-red" : "ring-black/[0.04] hover:ring-red/40"
+              }`}
+            >
+              <span className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={Boolean(spending)}
+                  onChange={(e) => setUseCredit(e.target.checked ? credit.customerPackId : null)}
+                  className="h-4 w-4 accent-red"
+                />
+                <span>
+                  <span className="block font-display text-base font-extrabold text-red">
+                    {c.packs.useCredit}
+                  </span>
+                  <span className="block text-[12px] text-ink/55">
+                    {c.packs.creditLine
+                      .replace("{pack}", pick(credit.packName, lang))
+                      .replace("{n}", String(credit.left))}
+                  </span>
+                </span>
+              </span>
+              {/* What it takes off, so the total below explains itself. */}
+              {service && (
+                <span className="shrink-0 font-display text-sm font-extrabold text-red">
+                  −{service.price}
+                </span>
+              )}
+            </label>
           )}
 
           {!offer && (

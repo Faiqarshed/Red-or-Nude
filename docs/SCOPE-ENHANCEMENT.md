@@ -204,8 +204,10 @@ party, and reserves N chairs at one branch and one time in a single call
 Entirely new, and the one to build last. "Membership" is the client's word for
 this whole thing; there is no separate subscription product behind it.
 
-Buy a bundle of services at one price instead of booking them one at a time. Six
-services, one package, one special price, valid three months. Redemption is
+Buy a bundle of services at one price instead of booking them one at a time. How
+much goes in is the salon's to decide — settled 10 September 2026 — with a
+**quantity per service** rather than a pool of uses across a menu: three gel
+polishes and one manicure cannot become four gel polishes. Valid three months. Redemption is
 wallet-shaped: the credits sit in the customer's account, she books, one comes
 off. **No barcode and nothing to present** — the client was explicit that the
 current way is complicated and that this must not be.
@@ -218,13 +220,17 @@ wallet:
 
 - `packs` — the admin catalogue: localized name and description,
   `price_halalas`, `valid_days` (90), image, sort, active.
-- `pack_services` — composite primary key, which services a pack covers.
+- `pack_services` — composite primary key, which services a pack covers, and how
+  many of each.
 - `customer_packs` — one purchase: customer, pack, `purchased_at`, `expires_at`,
   and a snapshotted name and price, the way `gift_cards` snapshots.
-- `pack_txns` — signed deltas: `-1` to redeem, `+1` to return, carrying
-  `booking_id` and a reason.
+- `pack_txns` — signed deltas per service: `+quantity` on purchase, `-1` to
+  redeem, `+1` to return, carrying `booking_id` and a reason. The grant being a
+  ledger row is what snapshots the purchase — there is no table of purchased
+  lines, and editing a pack cannot change what somebody already owns.
 
-Balance is `SUM(delta)` per `customer_pack`, filtered by `expires_at`. There is
+Balance is `SUM(delta)` per `customer_pack` **per service**, filtered by
+`expires_at` — and expiry is decided on read, so there is no sweeper to run. There is
 no stored balance column, for the reason `lib/db/schema.ts:742` already
 gives about loyalty points.
 
@@ -254,6 +260,15 @@ Ascending cost, which is also descending certainty:
 4. **§5.2, per-guest branch and time** — the booking engine, and the reschedule
    path with it.
 5. **§6, packs** — four tables, a purchase flow, and a redemption path.
+
+All five are built as of 10 September 2026. What §6 gained beyond the plan: a
+partial unique index on `(booking_id, service_id)` so a retried request cannot
+spend two credits for one appointment; a refusal to delete a booking that spent
+one, for the reason loyalty points are already refused; and `payments` carrying
+`customer_pack_id`, so a pack sale lands where every other sale lands.
+
+Not built, and still not in this phase: a pack paying for a **group** booking.
+The booking screen offers a credit on the solo page only.
 
 ---
 

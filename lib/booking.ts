@@ -42,6 +42,12 @@ export type MemberSelection = {
    */
   branchId?: string | null;
   startsAt?: string | null;
+  /**
+   * The pack purchase paying for this guest's service line, if she chose to
+   * spend one. Display-only in the sense that matters: the server re-reads her
+   * ledger and decides for itself whether a credit exists.
+   */
+  customerPackId?: string | null;
   /** Her own labels, captured in the language she booked in. */
   branch?: string | null;
   dateLabel?: string | null;

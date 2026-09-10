@@ -308,6 +308,9 @@ export default function PaymentPage() {
               // holds every guest to the party's day either way.
               branchId: m.branchId ?? null,
               startsAt: m.startsAt ?? null,
+              // Which purchase, not whose — the server reads the owner from the
+              // session cookie and re-checks the credit against her ledger.
+              customerPackId: m.customerPackId ?? null,
               // The coffee rides the add-on machinery: nothing here prices it.
               addonIds: [...m.addonIds, ...treatsFor(i).map((a) => a.id)],
               removalTypeId: m.removalTypeId,
