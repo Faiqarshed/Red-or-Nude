@@ -112,8 +112,16 @@ sent with the notes.
   shape of the promo and loyalty opt-in rows already sitting there. On confirm,
   push the add-on id onto that guest's `addonIds`.
 
-There is **no pricing code in this change.** `priceMember()` sums it,
-`booking_addons` records it, the invoice renders it.
+- **Never discounted.** Decided after the plan was written: 10 SAR is 10 SAR
+  whether or not two people booked together, whether or not a code was typed,
+  whether or not points were spent. So `priceMember()` holds checkout add-ons out
+  of `grossHalalas` in a `treatHalalas` of their own, the whole discount stack
+  runs on what is left, and the treats go back on last. The payment page adds
+  them the same way, which is why ticking one cannot move a quoted promo or
+  reward.
+
+`booking_addons` still records it and the invoice still renders it, unchanged.
+The only pricing code is the one line that keeps them out of the discounts.
 
 ---
 

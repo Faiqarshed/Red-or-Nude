@@ -17,13 +17,20 @@ import "./_test-db";
 import assert from "node:assert";
 import { and, eq, like } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, branches, customers, services, stations } from "@/lib/db/schema";
+import { addons, bookings, branches, customers, services, stations } from "@/lib/db/schema";
 import { createBooking, createBookings, sweepNoShows } from "@/lib/bookings";
 import { splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { refillDaysLeft } from "@/lib/refill";
 import { formatTicketNo } from "@/lib/tickets";
 
 const TEST_PHONE = "0500000001";
+
+/**
+ * Inverse of formatTicketNo, so "B99" and "C1" read as consecutive. The counter
+ * is per branch per day and survives cleanup(), so which side of a letter
+ * boundary a fixture lands on is luck — comparing the digits alone fails there.
+ */
+const ticketOrdinal = (t: string) => (t.charCodeAt(0) - 65) * 99 + Number(t.slice(1));
 
 async function cleanup(branchId: string) {
   await db.delete(bookings).where(eq(bookings.branchId, branchId));
@@ -241,7 +248,7 @@ async function main() {
   const [t1, t2] = group.bookings.map((b) => b.ticketNo!);
   assert.ok(t1 && t2, "a confirmed booking must carry a ticket");
   assert.equal(
-    Number(t2.slice(1)) - Number(t1.slice(1)),
+    ticketOrdinal(t2) - ticketOrdinal(t1),
     1,
     `group tickets must be consecutive, got ${t1} and ${t2}`,
   );
@@ -261,6 +268,79 @@ async function main() {
     assert.ok(row.discountHalalas > 0, "each group row carries its share of the discount");
   }
   console.log("  group: subtotal + VAT == total on both rows ✓");
+
+  // -- The checkout upsell (coffee and a cookie) ----------------------------
+  // Picked on the payment page, after the chair has been quoted and while it is
+  // about to be held. So it must add its price to the bill and nothing at all to
+  // the chair's time — an at_checkout add-on with a duration would move ends_at
+  // underneath a booking that has already been priced and reserved.
+  await cleanup(branch.id);
+  const [treat] = await db
+    .select()
+    .from(addons)
+    .where(and(eq(addons.atCheckout, true), eq(addons.active, true)))
+    .limit(1);
+  assert.ok(treat, "migration 0016 must leave one active at_checkout add-on");
+  assert.equal(treat.durationMin, 0, "a checkout add-on must not lengthen the appointment");
+
+  const treated = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: TEST_PHONE },
+    source: "web",
+    status: "confirmed",
+    members: [{ serviceId: svcA.id, addonIds: [treat.id] }],
+  });
+  assert.ok(treated.ok, `checkout add-on booking failed: ${treated.ok ? "" : treated.error}`);
+  assert.equal(
+    treated.totalHalalas,
+    svcA.priceHalalas + treat.priceHalalas,
+    "the coffee is billed by the add-on machinery, at its catalogue price",
+  );
+
+  const [treatedRow] = await db
+    .select()
+    .from(bookings)
+    .where(eq(bookings.id, treated.bookings[0].id));
+  assert.equal(
+    (treatedRow.endsAt.getTime() - treatedRow.startsAt.getTime()) / 60_000,
+    svcA.durationMin,
+    "a coffee must not move ends_at",
+  );
+  console.log("  checkout add-on: billed, chair unchanged ✓");
+
+  // And it is never discounted. The group discount applies to the services on
+  // the bill, not to the refreshments — 10 SAR is 10 SAR however many people
+  // booked together. This is the assertion that would catch it drifting back
+  // inside splitGroupPrice.
+  await cleanup(branch.id);
+  const groupTreat = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: TEST_PHONE },
+    source: "web",
+    status: "confirmed",
+    members: [
+      { serviceId: svcA.id, addonIds: [treat.id] },
+      { serviceId: svcB.id, addonIds: [] },
+    ],
+  });
+  assert.ok(groupTreat.ok, `group with a treat failed: ${groupTreat.ok ? "" : groupTreat.error}`);
+
+  const services2 = svcA.priceHalalas + svcB.priceHalalas;
+  assert.equal(
+    groupTreat.totalHalalas,
+    services2 - Math.round(services2 * 0.1) + treat.priceHalalas,
+    "the group discount takes 10% of the services and nothing off the coffee",
+  );
+  assert.equal(
+    groupTreat.bookings.reduce((sum, b) => sum + b.totalHalalas, 0),
+    groupTreat.totalHalalas,
+    "the rows must still add up to the bill with a treat on one of them",
+  );
+  console.log(
+    `  checkout add-on: ${treat.priceHalalas / 100} SAR flat, outside the group discount ✓`,
+  );
 
   // -- Walk-ins are not payment-gated, and share the web ticket queue -------
   // The admin form calls createBooking(), the compatibility wrapper. A walk-in
@@ -293,7 +373,7 @@ async function main() {
   const [walkRow] = await db.select().from(bookings).where(eq(bookings.id, walkIn.id));
   assert.equal(walkRow.status, "confirmed", "a walk-in is confirmed on the spot");
   assert.equal(
-    Number(walkIn.ticketNo.slice(1)) - Number(webRow.ticketNo!.slice(1)),
+    ticketOrdinal(walkIn.ticketNo) - ticketOrdinal(webRow.ticketNo!),
     1,
     `walk-in must take the next number after the web booking, got ${webRow.ticketNo} then ${walkIn.ticketNo}`,
   );

@@ -11,6 +11,7 @@ import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { clearBooking, emptySelection, loadBooking, type BookingSelection } from "@/lib/booking";
 import { isValidSaudiMobile, toStoredPhone } from "@/lib/phone";
+import { pick } from "@/lib/localized";
 import { REWARDS } from "@/lib/rewards";
 
 // Figma: Desktop-2 payment step (276:1902 / 276:6624) + success modal (276:6765).
@@ -82,6 +83,12 @@ export default function PaymentPage() {
   const [redeemPoints, setRedeemPoints] = useState<number | null>(null);
   const [redeemDiscountSar, setRedeemDiscountSar] = useState(0);
   const [redeemError, setRedeemError] = useState<string | null>(null);
+  /**
+   * Checkout upsells taken, as `"<member index>:<add-on id>"` — one guest can
+   * take the coffee and another skip it. Nothing new is priced here: the ids go
+   * onto that guest's `addonIds` and the server bills them like any add-on.
+   */
+  const [treats, setTreats] = useState<string[]>([]);
 
   useEffect(() => {
     const saved = loadBooking();
@@ -120,13 +127,32 @@ export default function PaymentPage() {
     return (["card", "mada", "stc", "apple"] as const)[i === -1 ? 0 : i];
   };
 
+  /** The upsells this guest has taken. */
+  const treatsFor = (i: number) =>
+    (booking.checkoutAddons ?? []).filter((a) => treats.includes(`${i}:${a.id}`));
+
+  /**
+   * What the treats add. Outside the discount stack entirely — a coffee is 10
+   * SAR whether or not two people booked together, whether or not a code was
+   * typed, whether or not points were spent. lib/bookings.ts holds them out of
+   * `grossHalalas` for the same reason and adds them back last.
+   *
+   * So this leaves booking.total alone, and the promo and the reward below stay
+   * quoted against a figure ticking a checkbox cannot move.
+   */
+  const treatsTotal = booking.members.reduce(
+    (sum, _m, i) => sum + treatsFor(i).reduce((s, a) => s + a.price, 0),
+    0,
+  );
+
   /**
    * What the customer actually pays: the quoted bill, less the code, less the
    * reward. In that order, matching lib/bookings.ts exactly — the reward is
    * quoted against the post-promo figure there, so quoting it against anything
-   * else here would show a number the charge disagrees with.
+   * else here would show a number the charge disagrees with. Then the treats,
+   * which no discount touches.
    */
-  const payableTotal = booking.total - promoDiscountSar - redeemDiscountSar;
+  const payableTotal = booking.total - promoDiscountSar - redeemDiscountSar + treatsTotal;
 
   const promoReasonText = (reason: string, minTotalHalalas?: number): string => {
     const e = p.promoErrors;
@@ -245,7 +271,8 @@ export default function PaymentPage() {
 
   // A code applied or removed moves the total the percentage applies to, so a
   // reward picked before it is now priced against the wrong number. Re-quoting
-  // is one request and keeps the summary honest.
+  // is one request and keeps the summary honest. Treats are deliberately not a
+  // dependency: no discount applies to them, so ticking one moves nothing here.
   useEffect(() => {
     if (redeemPoints !== null) void pickReward(redeemPoints);
     // Intentionally keyed on the base total only: re-running on redeemPoints
@@ -274,10 +301,11 @@ export default function PaymentPage() {
           body: JSON.stringify({
             branchId: booking.branchId,
             startsAt: booking.startsAt,
-            members: booking.members.map((m) => ({
+            members: booking.members.map((m, i) => ({
               guestName: m.guestName,
               serviceId: m.serviceId,
-              addonIds: m.addonIds,
+              // The coffee rides the add-on machinery: nothing here prices it.
+              addonIds: [...m.addonIds, ...treatsFor(i).map((a) => a.id)],
               removalTypeId: m.removalTypeId,
               designId: m.designId,
             })),
@@ -581,6 +609,70 @@ export default function PaymentPage() {
                       {redeemError}
                     </p>
                   )}
+                </div>
+              )}
+
+              {/* Coffee and a cookie, offered once the services are chosen and
+                  before payment — one row per guest, so one can take it and
+                  another skip it. Frozen once the chairs are held: the retry
+                  after a declined card re-uses that hold and never re-prices
+                  it, so a treat added now would be shown and not charged. */}
+              {(booking.checkoutAddons?.length ?? 0) > 0 && (
+                <div className="mt-4">
+                  <span className="mb-1.5 block text-[12px] text-ink/55">{p.treatLabel}</span>
+                  <div className="space-y-1.5">
+                    {booking.members.map((_, i) =>
+                      (booking.checkoutAddons ?? []).map((a) => {
+                        const key = `${i}:${a.id}`;
+                        const taken = treats.includes(key);
+                        return (
+                          <label
+                            key={key}
+                            className={`flex items-center justify-between gap-3 rounded-[12px] border px-4 py-3 text-[13px] ${
+                              taken
+                                ? "border-red/40 bg-red/[0.04] text-red"
+                                : heldCode
+                                  ? "cursor-not-allowed border-black/[0.05] text-ink/35"
+                                  : "cursor-pointer border-black/[0.08] text-ink hover:border-red/30"
+                            }`}
+                          >
+                            <span className="flex items-center gap-2.5">
+                              <input
+                                type="checkbox"
+                                checked={taken}
+                                disabled={heldCode !== null}
+                                onChange={() =>
+                                  setTreats((prev) =>
+                                    prev.includes(key)
+                                      ? prev.filter((k) => k !== key)
+                                      : [...prev, key],
+                                  )
+                                }
+                                className="accent-red"
+                              />
+                              {/* Only when the salon has uploaded one — an
+                                  empty tile reads as a broken image. */}
+                              {a.img && (
+                                <span
+                                  className="h-9 w-9 shrink-0 rounded-[8px] bg-[#e7d9c9] bg-cover bg-center bg-no-repeat"
+                                  style={{ backgroundImage: `url(${a.img})` }}
+                                />
+                              )}
+                              <span className="font-semibold">
+                                {booking.members.length > 1
+                                  ? `${i === 0 ? c.booking.guest1 : c.booking.guest2} — ${pick(a.name, lang)}`
+                                  : pick(a.name, lang)}
+                              </span>
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Riyal className="h-3 w-3" />
+                              {a.price}
+                            </span>
+                          </label>
+                        );
+                      }),
+                    )}
+                  </div>
                 </div>
               )}
 

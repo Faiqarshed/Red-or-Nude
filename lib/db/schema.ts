@@ -250,6 +250,13 @@ export const addons = pgTable("addons", {
   image: text("image"),
   // The seasonal add-on opens the designs pop-up on the public site.
   isSeasonal: boolean("is_seasonal").notNull().default(false),
+  /**
+   * Offered at checkout instead of beside the services — the coffee-and-cookie
+   * upsell. Keep `duration_min` at 0 for these: they are picked after the chair
+   * has been quoted, so a duration would move `ends_at` under a booking that is
+   * already about to be held.
+   */
+  atCheckout: boolean("at_checkout").notNull().default(false),
   sort: integer("sort").notNull().default(0),
   active: boolean("active").notNull().default(true),
   ...stamps,

@@ -45,6 +45,18 @@ export type BookingSelection = {
   dateLabel: string | null;
   timeLabel: string | null;
 
+  /**
+   * The upsells offered on the payment page — the coffee and cookie. What is on
+   * offer, not what was taken: the payment page is a client component with no
+   * server shell, so the catalogue reaches it through here rather than through a
+   * new API route. Absent on the station-QR and gift-card flows, which simply
+   * never offer it.
+   *
+   * The name stays bilingual, unlike the display labels above: this one is
+   * rendered on the payment page, where the customer can still toggle language.
+   */
+  checkoutAddons?: { id: string; name: Localized; price: number; img: string | null }[];
+
   /** SAR before the group discount. */
   grossTotal: number;
   /**

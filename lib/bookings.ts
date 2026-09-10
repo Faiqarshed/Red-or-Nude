@@ -233,7 +233,15 @@ type Priced = {
   durationMin: number;
   /** What the service line actually costs — reduced when this is a refill. */
   servicePriceHalalas: number;
+  /** What the discounts are worked out on. Excludes `treatHalalas`. */
   grossHalalas: number;
+  /**
+   * The checkout upsells — coffee and a cookie. Held out of the gross because
+   * they are never discounted: not by the group discount, not by a promo code,
+   * not by a loyalty rung. 10 SAR is 10 SAR, so this goes back on after the
+   * whole discount stack has run.
+   */
+  treatHalalas: number;
 };
 
 /**
@@ -286,8 +294,9 @@ async function priceMember(
     servicePriceHalalas,
     grossHalalas:
       servicePriceHalalas +
-      addonRows.reduce((sum, a) => sum + a.priceHalalas, 0) +
+      addonRows.reduce((sum, a) => sum + (a.atCheckout ? 0 : a.priceHalalas), 0) +
       (removal?.priceHalalas ?? 0),
+    treatHalalas: addonRows.reduce((sum, a) => sum + (a.atCheckout ? a.priceHalalas : 0), 0),
   };
 }
 
@@ -761,7 +770,13 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
 
   const status = input.status ?? "confirmed";
   const groupId = isGroup ? randomUUID() : null;
-  const billTotal = afterPromo.reduce((sum, t, i) => sum + t - rewardShares[i], 0);
+  // The treats go back on last, after every discount has been taken — that is
+  // what "a coffee is 10 SAR" means. They were never in `grossHalalas`, so no
+  // discount above has seen them.
+  const billTotal = afterPromo.reduce(
+    (sum, t, i) => sum + t - rewardShares[i] + guests[i].treatHalalas,
+    0,
+  );
 
   try {
     const created = await db.transaction(async (tx) => {
@@ -837,7 +852,9 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
         // total. `promo_code_id` records which code produced part of it, and the
         // loyalty_txns row written below records the rest.
         const discountHalalas = split[i].discountHalalas + promoShare + rewardShare;
-        const totalHalalas = split[i].totalHalalas - promoShare - rewardShare;
+        // The treat is added after the discounts, never inside them.
+        const totalHalalas =
+          split[i].totalHalalas - promoShare - rewardShare + guest.treatHalalas;
         // Prices are VAT-inclusive, so VAT comes back out of the discounted total
         // rather than being added on. The customer pays exactly what was shown.
         const vat = vatIncludedIn(totalHalalas, settings.vat_percent);

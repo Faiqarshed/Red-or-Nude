@@ -115,6 +115,7 @@ export default function GroupBookingView({
       branch: branches.find((br) => br.id === branchId)?.name ?? null,
       dateLabel: date ? formatDateLabel(date, lang) : null,
       timeLabel: time ? formatTime(time, c.date) : null,
+      checkoutAddons: catalog.checkoutAddons,
       grossTotal,
       total,
     });

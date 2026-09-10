@@ -103,12 +103,16 @@ export default function CatalogDrawer({
       ? t.catalog.editService
       : kind === "addon"
         ? t.catalog.editAddon
-        : t.catalog.editRemoval
+        : kind === "upsell"
+          ? t.catalog.editUpsell
+          : t.catalog.editRemoval
     : kind === "service"
       ? t.catalog.newService
       : kind === "addon"
         ? t.catalog.newAddon
-        : t.catalog.newRemoval;
+        : kind === "upsell"
+          ? t.catalog.newUpsell
+          : t.catalog.newRemoval;
 
   const save = () =>
     startTransition(async () => {
@@ -230,17 +234,21 @@ export default function CatalogDrawer({
               onChange={(e) => set("priceSar", e.target.value)}
             />
           </Field>
-          <Field label={t.catalog.duration} hint={t.catalog.durationHint}>
-            <Input
-              type="number"
-              min={0}
-              step="5"
-              dir="ltr"
-              className="text-left tabular-nums"
-              value={form.durationMin}
-              onChange={(e) => set("durationMin", e.target.value)}
-            />
-          </Field>
+          {/* Not asked of an upsell: it is chosen after the chair has been
+              quoted, so it takes no time on it. The action forces 0. */}
+          {kind === "upsell" ? null : (
+            <Field label={t.catalog.duration} hint={t.catalog.durationHint}>
+              <Input
+                type="number"
+                min={0}
+                step="5"
+                dir="ltr"
+                className="text-left tabular-nums"
+                value={form.durationMin}
+                onChange={(e) => set("durationMin", e.target.value)}
+              />
+            </Field>
+          )}
         </div>
 
         {/* Services only: this is what makes the refill button appear in the

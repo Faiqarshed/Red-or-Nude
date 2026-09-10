@@ -35,7 +35,10 @@ export default async function CatalogPage() {
           sort: r.sort,
         }),
       )}
-      addons={addonRows.map(
+      // Two tabs off one table: an upsell is an add-on row underneath — that is
+      // what lets the booking engine price it with no new code — but it is never
+      // shown beside the services, so it is not listed with them here either.
+      addons={addonRows.filter((r) => !r.atCheckout).map(
         (r): CatalogRow => ({
           id: r.id,
           name: r.name,
@@ -58,6 +61,20 @@ export default async function CatalogPage() {
           sort: r.sort,
         }),
       )}
+      upsells={addonRows
+        .filter((r) => r.atCheckout)
+        .map(
+          (r): CatalogRow => ({
+            id: r.id,
+            name: r.name,
+            priceSar: halalasToSar(r.priceHalalas),
+            durationMin: r.durationMin,
+            image: r.image,
+            imageUrl: mediaUrl(r.image),
+            active: r.active,
+            sort: r.sort,
+          }),
+        )}
       removals={removalRows.map(
         (r): CatalogRow => ({
           id: r.id,

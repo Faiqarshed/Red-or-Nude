@@ -36,19 +36,26 @@ export type CatalogRow = {
   sort: number;
 };
 
-const TABS: { kind: CatalogKind; labelKey: "tabServices" | "tabAddons" | "tabRemovals" }[] = [
+const TABS: {
+  kind: CatalogKind;
+  labelKey: "tabServices" | "tabAddons" | "tabUpsells" | "tabRemovals";
+}[] = [
   { kind: "service", labelKey: "tabServices" },
   { kind: "addon", labelKey: "tabAddons" },
+  { kind: "upsell", labelKey: "tabUpsells" },
   { kind: "removal", labelKey: "tabRemovals" },
 ];
 
 export default function CatalogView({
   services,
   addons,
+  upsells,
   removals,
 }: {
   services: CatalogRow[];
   addons: CatalogRow[];
+  /** Offered at checkout only — the coffee and cookie. Never beside a service. */
+  upsells: CatalogRow[];
   removals: CatalogRow[];
 }) {
   const { t, lang } = useAdminI18n();
@@ -58,10 +65,17 @@ export default function CatalogView({
   const [creating, setCreating] = useState(false);
   const [, startTransition] = useTransition();
 
-  const rows = tab === "service" ? services : tab === "addon" ? addons : removals;
+  const rows =
+    tab === "service" ? services : tab === "addon" ? addons : tab === "upsell" ? upsells : removals;
 
   const newLabel =
-    tab === "service" ? t.catalog.newService : tab === "addon" ? t.catalog.newAddon : t.catalog.newRemoval;
+    tab === "service"
+      ? t.catalog.newService
+      : tab === "addon"
+        ? t.catalog.newAddon
+        : tab === "upsell"
+          ? t.catalog.newUpsell
+          : t.catalog.newRemoval;
 
   const run = (fn: () => Promise<unknown>) =>
     startTransition(async () => {

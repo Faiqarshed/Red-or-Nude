@@ -16,18 +16,26 @@ import { requireCan } from "@/lib/auth/guard";
 import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
 
-export type CatalogKind = "service" | "addon" | "removal";
+/**
+ * `upsell` is the coffee-and-cookie kind. Same `addons` table as `addon` — which
+ * is what lets the booking engine price it with no new code — but a separate
+ * kind here, because to the salon it is not an add-on: it is never offered
+ * beside the services, only at checkout.
+ */
+export type CatalogKind = "service" | "addon" | "removal" | "upsell";
 
 const TABLES = {
   service: services,
   addon: addons,
   removal: removalTypes,
+  upsell: addons,
 } as const;
 
 const ENTITY: Record<CatalogKind, string> = {
   service: "services",
   addon: "addons",
   removal: "removal_types",
+  upsell: "addons",
 };
 
 const localizedText = z.object({
@@ -36,7 +44,7 @@ const localizedText = z.object({
 });
 
 const itemSchema = z.object({
-  kind: z.enum(["service", "addon", "removal"]),
+  kind: z.enum(["service", "addon", "removal", "upsell"]),
   id: z.string().uuid().optional(),
   name: localizedText,
   description: z
@@ -143,7 +151,18 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
         }
       : data.kind === "addon"
         ? { ...common, image: data.image ?? null, isSeasonal: data.isSeasonal ?? false }
-        : common;
+        : data.kind === "upsell"
+          ? {
+              ...common,
+              image: data.image ?? null,
+              atCheckout: true,
+              // Forced, not asked. A checkout upsell is picked after the chair
+              // has been quoted, so any duration would move `ends_at` under a
+              // booking that is already about to be held. The form does not
+              // offer the field; this is what makes that a rule.
+              durationMin: 0,
+            }
+          : common;
 
   try {
     if (data.id) {
