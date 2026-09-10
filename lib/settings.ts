@@ -46,8 +46,16 @@ export const SETTING_DEFAULTS = {
   assign_notify_min: 30,
   /** Discount for booking two guests together, off the combined bill. */
   group_discount_percent: 10,
-  /** A refill costs the service price minus this much. */
-  refill_discount_percent: 50,
+  /**
+   * What a refill costs, flat, in halalas. Not a discount off the service — the
+   * same 99 whether the original was 90 SAR or 400.
+   *
+   * There is no floor. A service too cheap to be worth refilling at 99 is kept
+   * out of the offer from the admin side, by leaving its `refill_days` at 0.
+   * That is an operational guard rather than an enforced one: nothing here stops
+   * a 60 SAR service being given a window and then a 99 SAR refill.
+   */
+  refill_price_halalas: 9900,
   /** How many days before a refill window closes to nudge the customer. */
   refill_reminder_days: 3,
   /**

@@ -24,7 +24,7 @@ import {
 } from "@/lib/db/schema";
 import { reserveStations, utcToLocalDate } from "@/lib/availability";
 import { canCancel, cancelDeadline } from "@/lib/cancellation";
-import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
+import { refillDaysLeft, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 import { halalasToSar, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { quotePromo, type PromoRefusal } from "@/lib/promo";
@@ -241,7 +241,11 @@ type Priced = {
  * just "what is this person buying and how long does it take". Read outside the
  * transaction so the lock in reserveStations is held for as little time as possible.
  */
-async function priceMember(m: BookingMember, refillPercent = 0): Promise<Priced | null> {
+async function priceMember(
+  m: BookingMember,
+  /** The flat refill price, or null when this is an ordinary booking. */
+  refillPriceHalalas: number | null = null,
+): Promise<Priced | null> {
   const [service] = await db
     .select()
     .from(services)
@@ -261,11 +265,10 @@ async function priceMember(m: BookingMember, refillPercent = 0): Promise<Priced 
     ? await db.select().from(designs).where(eq(designs.id, m.designId)).limit(1)
     : [];
 
-  // A refill is the same service at a reduced rate. Add-ons and removal are
-  // extra work either way, so only the service line moves.
-  const servicePriceHalalas = refillPercent
-    ? refillPriceHalalas(service.priceHalalas, refillPercent)
-    : service.priceHalalas;
+  // A refill is the same service at a flat price, whatever the service costs.
+  // Add-ons and removal are extra work either way, so only the service line
+  // moves — a refill with a removal on it pays for the removal.
+  const servicePriceHalalas = refillPriceHalalas ?? service.priceHalalas;
 
   return {
     member: m,
@@ -636,7 +639,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     "vat_percent",
     "booking_hold_min",
     "group_discount_percent",
-    "refill_discount_percent",
+    "refill_price_halalas",
   ]);
 
   // Give back chairs whose customer never checked in, before we go looking for a
@@ -674,7 +677,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
 
   const priced = await Promise.all(
     input.members.map((m) =>
-      priceMember(m, refillParent ? settings.refill_discount_percent : 0),
+      priceMember(m, refillParent ? settings.refill_price_halalas : null),
     ),
   );
   if (priced.some((p) => p === null)) return { ok: false, error: "invalid-service" };
@@ -1102,7 +1105,7 @@ export async function getRefillOffer(code: string): Promise<RefillOffer | null> 
     .limit(1);
   if (!service) return null;
 
-  const settings = await getSettings(["refill_discount_percent"]);
+  const settings = await getSettings(["refill_price_halalas"]);
 
   // Snapshots from the original booking, not today's catalogue: this is a repeat
   // of what they had. Rows whose add-on was since deleted keep their snapshot
@@ -1136,9 +1139,7 @@ export async function getRefillOffer(code: string): Promise<RefillOffer | null> 
       }
     : null;
 
-  const servicePriceSar = halalasToSar(
-    refillPriceHalalas(service.priceHalalas, settings.refill_discount_percent),
-  );
+  const servicePriceSar = halalasToSar(settings.refill_price_halalas);
 
   return {
     code: code.trim().toUpperCase(),

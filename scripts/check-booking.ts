@@ -20,7 +20,7 @@ import { db } from "@/lib/db";
 import { bookings, branches, customers, services, stations } from "@/lib/db/schema";
 import { createBooking, createBookings, sweepNoShows } from "@/lib/bookings";
 import { splitGroupPrice, vatIncludedIn } from "@/lib/money";
-import { refillDaysLeft, refillPriceHalalas } from "@/lib/refill";
+import { refillDaysLeft } from "@/lib/refill";
 import { formatTicketNo } from "@/lib/tickets";
 
 const TEST_PHONE = "0500000001";
@@ -120,19 +120,6 @@ function checkRefill() {
     "a past confirmed booking counts as served even if staff never pressed End",
   );
 
-  // Pricing: never a fraction of a halala, and the ends behave.
-  assert.equal(refillPriceHalalas(28000, 50), 14000);
-  assert.equal(refillPriceHalalas(15000, 40), 9000);
-  assert.equal(refillPriceHalalas(12345, 33), 8271); // 12345 - round(4073.85)
-  assert.equal(refillPriceHalalas(28000, 0), 28000, "0% off is full price");
-  assert.equal(refillPriceHalalas(28000, 100), 0);
-  for (const price of [100, 9999, 28000, 33333]) {
-    for (const pct of [0, 15, 33, 50, 99, 100]) {
-      const out = refillPriceHalalas(price, pct);
-      assert.ok(Number.isInteger(out), "money stays in whole halalas");
-      assert.ok(out >= 0 && out <= price, "a refill is never free money or a surcharge");
-    }
-  }
   console.log("  refill: window opens, counts down, and shuts ✓");
 }
 

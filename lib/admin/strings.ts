@@ -488,7 +488,7 @@ const ar = {
     duration: "المدة (دقيقة)",
     durationHint: "تُستخدم لحساب المواعيد المتاحة",
     hasRefill: "هذه الخدمة لها إعادة تعبئة",
-    hasRefillHint: "يظهر زر إعادة التعبئة في حجوزات العميل خلال المهلة المحددة، بسعر مخفَّض.",
+    hasRefillHint: "يظهر زر إعادة التعبئة في حجوزات العميل خلال المهلة المحددة، بسعر ثابت ٩٩ ر.س مهما كان سعر الخدمة.",
     refillDays: "مدة المهلة (أيام)",
     refillDaysHint: "الأظافر ٣٠ يوماً، الرموش ١٤ عادةً. تُحسب من موعد الزيارة.",
     image: "الصورة",
@@ -1074,7 +1074,8 @@ const en: AdminStrings = {
     duration: "Duration (minutes)",
     durationHint: "Used to work out available appointment slots",
     hasRefill: "This service has a refill",
-    hasRefillHint: "A refill button appears in the customer's bookings for the window below, at a discount.",
+    hasRefillHint:
+      "A refill button appears in the customer's bookings for the window below, at a flat 99 SAR whatever this service costs. Leave the window at 0 for services too cheap to refill at that price.",
     refillDays: "Window length (days)",
     refillDaysHint: "Nails 30, lashes 14 typically. Counted from the appointment.",
     image: "Image",

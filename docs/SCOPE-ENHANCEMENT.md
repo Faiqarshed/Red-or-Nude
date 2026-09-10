@@ -252,9 +252,12 @@ it now…" message from 7 September. It may scope something out.
 
 ## 9. Still open
 
-- The refill eligibility window is unchanged and has not been reconsidered
-  against a flat price. A 99 SAR refill of a 400 SAR service six weeks later is
-  a different offer from a half-price one.
+- ~~The refill eligibility window against a flat price.~~ Settled 10 September
+  2026: 99 is the price of any refill of any service that has a window, whatever
+  the service costs and however long its window is. A 350 SAR set refilled on day
+  13 of a 14-day window is still 99. Services too cheap for that are kept out of
+  the offer by leaving `refill_days` at 0, which is an operational guard and not
+  an enforced one.
 - Whether a pack tile belongs among the service cards or above them.
 - Whether the cap ever moves past four. The Townhouse screen the client sent
   offers a `7+` row, and the engine would already take it.
