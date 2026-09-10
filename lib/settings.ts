@@ -44,7 +44,7 @@ export const SETTING_DEFAULTS = {
    * will be missed, so keep it comfortably above 15.
    */
   assign_notify_min: 30,
-  /** Discount for booking two guests together, off the combined bill. */
+  /** Discount for booking a group together, off the combined bill. */
   group_discount_percent: 10,
   /**
    * What a refill costs, flat, in halalas. Not a discount off the service — the

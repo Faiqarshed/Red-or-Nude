@@ -1,9 +1,13 @@
 // Booking creation. One implementation, called by the public booking API and by
 // the admin's walk-in form, so the two can't drift on pricing or conflict rules.
 //
-// A booking for two guests is not a separate code path: it is the same function
-// with two members instead of one. Everything below — pricing, chair claiming,
-// ticket numbers — is written to handle N and called with 1 or 2.
+// A group booking is not a separate code path: it is the same function with
+// more members. Everything below — pricing, chair claiming, ticket numbers — is
+// written to handle N, and the HTTP edge decides how many N may be (four).
+//
+// A member may carry her own branch and her own start; both default to the
+// party's. What the party shares is the local day, and that is the one thing
+// enforced here rather than left to the screen.
 
 import "server-only";
 import { randomInt, randomUUID } from "node:crypto";
@@ -51,11 +55,24 @@ export type BookingMember = {
   addonIds: string[];
   removalTypeId?: string | null;
   designId?: string | null;
+  /**
+   * This guest's own branch and start, when they differ from the party's.
+   *
+   * A group is four women going out together, not four women sitting in a row:
+   * the client asked for one to be able to take 11:00 at Al Urubah while
+   * another takes 14:00 across town. Both default to the party's, so a solo
+   * booking and the shape the payment page already posts are unchanged.
+   *
+   * The one thing held in common is the day — see the check in createBookings.
+   */
+  branchId?: string | null;
+  startsAt?: string | null;
 };
 
 export type CreateBookingsInput = {
+  /** The party's branch. A member may override it with one of their own. */
   branchId: string;
-  /** ISO UTC. Every guest in a group starts at the same moment, by definition. */
+  /** ISO UTC. The party's start; a member may override it with their own. */
   startsAt: string;
   customer: { name?: string | null; phone: string; email?: string | null; lang?: "ar" | "en" };
   source: "web" | "walk_in" | "phone";
@@ -129,6 +146,8 @@ export type CreateBookingError =
   | "refill-expired"
   /** The offer is open, but the appointment chosen falls outside its window. */
   | "refill-window"
+  /** A group was posted with guests on two different days. */
+  | "different-day"
   /** A discount code was given and does not apply. `promoReason` says why. */
   | "promo-invalid"
   /**
@@ -656,7 +675,10 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   // someone who did not turn up. Outside the transaction on purpose: it is an
   // independent state change, and it must not be rolled back if this particular
   // booking then fails to find a chair.
-  await sweepNoShows(input.branchId);
+  // Every branch the party touches, not just the party's own.
+  for (const branchId of new Set(input.members.map((m) => m.branchId ?? input.branchId))) {
+    await sweepNoShows(branchId);
+  }
 
   // A refill is checked before anything is priced: the window has to be open,
   // and it has to be the same service the customer originally had. The button
@@ -684,6 +706,20 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     }
   }
 
+  // Where and when each guest actually sits. Falls back to the party's, so the
+  // solo path and every existing caller are untouched.
+  const day = utcToLocalDate(startsAt);
+  const placements: { branchId: string; startsAt: Date }[] = [];
+  for (const m of input.members) {
+    const at = m.startsAt ? new Date(m.startsAt) : startsAt;
+    if (Number.isNaN(at.getTime())) return { ok: false, error: "failed" };
+    // One day is the whole of what a party holds in common now. It is what
+    // makes the group discount mean something — four people out together — and
+    // it is the only thing the client asked to keep fixed.
+    if (utcToLocalDate(at) !== day) return { ok: false, error: "different-day" };
+    placements.push({ branchId: m.branchId ?? input.branchId, startsAt: at });
+  }
+
   const priced = await Promise.all(
     input.members.map((m) =>
       priceMember(m, refillParent ? settings.refill_price_halalas : null),
@@ -692,8 +728,9 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   if (priced.some((p) => p === null)) return { ok: false, error: "invalid-service" };
   const guests = priced as Priced[];
 
-  // The discount only exists because two people booked together, so it applies to
-  // the combined bill and only when there is more than one of them.
+  // The discount exists because they booked together, so it applies to the
+  // combined bill and only when there is more than one of them — however the
+  // party is spread across the day.
   const isGroup = guests.length > 1;
   const split = splitGroupPrice(
     guests.map((g) => g.grossHalalas),
@@ -701,10 +738,16 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   );
 
   // Each guest keeps their own end time — one can have a 90-minute service while
-  // the other has 45. The chairs are claimed for the longest of them so nobody's
-  // chair gets taken out from under them mid-appointment.
-  const endsAtPer = guests.map((g) => new Date(startsAt.getTime() + g.durationMin * 60_000));
-  const latestEndsAt = new Date(Math.max(...endsAtPer.map((d) => d.getTime())));
+  // the other has 45, and now they need not have started together either.
+  const endsAtPer = guests.map(
+    (g, i) => new Date(placements[i].startsAt.getTime() + g.durationMin * 60_000),
+  );
+
+  /** Do two guests want a chair at the same branch at the same moment? */
+  const clash = (a: number, b: number) =>
+    placements[a].branchId === placements[b].branchId &&
+    placements[a].startsAt < endsAtPer[b] &&
+    placements[b].startsAt < endsAtPer[a];
 
   // The promo comes off last, on top of whatever the group or refill discount
   // already took — the codes are occasion offers, not alternatives to the other
@@ -780,17 +823,34 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
 
   try {
     const created = await db.transaction(async (tx) => {
-      await sweepExpiredHolds(tx, input.branchId, settings.booking_hold_min);
+      for (const branchId of new Set(placements.map((p) => p.branchId))) {
+        await sweepExpiredHolds(tx, branchId, settings.booking_hold_min);
+      }
 
-      const stationIds = await reserveStations(
-        tx,
-        input.branchId,
-        startsAt,
-        latestEndsAt,
-        guests.length,
-        { onlyStationId: input.stationId ?? undefined },
-      );
-      if (!stationIds) throw new BookingAbort("slot-taken");
+      // One guest at a time, each at her own branch and hour, rather than N
+      // chairs in one call at one place. Still all-or-nothing: the first guest
+      // who cannot be seated aborts the transaction and the party keeps nothing,
+      // which is the right behaviour for people who came out together.
+      //
+      // Chairs already promised in this transaction are held back by hand —
+      // nothing is inserted until the loop below, so the conflict scan inside
+      // reserveStations cannot see them yet.
+      const stationIds: string[] = [];
+      for (let i = 0; i < placements.length; i++) {
+        const got = await reserveStations(
+          tx,
+          placements[i].branchId,
+          placements[i].startsAt,
+          endsAtPer[i],
+          1,
+          {
+            onlyStationId: input.stationId ?? undefined,
+            excludeStationIds: stationIds.filter((_, j) => clash(i, j)),
+          },
+        );
+        if (!got) throw new BookingAbort("slot-taken");
+        stationIds.push(got[0]);
+      }
 
       // A signed-in customer books against the row they signed in as, full stop.
       //
@@ -838,10 +898,20 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
 
       // A pending booking has not been paid for and gets no number — the ticket
       // is issued at confirmation. Walk-ins are confirmed on the spot.
-      const tickets =
-        status === "confirmed"
-          ? await allocateTickets(tx, input.branchId, utcToLocalDate(startsAt), guests.length)
-          : null;
+      //
+      // Per branch, because ticket_counters is keyed (branch_id, day): a party
+      // split across two salons takes one number from each queue rather than
+      // consecutive numbers from a queue only half of them are standing in.
+      let tickets: (string | null)[] | null = null;
+      if (status === "confirmed") {
+        tickets = guests.map(() => null);
+        const byBranch = new Map<string, number[]>();
+        placements.forEach((p, i) => byBranch.set(p.branchId, [...(byBranch.get(p.branchId) ?? []), i]));
+        for (const [branchId, indexes] of byBranch) {
+          const issued = await allocateTickets(tx, branchId, day, indexes.length);
+          indexes.forEach((at, k) => (tickets![at] = issued[k]));
+        }
+      }
 
       const out: CreatedBooking[] = [];
 
@@ -863,14 +933,14 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
           .insert(bookings)
           .values({
             code: makeCode(),
-            branchId: input.branchId,
+            branchId: placements[i].branchId,
             customerId: customer.id,
             stationId: stationIds[i],
             technicianId: input.technicianId ?? null,
             serviceId: guest.service.id,
             removalTypeId: guest.removal?.id ?? null,
             designId: guest.design?.id ?? null,
-            startsAt,
+            startsAt: placements[i].startsAt,
             endsAt: endsAtPer[i],
             status,
             source: input.source,
@@ -1005,44 +1075,47 @@ export async function rescheduleBooking(input: {
 }): Promise<RescheduleResult> {
   if (Number.isNaN(input.startsAt.getTime())) return { ok: false, error: "failed" };
 
-  const [anchor] = await db.select().from(bookings).where(eq(bookings.id, input.id)).limit(1);
-  if (!anchor) return { ok: false, error: "not-found" };
+  const [booking] = await db.select().from(bookings).where(eq(bookings.id, input.id)).limit(1);
+  if (!booking) return { ok: false, error: "not-found" };
 
-  const members = anchor.groupId
-    ? await db
-        .select()
-        .from(bookings)
-        .where(eq(bookings.groupId, anchor.groupId))
-        .orderBy(asc(bookings.createdAt), asc(bookings.id))
-    : [anchor];
-
-  // Each guest keeps their own duration — moving an appointment must not
-  // silently shorten or lengthen it, and in a group the two may differ.
-  const durations = members.map((m) => m.endsAt.getTime() - m.startsAt.getTime());
-  const latestEndsAt = new Date(input.startsAt.getTime() + Math.max(...durations));
+  // This booking, and only this booking, even when it belongs to a group.
+  //
+  // It used to move the whole party, which was right while a group meant one
+  // branch at one moment: moving your appointment moved your friend's, because
+  // they were the same appointment. Guests hold their own branch and hour now,
+  // so dragging the rest of the party to a time nobody asked for is no longer a
+  // convenience, it is a booking they did not make. The reference the customer
+  // quoted is the chair that moves.
+  //
+  // The party is not held to one day after the fact. Same-day is a rule about
+  // booking together (see createBookings); plans change afterwards, and nothing
+  // downstream depends on it — cancellation fans out over group_id, and tickets
+  // are per branch per day on each row.
+  const duration = booking.endsAt.getTime() - booking.startsAt.getTime();
+  const endsAt = new Date(input.startsAt.getTime() + duration);
 
   try {
     const moved = await db.transaction(async (tx) => {
       // Claim and move in one transaction, so nobody can take the target chair
-      // between the check and the update. Their own chairs are fair game —
-      // hence the ignore ids, or a booking would see itself as the conflict.
+      // between the check and the update. Its own chair is fair game — hence the
+      // ignore id, or a booking would see itself as the conflict.
       const stationIds = await reserveStations(
         tx,
-        anchor.branchId,
+        booking.branchId,
         input.startsAt,
-        latestEndsAt,
-        members.length,
-        { ignoreBookingIds: members.map((m) => m.id) },
+        endsAt,
+        1,
+        { ignoreBookingIds: [booking.id] },
       );
       if (!stationIds) return null;
 
-      for (const [i, member] of members.entries()) {
+      {
         await tx
           .update(bookings)
           .set({
             startsAt: input.startsAt,
-            endsAt: new Date(input.startsAt.getTime() + durations[i]),
-            stationId: stationIds[i],
+            endsAt,
+            stationId: stationIds[0],
             // The technician was free at the old time; at the new one she may
             // already have someone. Emptying the row hands the booking back to
             // the automation below, which is the only thing that checks. Keeping
@@ -1051,7 +1124,7 @@ export async function rescheduleBooking(input: {
             technicianId: null,
             updatedAt: new Date(),
           })
-          .where(eq(bookings.id, member.id));
+          .where(eq(bookings.id, booking.id));
       }
 
       return stationIds;
@@ -1062,7 +1135,7 @@ export async function rescheduleBooking(input: {
     // Re-staffed straight away when the move lands on today. A move to a later
     // day deliberately stays empty until that morning's run, which is the only
     // one that can see who will be in.
-    await assignIfToday(anchor.branchId, input.startsAt);
+    await assignIfToday(booking.branchId, input.startsAt);
 
     return { ok: true, startsAt: input.startsAt, stationIds: moved };
   } catch (err) {

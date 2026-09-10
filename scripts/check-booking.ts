@@ -15,10 +15,11 @@
 import "./_test-db";
 
 import assert from "node:assert";
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, inArray, like, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { addons, bookings, branches, customers, services, stations } from "@/lib/db/schema";
+import { addons, bookings, branches, customers, services, stations, ticketCounters } from "@/lib/db/schema";
 import { createBooking, createBookings, sweepNoShows } from "@/lib/bookings";
+import { utcToLocalDate } from "@/lib/availability";
 import { splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { refillDaysLeft } from "@/lib/refill";
 import { formatTicketNo } from "@/lib/tickets";
@@ -31,6 +32,15 @@ const TEST_PHONE = "0500000001";
  * boundary a fixture lands on is luck — comparing the digits alone fails there.
  */
 const ticketOrdinal = (t: string) => (t.charCodeAt(0) - 65) * 99 + Number(t.slice(1));
+
+/** Where each branch's ticket queue has got to, so a run can assert it moved. */
+async function counters(branchIds: string[], day: string): Promise<Record<string, number>> {
+  const rows = await db
+    .select()
+    .from(ticketCounters)
+    .where(and(inArray(ticketCounters.branchId, branchIds), eq(ticketCounters.day, day)));
+  return Object.fromEntries(branchIds.map((id) => [id, rows.find((r) => r.branchId === id)?.next ?? 1]));
+}
 
 async function cleanup(branchId: string) {
   await db.delete(bookings).where(eq(bookings.branchId, branchId));
@@ -268,6 +278,120 @@ async function main() {
     assert.ok(row.discountHalalas > 0, "each group row carries its share of the discount");
   }
   console.log("  group: subtotal + VAT == total on both rows ✓");
+
+  // -- Four guests, each with her own hour ----------------------------------
+  // The engine always took any N; what is new is that a member may carry her own
+  // branch and start. Two here sit at the party's hour and two sit four hours
+  // later, which is the case a single party-wide reservation could not express:
+  // the later pair may reuse a chair the earlier pair has finished with.
+  await cleanup(branch.id);
+  const later = new Date(base + 240 * 60_000).toISOString();
+  const four = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: TEST_PHONE },
+    source: "web",
+    status: "confirmed",
+    members: [
+      { serviceId: svcA.id, addonIds: [] },
+      { serviceId: svcB.id, addonIds: [] },
+      { serviceId: svcA.id, addonIds: [], startsAt: later },
+      { serviceId: svcB.id, addonIds: [], startsAt: later },
+    ],
+  });
+  assert.ok(four.ok, `four guests failed: ${four.ok ? "" : four.error}`);
+  assert.equal(four.bookings.length, 4, "four guests, four bookings");
+
+  const fourRows = await db.select().from(bookings).where(eq(bookings.groupId, four.groupId!));
+  assert.equal(fourRows.length, 4, "all four must share the group id");
+
+  // The two who asked for the same moment cannot be given the same chair, and
+  // this is the pair that would collide if reservation forgot what it had just
+  // promised inside the transaction.
+  const atBase = fourRows.filter((r) => r.startsAt.getTime() === base);
+  assert.equal(atBase.length, 2, "two guests kept the party's hour");
+  assert.notEqual(atBase[0].stationId, atBase[1].stationId, "same hour must mean different chairs");
+  assert.equal(
+    fourRows.filter((r) => r.startsAt.toISOString() === later).length,
+    2,
+    "two guests kept their own later hour",
+  );
+
+  // One discount, over all four, however they are spread across the day.
+  const gross4 = 2 * svcA.priceHalalas + 2 * svcB.priceHalalas;
+  assert.equal(
+    four.totalHalalas,
+    gross4 - Math.round(gross4 * 0.1),
+    "the group discount covers a party that is not sitting together",
+  );
+  console.log("  group of four: own hours, own chairs, one discount ✓");
+
+  // -- One day is the whole of what a party shares --------------------------
+  await cleanup(branch.id);
+  const nextDay = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: TEST_PHONE },
+    source: "web",
+    status: "confirmed",
+    members: [
+      { serviceId: svcA.id, addonIds: [] },
+      { serviceId: svcB.id, addonIds: [], startsAt: new Date(base + 24 * 3_600_000).toISOString() },
+    ],
+  });
+  assert.ok(!nextDay.ok, "a guest on another day is not a group booking");
+  assert.equal(nextDay.ok ? "" : nextDay.error, "different-day");
+  console.log("  group: a guest on another day is refused ✓");
+
+  // -- A party split across two salons takes a number from each -------------
+  // ticket_counters is keyed (branch_id, day), so the guest at the other branch
+  // must draw from that branch's queue rather than a queue she is not standing
+  // in. Skipped rather than failed where the seed has only one branch.
+  const [other] = await db
+    .select()
+    .from(branches)
+    .where(ne(branches.id, branch.id))
+    .limit(1);
+  const otherChairs = other
+    ? await db
+        .select()
+        .from(stations)
+        .where(and(eq(stations.branchId, other.id), eq(stations.active, true)))
+    : [];
+
+  if (other && otherChairs.length > 0) {
+    await cleanup(branch.id);
+    await cleanup(other.id);
+    const day = utcToLocalDate(new Date(base));
+    const before = await counters([branch.id, other.id], day);
+
+    const apart = await createBookings({
+      branchId: branch.id,
+      startsAt: new Date(base).toISOString(),
+      customer: { phone: TEST_PHONE },
+      source: "web",
+      status: "confirmed",
+      members: [
+        { serviceId: svcA.id, addonIds: [] },
+        { serviceId: svcB.id, addonIds: [], branchId: other.id },
+      ],
+    });
+    assert.ok(apart.ok, `split party failed: ${apart.ok ? "" : apart.error}`);
+
+    const apartRows = await db.select().from(bookings).where(eq(bookings.groupId, apart.groupId!));
+    assert.deepEqual(
+      apartRows.map((r) => r.branchId).sort(),
+      [branch.id, other.id].sort(),
+      "each guest's row belongs to the salon she is sitting in",
+    );
+
+    const after = await counters([branch.id, other.id], day);
+    assert.equal(after[branch.id] - before[branch.id], 1, "one number from this branch");
+    assert.equal(after[other.id] - before[other.id], 1, "one number from the other branch");
+    assert.ok(apartRows.every((r) => r.ticketNo), "both guests get a ticket");
+    await cleanup(other.id);
+    console.log("  group: split across two salons, a ticket from each queue ✓");
+  }
 
   // -- The checkout upsell (coffee and a cookie) ----------------------------
   // Picked on the payment page, after the chair has been quoted and while it is

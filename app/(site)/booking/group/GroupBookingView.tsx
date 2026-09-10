@@ -1,20 +1,24 @@
 "use client";
 
-// Booking for two.
+// Booking for a group — up to four, each with her own branch and her own hour.
 //
-// Two GuestPickers, one branch, one time slot. The shared slot is the whole
-// point: the guests may pick completely different services (one nails, one
-// lashes) and their appointments may run for different lengths, but they arrive
-// together, so there is a single ScheduleModal and a single start time.
+// What they share is the day, and nothing else. The client asked for exactly
+// that flexibility: four friends out together, one of whom can only make 11:00
+// at Al Urubah while another takes 14:00 across town, still on one bill and
+// still earning the group discount. The same-day rule is what keeps that a
+// group booking rather than four bookings that happen to be on one card, and it
+// is enforced again in lib/bookings.ts — this screen only refuses to submit.
 //
-// The calendar is asked for two free chairs at once (guests=2) using the LONGER
-// of the two durations, so a slot shown here can always be booked.
+// So there is no party-wide slot picker any more. Each guest carries her own
+// branch, date and time, and the calendar is asked for ONE free chair at a time
+// (guests=1) for HER duration — which is both simpler and more likely to find
+// something than the old "two chairs at one moment" question.
 //
-// The two pickers are an accordion rather than one above the other: a full
-// service grid plus add-ons is a screenful each, so stacking them meant
-// scrolling past everything Guest 1 chose to reach Guest 2, with no way to see
-// at a glance whether Guest 2 had been filled in at all. One open at a time,
-// with each header summarising that guest, keeps the whole flow on one screen.
+// The pickers are an accordion rather than one above the other: a full service
+// grid plus add-ons is a screenful each, so stacking four meant scrolling past
+// everything Guest 1 chose to reach Guest 4, with no way to see at a glance
+// which guests had been filled in. One open at a time, with each header
+// summarising that guest, keeps the whole flow on one screen.
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
@@ -35,6 +39,12 @@ import GuestPicker, {
 import { saveBooking, formatDateLabel, formatTime, weekdayLabel } from "@/lib/booking";
 import type { PublicCatalog, PublicBranch } from "@/lib/catalog";
 
+/** The cap the client asked for. app/api/bookings/route.ts holds the same line. */
+const MAX_GUESTS = 4;
+
+/** One guest's own appointment. Empty until she picks one. */
+type Slot = { branchId: string | null; date: string | null; time: string | null; startsAt: string | null };
+
 export default function GroupBookingView({
   catalog,
   branchesAr,
@@ -51,38 +61,60 @@ export default function GroupBookingView({
   const b = c.booking;
   const branches = lang === "ar" ? branchesAr : branchesEn;
 
-  const [branchId, setBranchId] = useState<string | null>(branches[0]?.id ?? null);
-  const [guests, setGuests] = useState<[GuestState, GuestState]>([emptyGuest, emptyGuest]);
-  const [date, setDate] = useState<string | null>(null);
-  const [time, setTime] = useState<string | null>(null);
-  const [startsAt, setStartsAt] = useState<string | null>(null);
+  const emptySlot = (): Slot => ({
+    branchId: branches[0]?.id ?? null,
+    date: null,
+    time: null,
+    startsAt: null,
+  });
+
+  // Two to start with, because that is what this page is reached for; the
+  // third and fourth are added on demand.
+  const [guests, setGuests] = useState<GuestState[]>([emptyGuest, emptyGuest]);
+  const [slots, setSlots] = useState<Slot[]>([emptySlot(), emptySlot()]);
   const [agree, setAgree] = useState(false);
-  const [scheduling, setScheduling] = useState(false);
   /** Which guest's picker is expanded. Exactly one, always. */
-  const [openGuest, setOpenGuest] = useState<0 | 1>(0);
+  const [openGuest, setOpenGuest] = useState(0);
+  /** Whose calendar is open, or null. */
+  const [scheduling, setScheduling] = useState<number | null>(null);
 
-  const clearSchedule = () => {
-    setDate(null);
-    setTime(null);
-    setStartsAt(null);
-  };
-
-  const setGuest = (i: 0 | 1, next: GuestState) => {
-    setGuests((prev) => (i === 0 ? [next, prev[1]] : [prev[0], next]));
-    // Either guest changing can change how long the chairs are needed.
-    clearSchedule();
+  const setGuest = (i: number, next: GuestState) => {
+    setGuests((prev) => prev.map((g, j) => (j === i ? next : g)));
+    // Anything she changes can change how long her chair is needed, so her own
+    // slot is no longer known to fit. Nobody else's is affected — that is the
+    // point of each guest holding her own.
+    setSlots((prev) =>
+      prev.map((s, j) => (j === i ? { ...s, date: null, time: null, startsAt: null } : s)),
+    );
   };
 
   /**
-   * The second guest's name, which does *not* clear the chosen time.
+   * A guest's name, which does *not* clear her chosen time.
    *
-   * Everything else in a guest's panel changes how long her chair is needed, so
-   * setGuest drops the schedule and makes her pick again. A name changes
-   * nothing — and routing it through setGuest would wipe the appointment on
-   * every keystroke.
+   * Everything else in a panel changes how long her chair is needed, so setGuest
+   * drops her slot and makes her pick again. A name changes nothing — and
+   * routing it through setGuest would wipe the appointment on every keystroke.
    */
-  const setGuestName = (name: string) =>
-    setGuests((prev) => [prev[0], { ...prev[1], name }]);
+  const setGuestName = (i: number, name: string) =>
+    setGuests((prev) => prev.map((g, j) => (j === i ? { ...g, name } : g)));
+
+  const setSlot = (i: number, patch: Partial<Slot>) =>
+    setSlots((prev) => prev.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+
+  const addGuest = () => {
+    if (guests.length >= MAX_GUESTS) return;
+    setGuests((prev) => [...prev, emptyGuest]);
+    setSlots((prev) => [...prev, emptySlot()]);
+    setOpenGuest(guests.length);
+  };
+
+  const removeGuest = (i: number) => {
+    // Two is a group; one is the other page.
+    if (guests.length <= 2) return;
+    setGuests((prev) => prev.filter((_, j) => j !== i));
+    setSlots((prev) => prev.filter((_, j) => j !== i));
+    setOpenGuest((open) => (open >= i && open > 0 ? open - 1 : open));
+  };
 
   const totals = useMemo(() => guests.map((g) => guestTotals(catalog, g)), [catalog, guests]);
   const members = useMemo(
@@ -94,27 +126,44 @@ export default function GroupBookingView({
   // Mirrors splitGroupPrice on the server: one rounding, off the combined bill.
   const total = grossTotal - Math.round((grossTotal * discountPercent) / 100);
 
-  // Both chairs are claimed for the longer appointment, so ask the calendar for
-  // that. Booking then takes a strict subset of what was checked.
-  const durationMin = Math.max(totals[0].durationMin, totals[1].durationMin);
+  const chosenDays = slots.map((s) => s.date).filter(Boolean) as string[];
+  // The one thing the party holds in common. Refused by the server too, so this
+  // is a courtesy rather than the rule itself.
+  const oneDay = chosenDays.length > 0 && chosenDays.every((d) => d === chosenDays[0]);
 
-  const appointment =
-    date && time
-      ? `${formatDateLabel(date, lang)} - ${weekdayLabel(date, c.date)} - ${formatTime(time, c.date)}`
+  const allChose = guests.every((g) => g.service !== null);
+  const allScheduled = slots.every((s) => s.startsAt !== null && s.branchId !== null);
+  const ready = allChose && allScheduled && oneDay && agree;
+
+  const branchName = (id: string | null) => branches.find((br) => br.id === id)?.name ?? null;
+
+  const slotLabel = (s: Slot) =>
+    s.date && s.time
+      ? `${formatDateLabel(s.date, lang)} - ${weekdayLabel(s.date, c.date)} - ${formatTime(s.time, c.date)}`
       : b.notSelected;
 
-  const bothChose = guests.every((g) => g.service !== null);
-  const ready = bothChose && branchId !== null && startsAt !== null && agree;
-
   const proceed = () => {
-    if (!ready || !branchId || !startsAt) return;
+    if (!ready) return;
+    // Guest 1's branch and hour stand as the party's, and every guest carries
+    // her own alongside. A group that all picked the same thing therefore posts
+    // exactly the shape it always did.
+    const first = slots[0];
+    if (!first.branchId || !first.startsAt) return;
+
     saveBooking({
-      branchId,
-      startsAt,
-      members,
-      branch: branches.find((br) => br.id === branchId)?.name ?? null,
-      dateLabel: date ? formatDateLabel(date, lang) : null,
-      timeLabel: time ? formatTime(time, c.date) : null,
+      branchId: first.branchId,
+      startsAt: first.startsAt,
+      members: members.map((m, i) => ({
+        ...m,
+        branchId: slots[i].branchId,
+        startsAt: slots[i].startsAt,
+        branch: branchName(slots[i].branchId),
+        dateLabel: slots[i].date ? formatDateLabel(slots[i].date!, lang) : null,
+        timeLabel: slots[i].time ? formatTime(slots[i].time!, c.date) : null,
+      })),
+      branch: branchName(first.branchId),
+      dateLabel: first.date ? formatDateLabel(first.date, lang) : null,
+      timeLabel: first.time ? formatTime(first.time, c.date) : null,
       checkoutAddons: catalog.checkoutAddons,
       grossTotal,
       total,
@@ -133,17 +182,8 @@ export default function GroupBookingView({
 
       <div className="mx-auto grid max-w-page gap-8 px-6 pb-20 pt-8 md:px-12 lg:grid-cols-[1fr_360px] lg:px-16">
         <div className="space-y-10">
-          <BranchPicker
-            branches={branches}
-            value={branchId}
-            onChange={(id) => {
-              setBranchId(id);
-              clearSchedule();
-            }}
-          />
-
           <div className="space-y-4">
-            {([0, 1] as const).map((i) => (
+            {guests.map((guest, i) => (
               <section
                 key={i}
                 className="overflow-hidden rounded-[20px] bg-white ring-1 ring-black/[0.04]"
@@ -155,17 +195,19 @@ export default function GroupBookingView({
                   className="flex w-full items-center gap-3 p-5 text-start transition-colors hover:bg-black/[0.015]"
                 >
                   <span
-                    className={`rounded-full px-4 py-1.5 font-display text-sm font-extrabold ${
+                    className={`shrink-0 rounded-full px-4 py-1.5 font-display text-sm font-extrabold ${
                       openGuest === i ? "bg-red text-white" : "bg-[#f7e8e8] text-red"
                     }`}
                   >
-                    {i === 0 ? b.guest1 : b.guest2}
+                    {b.guestN.replace("{n}", String(i + 1))}
                   </span>
 
                   {/* What this guest has picked, so a collapsed panel still says
-                      whether it needs attention. */}
+                      whether it needs attention. Her time is here rather than in
+                      the summary, because it is hers and not the party's. */}
                   <span className="min-w-0 flex-1 truncate text-sm text-ink/60">
                     {members[i].service ?? b.notSelected}
+                    {slots[i].time ? ` · ${formatTime(slots[i].time!, c.date)}` : ""}
                   </span>
 
                   {totals[i].price > 0 && (
@@ -187,16 +229,15 @@ export default function GroupBookingView({
 
                 {openGuest === i && (
                   <div className="border-t border-black/[0.05] px-5 pb-6 pt-6">
-                    {/* Asked of the second guest only. The first is whoever
-                        fills in checkout, so her name is already on its way and
-                        a second field for it would be the form asking a question
-                        it knows the answer to.
+                    {/* Asked of everyone but the first. She is whoever fills in
+                        checkout, so her name is already on its way and a second
+                        field for it would be the form asking a question it knows
+                        the answer to.
 
                         Optional on purpose: a friend's name is a courtesy to the
                         desk, not something worth blocking a booking over. Left
-                        empty, both chairs read as the booker — which is exactly
-                        what happened before this field existed. */}
-                    {i === 1 && (
+                        empty, the chair reads as the booker's. */}
+                    {i > 0 && (
                       <label className="mb-6 block">
                         <span className="mb-1.5 block text-[13px] font-semibold text-ink">
                           {b.guest2Name}
@@ -204,8 +245,8 @@ export default function GroupBookingView({
                         <input
                           type="text"
                           maxLength={120}
-                          value={guests[1].name ?? ""}
-                          onChange={(e) => setGuestName(e.target.value)}
+                          value={guest.name ?? ""}
+                          onChange={(e) => setGuestName(i, e.target.value)}
                           autoComplete="off"
                           className="w-full rounded-[12px] border border-black/[0.12] bg-white px-4 py-3 text-sm text-ink outline-none transition-colors placeholder:text-ink/30 focus:border-red/50"
                         />
@@ -217,26 +258,70 @@ export default function GroupBookingView({
 
                     <GuestPicker
                       catalog={catalog}
-                      value={guests[i]}
+                      value={guest}
                       onChange={(next) => setGuest(i, next)}
                     />
 
-                    {/* Guest 1 has somewhere to go next; Guest 2 does not — the
-                        summary beside them is the next step. */}
-                    {i === 0 && (
+                    {/* Her own branch and her own hour, at the bottom of her own
+                        panel — after the services, because the calendar is asked
+                        for the duration those services add up to. */}
+                    <div className="mt-8 space-y-4 border-t border-black/[0.05] pt-6">
+                      <BranchPicker
+                        branches={branches}
+                        value={slots[i].branchId}
+                        onChange={(id) =>
+                          // A different salon has different chairs and different
+                          // hours, so whatever she picked here no longer holds.
+                          setSlot(i, { branchId: id, date: null, time: null, startsAt: null })
+                        }
+                      />
+
                       <button
                         type="button"
-                        onClick={() => setOpenGuest(1)}
-                        className="mt-8 w-full rounded-[12px] bg-red-grad py-3.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
+                        onClick={() => setScheduling(i)}
+                        disabled={!slots[i].branchId}
+                        className="w-full rounded-[14px] bg-cream/70 p-4 text-start ring-1 ring-black/[0.04] transition-colors hover:ring-red/40 disabled:opacity-50"
                       >
-                        {b.nextGuest}
+                        <p className="mb-1 text-[11px] text-ink/45">{b.guestTime}</p>
+                        <p className="text-sm font-semibold text-ink">{slotLabel(slots[i])}</p>
                       </button>
-                    )}
+                    </div>
+
+                    <div className="mt-6 flex gap-3">
+                      {guests.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => removeGuest(i)}
+                          className="rounded-[12px] bg-black/[0.04] px-5 py-3.5 text-sm font-bold text-ink/60 transition-colors hover:bg-black/[0.08]"
+                        >
+                          {b.removeGuest}
+                        </button>
+                      )}
+                      {i < guests.length - 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setOpenGuest(i + 1)}
+                          className="flex-1 rounded-[12px] bg-red-grad py-3.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
+                        >
+                          {b.nextGuest}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </section>
             ))}
           </div>
+
+          {guests.length < MAX_GUESTS && (
+            <button
+              type="button"
+              onClick={addGuest}
+              className="w-full rounded-[20px] border border-dashed border-red/30 bg-white/60 p-5 text-center font-display text-base font-extrabold text-red transition-colors hover:bg-white"
+            >
+              + {b.addGuest}
+            </button>
+          )}
 
           <Link
             href="/booking"
@@ -247,35 +332,53 @@ export default function GroupBookingView({
           </Link>
         </div>
 
-        <Summary
-          members={members}
-          appointment={appointment}
-          onEditSchedule={() => setScheduling(true)}
-          grossTotal={grossTotal}
-          total={total}
-          agree={agree}
-          onAgree={setAgree}
-          ready={ready}
-          onProceed={proceed}
-        />
+        <div className="space-y-3">
+          <Summary
+            members={members}
+            appointment={
+              // The party's line is the day, since that is the only thing they
+              // all share. Each guest's own time sits in her panel header.
+              chosenDays.length && oneDay
+                ? `${formatDateLabel(chosenDays[0], lang)} - ${weekdayLabel(chosenDays[0], c.date)}`
+                : b.notSelected
+            }
+            onEditSchedule={() => setScheduling(openGuest)}
+            grossTotal={grossTotal}
+            total={total}
+            agree={agree}
+            onAgree={setAgree}
+            ready={ready}
+            onProceed={proceed}
+          />
+
+          {/* Only once she has actually made them disagree — a rule stated
+              before it can be broken is noise. */}
+          {chosenDays.length > 1 && !oneDay && (
+            <p role="alert" className="rounded-[14px] bg-red/[0.08] px-4 py-3 text-start text-[12px] text-red">
+              {b.sameDayNote}
+            </p>
+          )}
+        </div>
       </div>
 
       <SiteFooter />
 
-      {scheduling && branchId && (
+      {scheduling !== null && slots[scheduling]?.branchId && (
         <ScheduleModal
-          branchId={branchId}
-          durationMin={durationMin}
-          guests={2}
-          initialDate={date}
-          initialTime={time}
+          branchId={slots[scheduling]!.branchId!}
+          durationMin={totals[scheduling].durationMin}
+          // One chair, hers. The party is no longer seated in one row, so asking
+          // for four free at once would refuse slots that are perfectly bookable.
+          guests={1}
+          // Opens on the day the group has already settled on, so the common
+          // case is one tap on a time rather than finding the day again.
+          initialDate={slots[scheduling]!.date ?? chosenDays[0] ?? null}
+          initialTime={slots[scheduling]!.time}
           onConfirm={(d, t, iso) => {
-            setDate(d);
-            setTime(t);
-            setStartsAt(iso);
-            setScheduling(false);
+            setSlot(scheduling, { date: d, time: t, startsAt: iso });
+            setScheduling(null);
           }}
-          onClose={() => setScheduling(false)}
+          onClose={() => setScheduling(null)}
         />
       )}
     </main>

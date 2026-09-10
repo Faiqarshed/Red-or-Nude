@@ -429,9 +429,10 @@ export const bookings = pgTable(
     ticketNo: text("ticket_no"),
 
 
-    // Two guests booked together share one uuid. No booking_groups table: a group
-    // holds no fact its members don't already carry, and the only query anyone
-    // runs is "the other rows with this id".
+    // Guests booked together share one uuid — up to four of them, who may sit at
+    // different branches at different hours on the one day. No booking_groups
+    // table: a group holds no fact its members don't already carry, and the only
+    // query anyone runs is "the other rows with this id".
     groupId: uuid("group_id"),
 
     /**

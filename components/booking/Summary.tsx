@@ -56,7 +56,7 @@ export default function Summary({
           <div key={i}>
             {members.length > 1 && (
               <p className="mb-2 text-start font-display text-sm font-extrabold text-red">
-                {i === 0 ? b.guest1 : b.guest2}
+                {b.guestN.replace("{n}", String(i + 1))}
               </p>
             )}
             <div className="grid grid-cols-2 gap-3">
@@ -75,7 +75,9 @@ export default function Summary({
         ))}
       </div>
 
-      {/* One appointment for everyone on the bill. */}
+      {/* The day, for everyone on the bill. In a group each guest may hold her
+          own branch and hour, and those live in her own panel — this row is
+          what they have in common. */}
       <button
         type="button"
         onClick={onEditSchedule}

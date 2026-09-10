@@ -24,14 +24,24 @@ const member = z.object({
   addonIds: z.array(z.string().uuid()).max(20).default([]),
   removalTypeId: z.string().uuid().nullable().optional(),
   designId: z.string().uuid().nullable().optional(),
+  /**
+   * This guest's own branch and start. Both optional and both default to the
+   * party's, so the solo shape is unchanged. The engine holds every guest to
+   * the party's local day and refuses the booking otherwise.
+   */
+  branchId: z.string().uuid().nullable().optional(),
+  startsAt: z.string().datetime().nullable().optional(),
 });
 
 const body = z.object({
+  // The party's branch and start. A guest may hold her own of either; what they
+  // all share is the day, which is what makes this one group booking rather
+  // than four bookings that happen to be on one card.
   branchId: z.string().uuid(),
-  // Every guest on one bill starts at the same moment — that is what makes it a
-  // group booking rather than two bookings that happen to be on one card.
   startsAt: z.string().datetime(),
-  members: z.array(member).min(1).max(2),
+  // Four is the cap the client asked for. The engine takes any N — only this
+  // line and the availability route decide how many are allowed through.
+  members: z.array(member).min(1).max(4),
   customer: z.object({
     name: z.string().trim().max(120).optional(),
     // Saudi mobile numbers, with or without country code.

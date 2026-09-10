@@ -143,9 +143,11 @@ The engine needs nothing. The edges and the screen do.
   because guests two through four all need names; the
   `Math.max(totals[0].durationMin, totals[1].durationMin)` at line 99 becomes a
   spread; `bothChose` (106) becomes `allChose`.
-- **A guest-count step.** The Townhouse screen the client forwarded is exactly
-  this — "HOW MANY PEOPLE ARE COMING?" over a grid of counts. Ours runs 1 to 4,
-  with no `7+` row.
+- ~~**A guest-count step.**~~ Dropped, 10 September 2026. The Townhouse screen
+  the client forwarded asks "HOW MANY PEOPLE ARE COMING?" up front; we kept the
+  accordion instead and grew an "Add a guest" button under it, up to four. One
+  screen rather than two, and the count is a consequence of the panels rather
+  than a question asked before anyone knows the answer.
 - `scripts/check-booking.ts:238` asserts that a group is two rows, and fails
   until it is generalised.
 - **Copy.** `sameSlotNote` — "Both guests share one appointment — same day, same
@@ -174,17 +176,26 @@ party, and reserves N chairs at one branch and one time in a single call
 - Reserve per member, one chair each, rather than once for the party.
 - Enforce the **same local day** across members with `utcToLocalDate`
   (`lib/availability.ts`).
-- `refuseOutsideHours` per member — branches keep different hours.
+- ~~`refuseOutsideHours` per member.~~ No such function exists: opening hours are
+  enforced in the slot picker (`lib/availability.ts`), and `createBookings` has
+  never checked them — a hand-crafted request could always book at 3am, at any
+  branch, and still can. Pre-existing and untouched by this work, but now it is
+  written down.
 - **Tickets.** `ticket_counters` is keyed `(branch_id, day)`, so a split party
   takes one number from each branch rather than consecutive numbers from one.
-- **`rescheduleBooking()` moves the party as a unit** (`lib/bookings.ts:982`).
-  Once guests hold their own times it has to be able to move one of them. This
-  is the part most likely to be missed.
+- **`rescheduleBooking()` moved the party as a unit.** It now moves only the
+  booking whose reference was quoted. Dragging the rest of the party to an hour
+  nobody asked for stopped being a convenience the moment guests held their own.
+  The party is *not* held to one day afterwards: same-day is a rule about
+  booking together, plans change, and nothing downstream depends on it.
 - Cancellation fans out over `group_id` and needs no change.
 - The group discount is unchanged and always applies, however the four are
   spread. `splitGroupPrice` keeps working on the combined bill.
 - **UI** — a `BranchPicker` and a `ScheduleModal` per guest, inside the accordion
-  that already exists. `/api/availability` is called per guest with `guests=1`.
+  that already exists. `/api/availability` is called per guest with `guests=1`,
+  which also refuses fewer slots than the old "N chairs at one moment" question.
+  The screen blocks a party whose days disagree; the server refuses it outright
+  with `different-day`.
 
 ---
 

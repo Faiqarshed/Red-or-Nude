@@ -304,6 +304,10 @@ export default function PaymentPage() {
             members: booking.members.map((m, i) => ({
               guestName: m.guestName,
               serviceId: m.serviceId,
+              // Hers when she picked her own, otherwise the party's. The server
+              // holds every guest to the party's day either way.
+              branchId: m.branchId ?? null,
+              startsAt: m.startsAt ?? null,
               // The coffee rides the add-on machinery: nothing here prices it.
               addonIds: [...m.addonIds, ...treatsFor(i).map((a) => a.id)],
               removalTypeId: m.removalTypeId,
@@ -419,7 +423,7 @@ export default function PaymentPage() {
                   <div key={i}>
                     {booking.members.length > 1 && (
                       <p className="mb-2 font-display text-sm font-extrabold text-red">
-                        {i === 0 ? c.booking.guest1 : c.booking.guest2}
+                        {c.booking.guestN.replace("{n}", String(i + 1))}
                       </p>
                     )}
                     <div className="grid grid-cols-2 gap-3">
@@ -429,6 +433,15 @@ export default function PaymentPage() {
                         value={m.addons.length ? m.addons.join("، ") : c.booking.none}
                       />
                       <Field label={c.booking.removal} value={m.removal ?? c.booking.none} />
+                      {/* Only when she holds her own — a group that picked one
+                          branch and one slot together still reads as one
+                          appointment, on the row below. */}
+                      {m.timeLabel && (
+                        <Field
+                          label={c.booking.appointment}
+                          value={`${m.branch ? `${m.branch} · ` : ""}${m.timeLabel}`}
+                        />
+                      )}
                       <Field label={c.booking.total} value={String(m.price)} />
                     </div>
                   </div>
@@ -660,7 +673,7 @@ export default function PaymentPage() {
                               )}
                               <span className="font-semibold">
                                 {booking.members.length > 1
-                                  ? `${i === 0 ? c.booking.guest1 : c.booking.guest2} — ${pick(a.name, lang)}`
+                                  ? `${c.booking.guestN.replace("{n}", String(i + 1))} — ${pick(a.name, lang)}`
                                   : pick(a.name, lang)}
                               </span>
                             </span>

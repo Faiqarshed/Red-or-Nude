@@ -34,11 +34,24 @@ export type MemberSelection = {
 
   /** SAR, before any group discount — shown as this guest's own line. */
   price: number;
+
+  /**
+   * Where and when this guest sits, when it is not where and when the party
+   * does. Null means "the party's", which is every solo booking and every group
+   * that chose one branch and one slot together.
+   */
+  branchId?: string | null;
+  startsAt?: string | null;
+  /** Her own labels, captured in the language she booked in. */
+  branch?: string | null;
+  dateLabel?: string | null;
+  timeLabel?: string | null;
 };
 
 export type BookingSelection = {
+  /** The party's branch and start. A member may hold her own of either. */
   branchId: string | null;
-  startsAt: string | null; // ISO UTC — shared by every member
+  startsAt: string | null; // ISO UTC
   members: MemberSelection[];
 
   branch: string | null;
