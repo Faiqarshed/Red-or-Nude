@@ -26,6 +26,7 @@ import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
 import { refuseBookingAction } from "@/lib/booking-auth";
 import { assignIfToday } from "@/lib/assign";
+import { utcToLocalDate } from "@/lib/availability";
 import { OTP_LENGTH } from "@/lib/otp";
 
 export const dynamic = "force-dynamic";
@@ -157,7 +158,13 @@ export async function POST(request: Request) {
   // The chair came free and so did whoever was holding this hour. Anything left
   // unassigned today may now be staffable, so run the day again — it only fills
   // empty rows, so nobody loses a customer over someone else's cancellation.
-  await assignIfToday(anchor.branchId, anchor.startsAt);
+  //
+  // Once per floor the party sat on, not once for the anchor's. A group may be
+  // spread across branches and hours now, and the chair freed at the far one is
+  // exactly the one no other pass would come back for.
+  const floors = new Map<string, (typeof members)[number]>();
+  for (const m of members) floors.set(`${m.branchId}:${utcToLocalDate(m.startsAt)}`, m);
+  for (const m of floors.values()) await assignIfToday(m.branchId, m.startsAt);
 
   return NextResponse.json({
     ok: true,

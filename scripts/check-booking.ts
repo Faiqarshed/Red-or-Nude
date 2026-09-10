@@ -19,6 +19,7 @@ import { and, eq, inArray, like, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { addons, bookings, branches, customers, services, stations, ticketCounters } from "@/lib/db/schema";
 import { createBooking, createBookings, sweepNoShows } from "@/lib/bookings";
+import { confirmBookingPayment } from "@/lib/payments/confirm";
 import { utcToLocalDate } from "@/lib/availability";
 import { splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { refillDaysLeft } from "@/lib/refill";
@@ -391,6 +392,80 @@ async function main() {
     assert.ok(apartRows.every((r) => r.ticketNo), "both guests get a ticket");
     await cleanup(other.id);
     console.log("  group: split across two salons, a ticket from each queue ✓");
+
+    // -- The same, down the path a customer actually walks -----------------
+    // The block above books `confirmed`, which is the walk-in shape: the desk
+    // seats her and createBookings issues the number on the spot. The web does
+    // not do that. It holds the chairs `pending` and the number is issued by
+    // confirmBookingPayment once the card clears — a different function, which
+    // has to split the party by branch for itself. Asserting only the walk-in
+    // path is how a party could draw both numbers from one queue and no check
+    // would notice.
+    //
+    // The queues are deliberately left at different positions first, so "she
+    // took a number from the right branch" is a statement the numbers can
+    // actually distinguish.
+    await cleanup(branch.id);
+    await cleanup(other.id);
+
+    const bump = await createBooking({
+      branchId: other.id,
+      serviceId: svcA.id,
+      addonIds: [],
+      startsAt: new Date(base).toISOString(),
+      customer: { phone: TEST_PHONE },
+      source: "walk_in",
+    });
+    assert.ok(bump.ok, "could not move the other branch's queue on");
+
+    const paidDay = utcToLocalDate(new Date(base + 60 * 60_000));
+    const beforePaid = await counters([branch.id, other.id], paidDay);
+
+    const held = await createBookings({
+      branchId: branch.id,
+      startsAt: new Date(base + 60 * 60_000).toISOString(),
+      customer: { phone: TEST_PHONE },
+      source: "web",
+      // The web shape: chairs held, nothing issued until the card clears.
+      status: "pending",
+      members: [
+        { serviceId: svcA.id, addonIds: [] },
+        { serviceId: svcB.id, addonIds: [], branchId: other.id },
+      ],
+    });
+    assert.ok(held.ok, `split hold failed: ${held.ok ? "" : held.error}`);
+    assert.ok(
+      held.bookings.every((b) => b.ticketNo === null),
+      "a pending hold has no number yet",
+    );
+
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    assert.ok(paid.ok, `confirming the split party failed: ${paid.ok ? "" : paid.error}`);
+
+    const afterPaid = await counters([branch.id, other.id], paidDay);
+    assert.equal(
+      afterPaid[branch.id] - beforePaid[branch.id],
+      1,
+      "one number from this branch's queue, on payment",
+    );
+    assert.equal(
+      afterPaid[other.id] - beforePaid[other.id],
+      1,
+      "one number from the other branch's queue, on payment",
+    );
+
+    const paidRows = await db.select().from(bookings).where(eq(bookings.groupId, held.groupId!));
+    for (const row of paidRows) {
+      assert.ok(row.ticketNo, "every guest leaves with a number");
+      assert.equal(
+        ticketOrdinal(row.ticketNo!),
+        ticketOrdinal(formatTicketNo(beforePaid[row.branchId])),
+        "her number is the next one from the queue she will be standing in",
+      );
+    }
+
+    await cleanup(other.id);
+    console.log("  group: split across two salons, paid for on the web, a ticket from each ✓");
   }
 
   // -- The checkout upsell (coffee and a cookie) ----------------------------

@@ -117,6 +117,17 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     return { ok: false, error: "payment-declined" };
   }
 
+  // A party may now sit at more than one branch, and `ticket_counters` is keyed
+  // (branch_id, day) — so group the guests by the queue each will actually be
+  // standing in. Used twice below: to issue the numbers, and to deal each of
+  // those floors afterwards. The same rule createBookings applies to a walk-in,
+  // which is confirmed on the spot and so never reaches this file.
+  const byQueue = new Map<string, number[]>();
+  members.forEach((m, i) => {
+    const key = `${m.branchId}:${utcToLocalDate(m.startsAt)}`;
+    byQueue.set(key, [...(byQueue.get(key) ?? []), i]);
+  });
+
   try {
     const tickets = await db.transaction(async (tx) => {
       await tx
@@ -129,12 +140,21 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
         })
         .where(eq(payments.providerRef, ref));
 
-      const numbers = await allocateTickets(
-        tx,
-        anchor.branchId,
-        utcToLocalDate(anchor.startsAt),
-        members.length,
-      );
+      // One call per queue, and each run's numbers put back beside the guest
+      // who asked for them, so `numbers[i]` still belongs to `members[i]`. A
+      // guest at another salon takes that salon's next number rather than one
+      // from a queue she will never be standing in.
+      const numbers: string[] = new Array(members.length);
+      for (const indexes of byQueue.values()) {
+        const lead = members[indexes[0]];
+        const issued = await allocateTickets(
+          tx,
+          lead.branchId,
+          utcToLocalDate(lead.startsAt),
+          indexes.length,
+        );
+        indexes.forEach((at, k) => (numbers[at] = issued[k]));
+      }
 
       for (const [i, member] of members.entries()) {
         const moved = await tx
@@ -152,8 +172,15 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     });
 
     // Real work on today's floor now, so it gets a technician now. Next week is
-    // dawn's job, on the day. One pass covers a whole group.
-    await assignIfToday(anchor.branchId, anchor.startsAt);
+    // dawn's job, on the day.
+    //
+    // One pass per floor the party actually touches. A guest booked at another
+    // branch is real work there too, and dealing only the anchor's floor would
+    // leave her on nobody's list until the next morning's run.
+    for (const indexes of byQueue.values()) {
+      const lead = members[indexes[0]];
+      await assignIfToday(lead.branchId, lead.startsAt);
+    }
 
     const chairs = await db
       .select({ id: stations.id, label: stations.label })
