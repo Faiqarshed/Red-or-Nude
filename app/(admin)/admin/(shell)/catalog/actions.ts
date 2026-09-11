@@ -8,13 +8,14 @@
 // the customer-facing booking page now reads.
 
 import { revalidatePath } from "next/cache";
-import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { addons, designs, removalTypes, services } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
+import { reorderBySort } from "@/lib/admin/reorder";
 
 /**
  * `upsell` is the coffee-and-cookie kind. Same `addons` table as `addon` — which
@@ -242,33 +243,23 @@ export async function moveCatalogItem(
   direction: "up" | "down",
 ): Promise<ActionResult> {
   const actor = await requireCan("catalog.manage");
-  const table = TABLES[kind];
 
-  const rows = await db
-    .select({ id: table.id, sort: table.sort })
-    .from(table)
-    .orderBy(asc(table.sort), asc(table.id));
+  // `addon` and `upsell` share one table, and the admin lists them as two tabs
+  // with their own arrows. Scoped, or moving an upsell would swap places with an
+  // ordinary add-on that is nowhere near it on screen.
+  const within =
+    kind === "addon" || kind === "upsell"
+      ? eq(addons.atCheckout, kind === "upsell")
+      : undefined;
 
-  const index = rows.findIndex((r) => r.id === id);
-  const target = direction === "up" ? index - 1 : index + 1;
-  if (index < 0 || target < 0 || target >= rows.length) return { ok: true, id };
-
-  // Rewrite the whole column so pre-existing duplicate sort values can't make
-  // a swap a no-op.
-  const reordered = [...rows];
-  [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
-
-  await db.transaction(async (tx) => {
-    for (const [position, row] of reordered.entries()) {
-      await tx.update(table).set({ sort: position }).where(eq(table.id, row.id));
-    }
-  });
+  const moved = await reorderBySort(TABLES[kind], id, direction, within);
+  if (!moved) return { ok: true, id };
 
   await recordAudit(actor, {
     action: "reorder",
     entity: ENTITY[kind],
     entityId: id,
-    diff: { sort: { from: index, to: target } },
+    diff: { sort: { from: moved.from, to: moved.to } },
   });
   revalidateAll();
   return { ok: true, id };

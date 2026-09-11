@@ -29,7 +29,19 @@ import {
 // whether the card is usable. Field errors appear on blur, so they surface as
 // the customer tabs through rather than only on a submit that cannot happen
 // here.
-type MethodId = "card" | "mada" | "stc" | "apple";
+const METHOD_IDS = ["card", "mada", "stc", "apple"] as const;
+type MethodId = (typeof METHOD_IDS)[number];
+
+/**
+ * The label the customer clicked, back to the id the API wants.
+ *
+ * This panel reports its selection as a display string, because that is what a
+ * summary has to print. Every checkout then has to turn it back into an enum,
+ * and all three of them used to carry their own copy of the lookup.
+ */
+export function methodIdFor(label: string, p: Record<`${MethodId}Title`, string>): MethodId {
+  return METHOD_IDS.find((id) => p[`${id}Title`] === label) ?? "card";
+}
 
 function Radio({ active }: { active: boolean }) {
   return (
