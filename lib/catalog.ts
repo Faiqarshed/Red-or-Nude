@@ -136,10 +136,13 @@ export async function getPublicPacks(): Promise<PublicPack[]> {
   const [packRows, lineRows, serviceRows] = await Promise.all([
     db.select().from(packs).where(eq(packs.active, true)).orderBy(asc(packs.sort)),
     db.select().from(packServices),
-    db.select().from(services).orderBy(asc(services.sort)),
+    // Active only, as getPublicCatalog reads them. A pack is a promise of
+    // appointments, and a service the salon switched off is one she could buy a
+    // credit for and then never find in the booking list.
+    db.select().from(services).where(eq(services.active, true)).orderBy(asc(services.sort)),
   ]);
 
-  return packRows.map((p) => {
+  return packRows.flatMap((p) => {
     // Priced while the service row is still to hand — the total is the only
     // part anybody outside needs, so the per-line price never leaves.
     let listPriceSar = 0;
@@ -150,6 +153,11 @@ export async function getPublicPacks(): Promise<PublicPack[]> {
         listPriceSar += halalasToSar(s.priceHalalas) * quantity;
         return { serviceId: s.id, name: s.name, quantity };
       });
+
+    // Off the shelf entirely rather than quietly short. Selling it at the full
+    // price minus a service is worse than not selling it, and the gap is what
+    // tells the salon to go and fix the pack.
+    if (lines.length !== lineRows.filter((l) => l.packId === p.id).length) return [];
 
     return {
       id: p.id,

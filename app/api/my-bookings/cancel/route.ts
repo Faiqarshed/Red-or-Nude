@@ -95,14 +95,17 @@ export async function POST(request: Request) {
   //
   // So whoever is furthest along decides for all of them: a party with someone
   // already in a chair is the branch's to sort out, not a self-service button's.
-  const refused = members.map((m) => cancelRefusal(m, cutoff)).find(Boolean);
-  if (refused) {
+  // The guest herself, not just her refusal: guests hold their own hours now,
+  // so the deadline below is hers and not the anchor's.
+  const blocked = members.find((m) => cancelRefusal(m, cutoff));
+  if (blocked) {
     return NextResponse.json(
       {
-        error: refused,
+        error: cancelRefusal(blocked, cutoff),
         // The customer is being refused; telling them the deadline they missed
-        // is more use than telling them "no".
-        cancelBy: cancelDeadline(anchor, cutoff).toISOString(),
+        // is more use than telling them "no" — and quoting the anchor's would
+        // name an hour that was never the one in the way.
+        cancelBy: cancelDeadline(blocked, cutoff).toISOString(),
         cutoffHours: cutoff,
       },
       { status: 409 },

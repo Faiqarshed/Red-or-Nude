@@ -12,7 +12,7 @@
 
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers, payments, staff, stations, type Localized } from "@/lib/db/schema";
 import { allocateTickets } from "@/lib/bookings";
@@ -101,6 +101,31 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
   const driver = getDriver();
   const ref = randomUUID();
 
+  // Bury attempts nobody is still on.
+  //
+  // Every failure path below flips its row to `failed`, so a declined card
+  // retries fine. The one that does not is the process dying mid-charge, or the
+  // request being cancelled while the gateway call is in flight: that `pending`
+  // row survives, keeps `payments_booking_live_unique` to itself, and every
+  // attempt after it is refused as `in-progress` forever — the customer loses a
+  // slot whose hold has not even expired. Older than the hold window is the same
+  // clock sweepExpiredHolds uses, and past it there is no checkout left to
+  // protect.
+  const { booking_hold_min: holdMin } = await getSettings(["booking_hold_min"]);
+  await db
+    .update(payments)
+    .set({ status: "failed", updatedAt: new Date() })
+    .where(
+      and(
+        inArray(
+          payments.bookingId,
+          members.map((m) => m.id),
+        ),
+        eq(payments.status, "pending"),
+        lt(payments.createdAt, new Date(Date.now() - holdMin * 60_000)),
+      ),
+    );
+
   // Claiming the party, not just recording it.
   //
   // The status read above is the polite check; this is the one that holds. Both
@@ -134,21 +159,45 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     return { ok: false, error: "failed" };
   }
 
+  // A bill of nothing never reaches a gateway.
+  //
+  // A membership credit can cover the whole service line, and a full reward or a
+  // 100% code can do the same — in every case there is no money to move, and
+  // presenting a real PSP with a zero authorisation is how you collect a decline
+  // for a booking that was always going to be free. Worse, the customer was
+  // being asked for a card to pay nothing with.
+  //
+  // The `payments` row above still stands, at zero: it is what
+  // `payments_booking_live_unique` keys the double-tap guard on, and a confirmed
+  // booking with no payment row at all would be a hole in the day's takings
+  // rather than a zero in it.
   let charge;
-  try {
-    charge = await driver.charge({
-      ref,
-      amountHalalas: billTotal,
-      method: input.method,
-      simulate: input.simulate,
-    });
-  } catch (err) {
-    console.error("[payments] charge threw", err);
-    await db
-      .update(payments)
-      .set({ status: "failed", updatedAt: new Date() })
-      .where(eq(payments.providerRef, ref));
-    return { ok: false, error: "failed" };
+  if (billTotal === 0) {
+    // `ref` carried through rather than left undefined: the update below
+    // writes this back onto the row it matches *by* provider_ref, and the
+    // refund path keys on the same column. Relying on the driver dropping an
+    // undefined key would leave a paid booking with nothing to refund against.
+    charge = {
+      status: "paid" as const,
+      providerRef: ref,
+      raw: { free: true, reason: "nothing-to-charge" },
+    };
+  } else {
+    try {
+      charge = await driver.charge({
+        ref,
+        amountHalalas: billTotal,
+        method: input.method,
+        simulate: input.simulate,
+      });
+    } catch (err) {
+      console.error("[payments] charge threw", err);
+      await db
+        .update(payments)
+        .set({ status: "failed", updatedAt: new Date() })
+        .where(eq(payments.providerRef, ref));
+      return { ok: false, error: "failed" };
+    }
   }
 
   if (charge.status !== "paid") {

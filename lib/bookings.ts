@@ -23,6 +23,7 @@ import {
   removalTypes,
   services,
   staff,
+  stations,
   ticketCounters,
   type Localized,
 } from "@/lib/db/schema";
@@ -610,7 +611,9 @@ export async function allocateTickets(
 /**
  * Release chairs held by web bookings that were never paid for.
  *
- * Runs as the first statement of every booking write. Filtering these out of the
+ * Runs before any chair is claimed, once per branch the party touches — after
+ * the station locks are taken, so the order those are acquired in stays fixed.
+ * Filtering these out of the
  * availability query alone would not be enough: `bookings_station_slot_unique`
  * knows nothing about expiry and would still reject the replacement booking. By
  * actually cancelling them, the constraint and the calendar agree by construction.
@@ -760,12 +763,15 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   // Packs are sold and spent on the solo screen (docs/SCOPE-ENHANCEMENT.md §8:
   // "a pack paying for a group booking" is not in this phase), and no screen
   // offers a credit on a group booking. But a screen not offering something is
-  // not the same as the engine refusing it: priceMember quotes each guest
-  // against the ledger independently and they are all priced at once, so two
-  // guests naming the same purchase both saw the same credit, both priced their
-  // service to zero, and both wrote a -1. One credit paid for two appointments
-  // and the balance went negative. The partial unique index does not catch it —
-  // it is keyed on the booking, and those are two different bookings.
+  // not the same as the engine refusing it, and a request nobody's screen can
+  // produce is still a request this function has to answer.
+  //
+  // Not a race: spendPackCredit locks the purchase and recounts inside the
+  // transaction, so the second guest naming the same credit finds nothing left
+  // and the party aborts with `pack-credit-gone`. The balance cannot go
+  // negative. This is a scope line, not a safety net — refusing it up front
+  // names the reason instead of failing later with one that reads like a
+  // glitch.
   //
   // Refused rather than ignored, for the reason a bad promo code is: silently
   // charging full price to someone who asked to spend a credit is the one
@@ -891,7 +897,27 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
 
   try {
     const created = await db.transaction(async (tx) => {
-      for (const branchId of new Set(placements.map((p) => p.branchId))) {
+      // Every branch's chairs, locked up front in one fixed order.
+      //
+      // reserveStations takes `for update` on a branch's chairs and holds it to
+      // commit. Taking them guest by guest meant two parties booking the same
+      // pair of branches in opposite orders each held what the other waited
+      // for. Postgres kills one, and a deadlock is not
+      // `bookings_station_slot_unique`, so isSlotConflict does not recognise it
+      // and the customer reads "something went wrong" instead of "that time has
+      // gone". Sorted here, so every transaction queues the same way and the
+      // per-guest locks below are already held.
+      const branchIds = [...new Set(placements.map((p) => p.branchId))].sort();
+      if (branchIds.length > 1) {
+        await tx
+          .select({ id: stations.id })
+          .from(stations)
+          .where(inArray(stations.branchId, branchIds))
+          .orderBy(asc(stations.branchId), asc(stations.id))
+          .for("update");
+      }
+
+      for (const branchId of branchIds) {
         await sweepExpiredHolds(tx, branchId, settings.booking_hold_min);
       }
 
