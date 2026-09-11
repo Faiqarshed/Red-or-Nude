@@ -16,6 +16,60 @@ import type { Localized } from "@/lib/localized";
 
 type DateStrings = Content["date"];
 
+/** An hour another guest of the same party has already taken at one branch. */
+export type PartyHold = { startsAt: string; durationMin: number };
+
+/** What subtractPartyHolds needs of a slot. /api/availability returns all four. */
+export type HoldableSlot = {
+  startsAt: string;
+  available: boolean;
+  blockedBy: "closed" | "past" | "full" | "too-soon" | null;
+  /** Chairs free for the whole duration. What the holds are subtracted from. */
+  freeCount: number;
+};
+
+/**
+ * Strike out the hours this guest's own friends have already filled.
+ *
+ * A group is one bill but not one row: each guest picks her own branch and her
+ * own hour, and **none of it is written down until somebody pays**. So the
+ * server answering one guest's availability question cannot see the other three
+ * standing next to her. It says the branch's last chair is free — truthfully —
+ * and says the same to all four. They each pick it, and createBookings then
+ * refuses the whole party at the moment of payment, which is the worst possible
+ * place to find out.
+ *
+ * The screen is the only place that knows the party exists, so the screen is
+ * where the subtraction has to happen.
+ *
+ * Only *overlapping* holds count against her. A friend booked at 11:00 is not
+ * competing for a 14:00 chair, and the freedom to spread a party across the day
+ * is the whole point of the group page — a blunter rule that counted every
+ * friend on the day would hide hours that are genuinely bookable.
+ *
+ * Marked `full` rather than filtered out: a struck-through hour tells her it is
+ * taken, and a missing one just looks like the salon closes early.
+ */
+export function subtractPartyHolds<T extends HoldableSlot>(
+  slots: T[],
+  durationMin: number,
+  partyHolds: PartyHold[],
+): T[] {
+  if (partyHolds.length === 0) return slots;
+  return slots.map((s) => {
+    if (!s.available) return s;
+    const start = Date.parse(s.startsAt);
+    const end = start + durationMin * 60_000;
+    const taken = partyHolds.filter((h) => {
+      const from = Date.parse(h.startsAt);
+      return start < from + h.durationMin * 60_000 && from < end;
+    }).length;
+    return taken > 0 && s.freeCount - taken < 1
+      ? { ...s, available: false, blockedBy: "full" as const }
+      : s;
+  });
+}
+
 /** One guest's choices. A solo booking is simply a members array of length 1. */
 export type MemberSelection = {
   // Ids — what the API needs.
@@ -48,6 +102,21 @@ export type MemberSelection = {
    * ledger and decides for itself whether a credit exists.
    */
   customerPackId?: string | null;
+  /**
+   * What that credit took off, and which membership it came from.
+   *
+   * `price` above already has it deducted, which is what the server is asked to
+   * charge — but a number that arrives pre-reduced cannot be shown as a
+   * reduction. Without these the checkout lists a service and a total of zero
+   * with nothing joining them, and the customer is left to guess that the
+   * membership she bought is what happened. Every other thing that lowers a
+   * bill — the group discount, a promo code, a loyalty rung — gets its own
+   * line; this is how the credit gets one too.
+   *
+   * Display only. The server re-reads her ledger and prices it again.
+   */
+  creditSar?: number | null;
+  packName?: string | null;
   /** Her own labels, captured in the language she booked in. */
   branch?: string | null;
   dateLabel?: string | null;

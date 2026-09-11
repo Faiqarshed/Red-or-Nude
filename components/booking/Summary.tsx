@@ -26,6 +26,7 @@ export default function Summary({
   onEditMember,
   grossTotal,
   total,
+  credit,
   agree,
   onAgree,
   ready,
@@ -53,6 +54,27 @@ export default function Summary({
   grossTotal: number;
   /** After the group discount. Equal to grossTotal for a single guest. */
   total: number;
+  /**
+   * A membership credit she holds for the service she picked, or null.
+   *
+   * It lives beside the total rather than down in the form, because it is a
+   * price control and the price is here. It was a checkbox under the removal
+   * picker, four screens down, and a customer who had bought a membership had to
+   * go looking for the thing she had already paid for.
+   *
+   * `applied` starts true, so she does not have to find it at all — the total is
+   * already right when the panel first renders, and this row is how she *un*does
+   * that. Spending a credit is what buying one was for; saving it for a dearer
+   * visit is the rarer intent, and rarer intents get the click.
+   */
+  credit?: {
+    /** Which membership, and what is left on it. */
+    label: string;
+    /** What it takes off, in riyals. */
+    amount: number;
+    applied: boolean;
+    onToggle: (applied: boolean) => void;
+  } | null;
   agree: boolean;
   onAgree: (v: boolean) => void;
   ready: boolean;
@@ -68,7 +90,11 @@ export default function Summary({
   const perGuestTimes = members.some((m) => m.timeLabel);
 
   return (
-    <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)]">
+    // Sticky, so the price and everything that moves it stay on screen while
+    // she works down a page of services and add-ons. `h-fit` is what makes that
+    // possible in a grid: a stretched item is as tall as the row and has nothing
+    // to scroll within.
+    <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] lg:sticky lg:top-[110px]">
       <h2 className="mb-5 text-center font-display text-2xl font-extrabold text-ink">
         {b.summaryTitle}
       </h2>
@@ -102,30 +128,27 @@ export default function Summary({
                 the duration her services add up to, so picking an hour first
                 would be picking against a length that is about to change. */}
             {onEditMember ? (
-              (() => {
-                const ready = m.service !== null;
-                const Tag = ready ? "button" : "div";
-                return (
-                  <Tag
-                    onClick={ready ? () => onEditMember(i) : undefined}
-                    className={`mt-2 flex w-full items-center justify-between gap-3 rounded-[12px] px-3 py-2.5 text-start text-[12px] ring-1 ${
-                      ready
-                        ? "bg-cream/70 text-ink/70 ring-black/[0.04] transition-colors hover:ring-red/40"
-                        : "bg-black/[0.02] text-ink/30 ring-black/[0.03]"
-                    }`}
-                  >
-                    <span className="truncate">
-                      {/* Says why, not just that it is off. Greyed with her
-                          branch on it reads as the branch being the problem,
-                          which is the one thing it is not. */}
-                      {ready
-                        ? [m.branch, m.timeLabel].filter(Boolean).join(" · ") || b.notSelected
-                        : b.pickServiceFirst}
-                    </span>
-                    {ready && <span className="shrink-0 text-red">{m.timeLabel ? "✎" : "+"}</span>}
-                  </Tag>
-                );
-              })()
+              <button
+                type="button"
+                // `disabled` rather than swapping the tag for a div: the browser
+                // takes it out of the tab order and tells a screen reader why,
+                // which a greyed div does neither of.
+                disabled={m.service === null}
+                onClick={() => onEditMember(i)}
+                className="mt-2 flex w-full items-center justify-between gap-3 rounded-[12px] bg-cream/70 px-3 py-2.5 text-start text-[12px] text-ink/70 ring-1 ring-black/[0.04] transition-colors hover:ring-red/40 disabled:bg-black/[0.02] disabled:text-ink/30 disabled:ring-black/[0.03] disabled:hover:ring-black/[0.03]"
+              >
+                <span className="truncate">
+                  {/* Says why, not just that it is off. Greyed with her branch
+                      on it reads as the branch being the problem, which is the
+                      one thing it is not. */}
+                  {m.service === null
+                    ? b.pickServiceFirst
+                    : [m.branch, m.timeLabel].filter(Boolean).join(" · ") || b.notSelected}
+                </span>
+                {m.service !== null && (
+                  <span className="shrink-0 text-red">{m.timeLabel ? "✎" : "+"}</span>
+                )}
+              </button>
             ) : (m.timeLabel || m.branch) ? (
               <p className="mt-2 text-start text-[12px] text-ink/55">
                 {[m.branch, m.timeLabel].filter(Boolean).join(" · ")}
@@ -175,6 +198,40 @@ export default function Summary({
             <span>{b.groupDiscount}</span>
           </div>
         </div>
+      )}
+
+      {/* The membership credit, as a row of the bill rather than a form field
+          somewhere above it. Reads as applied, because it is. */}
+      {credit && (
+        <label
+          className={`mt-4 flex cursor-pointer items-center justify-between gap-3 rounded-[14px] p-4 text-start ring-1 transition-all ${
+            credit.applied
+              ? "bg-[#fbeaea] ring-red/30"
+              : "bg-cream/50 ring-black/[0.04] hover:ring-red/40"
+          }`}
+        >
+          <span className="flex min-w-0 items-center gap-3">
+            <input
+              type="checkbox"
+              checked={credit.applied}
+              onChange={(e) => credit.onToggle(e.target.checked)}
+              className="h-4 w-4 shrink-0 accent-red"
+            />
+            <span className="min-w-0">
+              <span className="block font-display text-[13px] font-extrabold text-red">
+                {c.packs.useCredit}
+              </span>
+              <span className="block truncate text-[11px] text-ink/55">{credit.label}</span>
+            </span>
+          </span>
+          <span
+            className={`shrink-0 font-display text-sm font-extrabold ${
+              credit.applied ? "text-red" : "text-ink/35"
+            }`}
+          >
+            −{credit.amount}
+          </span>
+        </label>
       )}
 
       <div className="mt-4 flex items-center justify-between rounded-[14px] bg-[#fbeaea] p-4">

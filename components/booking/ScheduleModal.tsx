@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import Modal from "./Modal";
 import { useI18n } from "@/lib/i18n";
-import { formatDateLabel, monthLabel } from "@/lib/booking";
+import { formatDateLabel, monthLabel, subtractPartyHolds } from "@/lib/booking";
+import type { PartyHold } from "@/lib/booking";
 
 // Date + time picker (Figma 235:758), now backed by the availability engine
 // instead of a hardcoded June-2026 grid: days with no free chair are disabled,
@@ -17,7 +18,12 @@ type Slot = {
   available: boolean;
   /** Why not, from the availability engine. See SlotBlocker in lib/availability. */
   blockedBy: "closed" | "past" | "full" | "too-soon" | null;
+  /** Chairs free for the whole duration. What `partyHolds` is subtracted from. */
+  freeCount: number;
 };
+
+/** Shared empty default — a fresh `[]` per render would invalidate the memo. */
+const NO_HOLDS: PartyHold[] = [];
 
 function pad(n: number) {
   return String(n).padStart(2, "0");
@@ -26,7 +32,7 @@ function pad(n: number) {
 export default function ScheduleModal({
   branchId,
   durationMin,
-  guests = 1,
+  partyHolds = NO_HOLDS,
   initialDate,
   initialTime,
   lastDate = null,
@@ -36,8 +42,25 @@ export default function ScheduleModal({
 }: {
   branchId: string;
   durationMin: number;
-  /** How many chairs must be free at once — 2 when booking for a pair. */
-  guests?: number;
+  /**
+   * Hours the rest of the party has already taken at *this* branch.
+   *
+   * A group books one bill but not one row: each guest picks her own branch and
+   * her own hour, and none of it is written down until somebody pays. So the
+   * server answering this guest's question has no idea she is standing next to
+   * three friends — it says the last chair is free, because it is, and says the
+   * same to all four. They all pick it, and createBookings refuses the party.
+   *
+   * The screen is the only place that knows the party exists, so the screen is
+   * where the subtraction has to happen: a slot her friends already fill is
+   * struck through for her, before she can choose it.
+   *
+   * Only overlapping holds count. Non-overlapping ones do not touch her chair,
+   * and the flexibility to book 11:00 while a friend takes 14:00 is the whole
+   * point of the group page — a blunter rule that counted every friend on the
+   * day would hide hours that are genuinely bookable.
+   */
+  partyHolds?: PartyHold[];
   initialDate: string | null;
   initialTime: string | null;
   /**
@@ -80,6 +103,18 @@ export default function ScheduleModal({
   const [leadTimeMin, setLeadTimeMin] = useState(0);
 
   /**
+   * The server's answer, minus the friends it could not see. See partyHolds.
+   *
+   * `freeCount` rather than a second request with `guests=n`: how many chairs
+   * this guest needs is a different number at every hour of the day, depending
+   * on which of her friends overlap it, and one query cannot carry four answers.
+   */
+  const shown = useMemo(
+    () => (slots ? subtractPartyHolds(slots, durationMin, partyHolds) : slots),
+    [slots, partyHolds, durationMin],
+  );
+
+  /**
    * The one line that explains a greyed-out morning.
    *
    * Three cases, and the third is the one that used to send people away:
@@ -96,19 +131,19 @@ export default function ScheduleModal({
    * earliest is the first bookable slot the server actually returned.
    */
   const notice = useMemo(() => {
-    if (!slots?.length) return null;
+    if (!shown?.length) return null;
 
     // Nothing bookable at all, for any reason — the day is closed, gone, or
     // full. Checked before the notice rule so a grid that is entirely struck
     // through always says *something*: at 20:00 every slot is simply past, and
     // twenty-seven crossed-out buttons with no sentence is how the picker looked
     // before, whatever the reason underneath.
-    const firstOpen = slots.find((s) => s.available);
+    const firstOpen = shown.find((s) => s.available);
     if (!firstOpen) return c.modals.noneLeftToday;
 
     // Past this point some slot is bookable, so the only line worth adding is
     // the one that explains the ones above it.
-    if (!slots.some((s) => s.blockedBy === "too-soon")) return null;
+    if (!shown.some((s) => s.blockedBy === "too-soon")) return null;
 
     // The salon's rule as the server applied it. Deriving it from the grid
     // instead would be wrong whenever the slot length and the notice do not
@@ -125,16 +160,21 @@ export default function ScheduleModal({
             : c.modals.noticeMinutes(leadTimeMin);
 
     return c.modals.noticeHint(label, firstOpen.time);
-  }, [slots, leadTimeMin, c.modals]);
+  }, [shown, leadTimeMin, c.modals]);
 
   const monthKey = `${cursor.year}-${pad(cursor.month0 + 1)}`;
 
   // Which days in the visible month have any free slot.
+  //
+  // Not adjusted for partyHolds: that subtraction is per hour, and a day is
+  // bookable if *any* hour is. A day her friends have entirely filled still
+  // opens, and the grid below then strikes every hour through and says so —
+  // which is the honest answer, arrived at one click later.
   useEffect(() => {
     let cancelled = false;
     setDays(null);
     fetch(
-      `/api/availability?branchId=${branchId}&month=${monthKey}&duration=${durationMin}&guests=${guests}`,
+      `/api/availability?branchId=${branchId}&month=${monthKey}&duration=${durationMin}`,
     )
       .then((r) => r.json())
       .then((d) => {
@@ -146,7 +186,7 @@ export default function ScheduleModal({
     return () => {
       cancelled = true;
     };
-  }, [branchId, monthKey, durationMin, guests]);
+  }, [branchId, monthKey, durationMin]);
 
   // Slots for the selected day.
   useEffect(() => {
@@ -154,7 +194,7 @@ export default function ScheduleModal({
     let cancelled = false;
     setSlots(null);
     fetch(
-      `/api/availability?branchId=${branchId}&date=${date}&duration=${durationMin}&guests=${guests}`,
+      `/api/availability?branchId=${branchId}&date=${date}&duration=${durationMin}`,
     )
       .then((r) => r.json())
       .then((d) => {
@@ -168,7 +208,7 @@ export default function ScheduleModal({
     return () => {
       cancelled = true;
     };
-  }, [branchId, date, durationMin, guests]);
+  }, [branchId, date, durationMin]);
 
   const daysInMonth = new Date(Date.UTC(cursor.year, cursor.month0 + 1, 0)).getUTCDate();
   // Saturday-first, matching the dictionary's weekday arrays.
@@ -180,7 +220,7 @@ export default function ScheduleModal({
       return { year: year + Math.floor(next / 12), month0: ((next % 12) + 12) % 12 };
     });
 
-  const selectedSlot = slots?.find((s) => s.time === time) ?? null;
+  const selectedSlot = shown?.find((s) => s.time === time) ?? null;
 
   return (
     <Modal title={c.modals.scheduleTitle} onClose={onClose} className="max-w-[720px]">
@@ -268,14 +308,14 @@ export default function ScheduleModal({
         <h4 className="font-display text-lg font-extrabold text-ink">{c.modals.chooseTime}</h4>
       </div>
 
-      {!date ? null : slots === null ? (
+      {!date ? null : shown === null ? (
         <p className="py-6 text-center text-sm text-ink/40">…</p>
-      ) : slots.length === 0 ? (
+      ) : shown.length === 0 ? (
         <p className="py-6 text-center text-sm text-ink/45">{c.modals.noSlots}</p>
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {slots.map((s) => {
+            {shown.map((s) => {
               const selected = s.time === time;
               // "Too soon" is not "gone": the chair is free and the only problem
               // is how much notice is left. Struck through it reads as booked and

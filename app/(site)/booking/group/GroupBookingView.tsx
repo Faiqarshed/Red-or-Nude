@@ -122,6 +122,25 @@ export default function GroupBookingView({
   };
 
   const totals = useMemo(() => guests.map((g) => guestTotals(catalog, g)), [catalog, guests]);
+
+  /**
+   * What the other guests are already holding at the branch this one is booking.
+   *
+   * Recomputed per open panel rather than stored, because it is a view of the
+   * slots and totals above and a stored copy is one that can go stale — she
+   * changes a service, her friend's duration changes, and a cached hold would
+   * still be the old length.
+   */
+  const partyHolds = useMemo(() => {
+    if (scheduling === null) return [];
+    const branchId = slots[scheduling]?.branchId;
+    if (!branchId) return [];
+    return slots.flatMap((s, j) =>
+      j !== scheduling && s.branchId === branchId && s.startsAt
+        ? [{ startsAt: s.startsAt, durationMin: totals[j].durationMin }]
+        : [],
+    );
+  }, [scheduling, slots, totals]);
   const branchName = (id: string | null) => branches.find((br) => br.id === id)?.name ?? null;
 
   /**
@@ -416,9 +435,12 @@ export default function GroupBookingView({
         <ScheduleModal
           branchId={slots[scheduling]!.branchId!}
           durationMin={totals[scheduling].durationMin}
-          // One chair, hers. The party is no longer seated in one row, so asking
-          // for four free at once would refuse slots that are perfectly bookable.
-          guests={1}
+          // The friends she is sitting with, which the server cannot see: none
+          // of these is written down until the party pays, so /api/availability
+          // answers every guest as though she were alone and offers the same
+          // last chair to all four. Only the ones at her branch — a chair at Al
+          // Malqa is not one she is competing for. See ScheduleModal.
+          partyHolds={partyHolds}
           // Once the party has a day, there is no date left to choose: the
           // calendar is hidden and she picks an hour on it.
           onlyDate={day}
