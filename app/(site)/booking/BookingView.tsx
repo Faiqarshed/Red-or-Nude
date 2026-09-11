@@ -100,8 +100,16 @@ export default function BookingView({
   const [startsAt, setStartsAt] = useState<string | null>(null);
   const [agree, setAgree] = useState(false);
   const [scheduling, setScheduling] = useState(false);
-  /** The purchase she is paying the service line with, if she chose to. */
-  const [useCredit, setUseCredit] = useState<string | null>(null);
+  /**
+   * Set only when she has actively turned a membership credit *off*.
+   *
+   * The default is to spend it: she bought the membership for this, and an
+   * opt-in buried under the removal picker meant customers paid full price with
+   * credits sitting in their account. Declining is the rarer intent, so
+   * declining is what takes the click — and it is one click, in the summary,
+   * beside the total it changes.
+   */
+  const [declinedCredit, setDeclinedCredit] = useState(false);
 
   // Changing anything that alters how long the chair is needed invalidates a
   // slot that was picked for the old duration.
@@ -124,7 +132,7 @@ export default function BookingView({
   // line is a question nobody has answered. priceMember refuses it server-side
   // for the same reason.
   const credit = offer || !service ? null : credits.find((c) => c.serviceId === service.id) ?? null;
-  const spending = credit && useCredit === credit.customerPackId ? credit : null;
+  const spending = credit && !declinedCredit ? credit : null;
 
   // The credit pays for the service and nothing else — add-ons, a removal and a
   // coffee are the same work either way. Mirrors priceMember exactly.
@@ -147,7 +155,17 @@ export default function BookingView({
     saveBooking({
       branchId,
       startsAt,
-      members: [{ ...member, price, customerPackId: spending?.customerPackId ?? null }],
+      members: [
+        {
+          ...member,
+          price,
+          customerPackId: spending?.customerPackId ?? null,
+          // What the credit took off, kept beside the reduced price so the
+          // checkout can show the subtraction rather than only its result.
+          creditSar: spending && service ? service.price : null,
+          packName: spending ? pick(spending.packName, lang) : null,
+        },
+      ],
       branch: branches.find((br) => br.id === branchId)?.name ?? null,
       dateLabel: date ? formatDateLabel(date, lang) : null,
       timeLabel: time ? formatTime(time, c.date) : null,
@@ -199,7 +217,16 @@ export default function BookingView({
                   name={pick(offer.serviceName, lang)}
                   price={offer.priceSar}
                   img={catalog.services[0]?.img ?? null}
-                  desc={`${c.refill.was} ${offer.fullPriceSar}`}
+                  // Only when the refill actually costs less. It is a flat 99
+                  // now, and a service cheaper than that refills for more than
+                  // it costs new — the salon is meant to keep those out of the
+                  // offer, but if one slips through, printing the old price
+                  // beside a higher one reads as a saving that is not there.
+                  desc={
+                    offer.priceSar < offer.fullPriceSar
+                      ? `${c.refill.was} ${offer.fullPriceSar}`
+                      : undefined
+                  }
                   minutesLabel={
                     catalog.services[0]
                       ? `${catalog.services[0].durationMin} ${b.minutes.replace(/[0-9]+\s*/, "")}`.trim()
@@ -234,44 +261,11 @@ export default function BookingView({
               onChange={(next) => {
                 setGuest(next);
                 clearSchedule();
+                // A different service is a different credit, so the question is
+                // asked again rather than staying declined from the last one.
+                setDeclinedCredit(false);
               }}
             />
-          )}
-
-          {/* Spend a credit on this service. Only when she has one for the
-              service she picked — a row saying "you have no credits" is an
-              advert, and this is a booking screen. */}
-          {credit && (
-            <label
-              className={`flex cursor-pointer items-center justify-between gap-3 rounded-[20px] bg-white p-5 text-start ring-1 transition-all ${
-                spending ? "ring-2 ring-red" : "ring-black/[0.04] hover:ring-red/40"
-              }`}
-            >
-              <span className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={Boolean(spending)}
-                  onChange={(e) => setUseCredit(e.target.checked ? credit.customerPackId : null)}
-                  className="h-4 w-4 accent-red"
-                />
-                <span>
-                  <span className="block font-display text-base font-extrabold text-red">
-                    {c.packs.useCredit}
-                  </span>
-                  <span className="block text-[12px] text-ink/55">
-                    {c.packs.creditLine
-                      .replace("{pack}", pick(credit.packName, lang))
-                      .replace("{n}", String(credit.left))}
-                  </span>
-                </span>
-              </span>
-              {/* What it takes off, so the total below explains itself. */}
-              {service && (
-                <span className="shrink-0 font-display text-sm font-extrabold text-red">
-                  −{service.price}
-                </span>
-              )}
-            </label>
           )}
 
           {!offer && (
@@ -283,6 +277,31 @@ export default function BookingView({
             <span className="text-sm text-ink/40 rtl:rotate-180">→</span>
           </Link>
           )}
+
+          {/* The way to the pack shelf, and the only one on the customer site.
+              It lives here rather than in the header because a pack is a way of
+              paying for these services, not a fourth thing to do — and because
+              the row above it is the same offer in a different shape.
+
+              Shown whether or not she already has credits: the checkbox above
+              only appears for a service she holds one for, so a customer halfway
+              through her six would otherwise have nowhere to buy the next pack.
+              Hidden on a refill, like the group row, where the appointment is
+              already priced and there is nothing to choose. */}
+          {!offer && (
+          <Link
+            href="/memberships"
+            className="flex items-center justify-between rounded-[20px] bg-white p-5 text-start ring-1 ring-black/[0.04] transition-all hover:ring-red/40"
+          >
+            <span>
+              <span className="block font-display text-base font-extrabold text-red">
+                {c.packs.browse}
+              </span>
+              <span className="block text-[12px] text-ink/55">{c.packs.sub}</span>
+            </span>
+            <span className="shrink-0 text-sm text-ink/40 rtl:rotate-180">→</span>
+          </Link>
+          )}
         </div>
 
         <Summary
@@ -291,6 +310,18 @@ export default function BookingView({
           onEditSchedule={() => setScheduling(true)}
           grossTotal={price}
           total={price}
+          credit={
+            credit && service
+              ? {
+                  label: c.packs.creditLine
+                    .replace("{pack}", pick(credit.packName, lang))
+                    .replace("{n}", String(credit.left)),
+                  amount: service.price,
+                  applied: Boolean(spending),
+                  onToggle: (on) => setDeclinedCredit(!on),
+                }
+              : null
+          }
           agree={agree}
           onAgree={setAgree}
           ready={ready}

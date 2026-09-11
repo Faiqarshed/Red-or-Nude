@@ -19,6 +19,10 @@ import BookingCard, { RefillDialog } from "@/components/booking/BookingCard";
 import { Lock, Riyal } from "@/components/icons";
 import OtpInput from "@/components/OtpInput";
 import { useI18n } from "@/lib/i18n";
+import Link from "next/link";
+import { pick } from "@/lib/localized";
+import type { Localized } from "@/lib/localized";
+import { formatDateLabel } from "@/lib/booking";
 import type { BookingSummary } from "@/lib/booking";
 import { isValidSaudiMobile, toNationalDigits, toStoredPhone } from "@/lib/phone";
 import { REWARDS } from "@/lib/rewards";
@@ -30,17 +34,30 @@ type Customer = {
   birthday: string | null;
 };
 
+/** One membership line she can still spend. Serialised, so the date is a string. */
+type Credit = {
+  customerPackId: string;
+  packName: Localized;
+  serviceId: string;
+  serviceName: Localized | null;
+  left: number;
+  granted: number;
+  expiresAt: string;
+};
+
 export default function AccountView({
   customer,
   balance = 0,
+  credits = [],
   history = [],
 }: {
   customer?: Customer;
   balance?: number;
+  credits?: Credit[];
   history?: BookingSummary[];
 }) {
   return customer ? (
-    <SignedIn customer={customer} balance={balance} history={history} />
+    <SignedIn customer={customer} balance={balance} credits={credits} history={history} />
   ) : (
     <SignedOut />
   );
@@ -51,10 +68,12 @@ export default function AccountView({
 function SignedIn({
   customer,
   balance,
+  credits,
   history,
 }: {
   customer: Customer;
   balance: number;
+  credits: Credit[];
   history: BookingSummary[];
 }) {
   const { c, lang } = useI18n();
@@ -122,6 +141,9 @@ function SignedIn({
         {/* -- the wallet ------------------------------------------------- */}
         <Wallet balance={balance} />
 
+        {/* -- her memberships -------------------------------------------- */}
+        <Memberships credits={credits} />
+
         {/* -- the bookings ---------------------------------------------- */}
         <h2 className="mt-10 text-start font-display text-lg font-extrabold text-ink">
           {a.bookingsTitle}
@@ -153,6 +175,100 @@ function SignedIn({
 
       <SiteFooter />
     </main>
+  );
+}
+
+/**
+ * What her memberships have left, grouped by the membership she bought.
+ *
+ * The shelf shows this too, but the shelf is where she goes to *buy* one. This
+ * is where she goes to check — and until this section existed, a customer who
+ * bought a membership had nowhere to see it except the page that sold it to her,
+ * which reads as the purchase not having landed.
+ *
+ * Grouped by purchase rather than listed flat, because credits are per service
+ * and not interchangeable (lib/packs.ts): three gel polishes and one manicure is
+ * two lines under one heading, never four of anything. A flat list of services
+ * would imply a single pool, which is exactly the thing the ledger refuses.
+ *
+ * Empty renders nothing at all — an account page is not the place to advertise,
+ * and the shelf is one tap away from the header card either way.
+ */
+function Memberships({ credits }: { credits: Credit[] }) {
+  const { c, lang } = useI18n();
+  const k = c.packs;
+
+  if (credits.length === 0) return null;
+
+  // One block per purchase, in the order packCredits sorted them: nearest
+  // deadline first, so the one she should spend next is the one she reads first.
+  const byPurchase = new Map<string, Credit[]>();
+  for (const credit of credits) {
+    byPurchase.set(credit.customerPackId, [...(byPurchase.get(credit.customerPackId) ?? []), credit]);
+  }
+
+  return (
+    <section className="mt-8 rounded-[20px] bg-white p-6 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-display text-lg font-extrabold text-ink">{k.yours}</h2>
+        <Link
+          href="/memberships"
+          className="shrink-0 text-[13px] font-semibold text-red transition-opacity hover:opacity-70"
+        >
+          {k.browse}
+        </Link>
+      </div>
+
+      <div className="mt-4 space-y-4">
+        {[...byPurchase.values()].map((lines) => (
+          <div key={lines[0].customerPackId} className="rounded-[14px] bg-cream/60 p-4">
+            <p className="font-display text-base font-extrabold text-red">
+              {pick(lines[0].packName, lang)}
+            </p>
+            <ul className="mt-2 space-y-3">
+              {lines.map((credit) => {
+                // What she has spent, from what she was sold. Never negative: a
+                // credit handed back on a cancellation can only bring `left`
+                // back up to what the purchase granted, never past it.
+                const used = Math.max(0, credit.granted - credit.left);
+                const pct = credit.granted > 0 ? (used / credit.granted) * 100 : 0;
+                return (
+                  <li key={credit.serviceId}>
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="truncate text-ink">
+                        {credit.serviceName ? pick(credit.serviceName, lang) : "—"}
+                      </span>
+                      <span className="shrink-0 font-semibold text-ink">
+                        {k.leftCount.replace("{n}", String(credit.left))}
+                      </span>
+                    </div>
+                    {/* How far through it she is. `insetInlineStart` rather than
+                        `left`, so it fills right-to-left in Arabic with no
+                        second code path — the wallet bar above does the same. */}
+                    <div className="relative mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/[0.06]">
+                      <div
+                        className="absolute top-0 h-full rounded-full bg-red/70"
+                        style={{ insetInlineStart: 0, width: `${pct}%` }}
+                      />
+                    </div>
+                    <p className="mt-1 text-[11px] text-ink/45">
+                      {k.usedOf
+                        .replace("{used}", String(used))
+                        .replace("{n}", String(credit.granted))}
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+            {/* The deadline, because a credit is dead the moment it passes and
+                nothing sweeps it — she is owed the date, not a surprise. */}
+            <p className="mt-3 text-[12px] text-ink/50">
+              {k.expiresOn.replace("{date}", formatDateLabel(lines[0].expiresAt.slice(0, 10), lang))}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

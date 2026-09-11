@@ -5,12 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
-import PaymentMethods from "@/components/PaymentMethods";
+import PaymentMethods, { methodIdFor } from "@/components/PaymentMethods";
 import PhoneField from "@/components/PhoneField";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { clearBooking, emptySelection, loadBooking, type BookingSelection } from "@/lib/booking";
-import { isValidSaudiMobile, toStoredPhone } from "@/lib/phone";
+import { isValidSaudiMobile, toNationalDigits, toStoredPhone } from "@/lib/phone";
 import { pick } from "@/lib/localized";
 import { REWARDS } from "@/lib/rewards";
 
@@ -37,8 +37,6 @@ type Ticket = {
   startsAt: string;
   totalHalalas: number;
 };
-
-const METHOD_KEYS = ["cardTitle", "madaTitle", "stcTitle", "appleTitle"] as const;
 
 export default function PaymentPage() {
   const { c, lang } = useI18n();
@@ -80,6 +78,8 @@ export default function PaymentPage() {
    */
   /** The balance, or null when signed out — which is when the picker is hidden. */
   const [balance, setBalance] = useState<number | null>(null);
+  /** Null until the session has answered. True once her details are her own. */
+  const [signedIn, setSignedIn] = useState(false);
   const [redeemPoints, setRedeemPoints] = useState<number | null>(null);
   const [redeemDiscountSar, setRedeemDiscountSar] = useState(0);
   const [redeemError, setRedeemError] = useState<string | null>(null);
@@ -94,6 +94,27 @@ export default function PaymentPage() {
     const saved = loadBooking();
     if (saved) setBooking(saved);
     setLoaded(true);
+  }, []);
+
+  // Who she is, if the cookie knows. Everything the form below asks for is
+  // already on her account, so it is filled in rather than asked for — the
+  // session proved it, and typing it again proves nothing.
+  //
+  // A guest gets `{ signedIn: false }` and the form as it always was: an account
+  // is optional at this checkout and must stay that way (brief §2.8).
+  useEffect(() => {
+    void fetch("/api/account/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d?.signedIn) return;
+        setSignedIn(true);
+        setName(d.name ?? "");
+        setPhone(toNationalDigits(d.phone ?? ""));
+        setEmail(d.email ?? "");
+      })
+      .catch(() => {
+        /* a prefill, never a gate — the form still works typed out */
+      });
   }, []);
 
   // The ladder and the balance. Signed out this comes back with `signedIn:
@@ -121,12 +142,6 @@ export default function PaymentPage() {
   const phoneOk = isValidSaudiMobile(phone);
   const canSubmit = phoneOk && emailOk && cardValid;
 
-  /** Which enum value the API wants for the label the customer clicked. */
-  const methodCode = (): "card" | "mada" | "stc" | "apple" => {
-    const i = METHOD_KEYS.findIndex((k) => p[k] === method);
-    return (["card", "mada", "stc", "apple"] as const)[i === -1 ? 0 : i];
-  };
-
   /** The upsells this guest has taken. */
   const treatsFor = (i: number) =>
     (booking.checkoutAddons ?? []).filter((a) => treats.includes(`${i}:${a.id}`));
@@ -153,6 +168,49 @@ export default function PaymentPage() {
    * which no discount touches.
    */
   const payableTotal = booking.total - promoDiscountSar - redeemDiscountSar + treatsTotal;
+
+  /**
+   * What her memberships took off, across the party.
+   *
+   * `booking.total` already has this deducted — the booking screen subtracts it
+   * before saving — so this is carried alongside purely so the bill can show the
+   * subtraction. Added back onto the subtotal below and taken off again as its
+   * own line, which is the only way the arithmetic on screen reads as
+   * arithmetic instead of a number that is mysteriously already small.
+   */
+  const creditTotal = booking.members.reduce((sum, m) => sum + (m.creditSar ?? 0), 0);
+
+  /** The membership lines, for the panel that says how this is being paid. */
+  const covered = booking.members.filter((m) => (m.creditSar ?? 0) > 0);
+
+  /**
+   * A membership credit — or a full reward, or a 100% code — has covered it.
+   *
+   * Everything about this screen that asks for money then goes away: the card
+   * form, the methods, the padlock, the word "payment". Asking a customer to
+   * enter a card to be charged nothing is a step that exists only because the
+   * code could not tell the difference, and she notices before the code does.
+   *
+   * The screen stays. She is still choosing to spend a credit and commit to an
+   * hour, and a booking that fires off the previous page with no review is not a
+   * shortcut, it is a surprise. It is one button now, and none of it is a till.
+   */
+  const nothingToPay = payableTotal <= 0;
+
+  /**
+   * The appointment itself is already paid for — by a membership credit.
+   *
+   * Distinct from `nothingToPay`, which a coffee undoes. This is about the bill
+   * the discounts apply to: a promo code and a loyalty rung are both percentages
+   * of a service line that is already zero, so offering them is offering the
+   * customer a choice between nothing and nothing. Treats sit outside the
+   * discount stack entirely (see treatsTotal), so adding one brings the card
+   * form back without bringing these back.
+   */
+  const fullyCovered = booking.total <= 0;
+
+  /** Card validity stops mattering the moment there is no card to take. */
+  const readyToConfirm = canSubmit || (phoneOk && emailOk && nothingToPay);
 
   const promoReasonText = (reason: string, minTotalHalalas?: number): string => {
     const e = p.promoErrors;
@@ -384,7 +442,7 @@ export default function PaymentPage() {
       const pay = await fetch("/api/payments/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, method: methodCode() }),
+        body: JSON.stringify({ code, method: methodIdFor(method, p) }),
       });
 
       if (pay.ok) {
@@ -412,8 +470,60 @@ export default function PaymentPage() {
     <main className="relative min-h-screen bg-cream">
       <SiteHeader />
 
+      {/* One layout, whatever the bill says.
+
+          The grid used to collapse to a single column the moment a credit
+          covered everything, and spring back to two the moment a 10 SAR coffee
+          was ticked. Adding a treat is a small decision and it was rearranging
+          the whole screen — which reads as something going wrong, not as ten
+          riyals being added. The columns stay; what changes is a number. */}
       <div className="mx-auto grid max-w-page gap-8 px-6 pb-24 pt-[120px] md:px-12 lg:grid-cols-[1fr_540px] lg:px-16">
-        <PaymentMethods onMethodChange={setMethod} onValidityChange={setCardValid} />
+        <div className="space-y-5">
+          <h1 className="text-start font-display text-2xl font-extrabold text-ink">{p.payWith}</h1>
+
+          {/* What the membership is covering, said before any card is asked
+              for. She is not paying for the service out of her own pocket, and
+              a screen that leads with a card form implies she is. */}
+          {covered.length > 0 && (
+            <section className="rounded-[20px] bg-[#f2f7f2] p-5 text-start ring-1 ring-[#2f6b3f]/15">
+              <p className="font-display text-base font-extrabold text-[#2f6b3f]">
+                {p.coveredTitle}
+              </p>
+              <ul className="mt-3 space-y-1.5">
+                {covered.map((m, i) => (
+                  <li key={i} className="flex items-center justify-between gap-3 text-[13px]">
+                    <span className="truncate text-ink/70">
+                      {p.coveredService
+                        .replace("{service}", m.service ?? "")
+                        .replace("{pack}", m.packName ?? "")}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1 font-semibold text-[#2f6b3f]">
+                      −<Riyal className="h-3 w-3" />
+                      {m.creditSar}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-3 text-[12px] text-ink/50">{p.coveredNote}</p>
+            </section>
+          )}
+
+          {/* The card, for whatever the membership did not cover. Mounted only
+              when there is something to take, but in the slot it always
+              occupies, under the panel above rather than in place of it. */}
+          {nothingToPay ? (
+            <section className="rounded-[20px] bg-white p-5 text-start ring-1 ring-black/[0.04]">
+              <p className="text-sm font-semibold text-ink/70">{p.nothingLeft}</p>
+            </section>
+          ) : (
+            <>
+              {covered.length > 0 && (
+                <p className="text-start text-[12px] text-ink/50">{p.remainderNote}</p>
+              )}
+              <PaymentMethods onMethodChange={setMethod} onValidityChange={setCardValid} />
+            </>
+          )}
+        </div>
 
         {/* Summary */}
         <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)]">
@@ -474,7 +584,22 @@ export default function PaymentPage() {
                 />
               </div>
 
-              {/* A booking needs someone to belong to — the picker never asked. */}
+              {/* A booking needs someone to belong to — the picker never asked.
+                  Signed in, her account already answered all three, so this
+                  collapses to a line saying who the booking is for. She can
+                  still change any of it, on /account, where the change sticks
+                  instead of applying to one booking and being forgotten. */}
+              {signedIn ? (
+                <div className="mt-4 rounded-[14px] bg-cream/70 p-4 text-start">
+                  <p className="text-[11px] text-ink/45">{p.bookingFor}</p>
+                  <p className="mt-0.5 truncate text-sm font-semibold text-ink">
+                    {name || email}
+                  </p>
+                  <p dir="ltr" className="mt-0.5 truncate text-start text-[12px] text-ink/50">
+                    {email}
+                  </p>
+                </div>
+              ) : (
               <div className="mt-4 space-y-3">
                 <label className="block text-start">
                   <span className="mb-1.5 block text-[12px] text-ink/55">{p.customerName}</span>
@@ -513,10 +638,16 @@ export default function PaymentPage() {
                   <span className="mt-1.5 block text-[11px] text-ink/40">{p.emailNote}</span>
                 </label>
               </div>
+              )}
 
               {/* Occasion discount codes (brief §2.10). Applied before the hold
                   exists, so a code typed after a declined card still counts —
-                  the retry re-uses the hold and never re-prices it. */}
+                  the retry re-uses the hold and never re-prices it.
+
+                  Not offered against a bill a membership already cleared: a
+                  percentage of zero is zero, and a field that cannot change the
+                  total is a field that only wastes the customer's time. */}
+              {!fullyCovered && (
               <div className="mt-4">
                 <span className="mb-1.5 block text-[12px] text-ink/55">{p.promoLabel}</span>
                 {promoApplied ? (
@@ -564,13 +695,18 @@ export default function PaymentPage() {
                   </p>
                 )}
               </div>
+              )}
 
               {/* The loyalty ladder (brief §2.8). Rendered only for a signed-in
                   customer — an account is optional and a guest checkout must
                   never grow a sign-in wall. Locked rungs are shown but not
                   selectable, so the customer can see what they are working
-                  towards instead of an empty box. */}
-              {balance !== null && (
+                  towards instead of an empty box.
+
+                  Hidden on a bill a membership already cleared, for the reason
+                  the promo field is: there is nothing left to take a percentage
+                  of, and spending points against it would burn them for nothing. */}
+              {balance !== null && !fullyCovered && (
                 <div className="mt-4">
                   <div className="mb-1.5 flex items-center justify-between gap-2">
                     <span className="text-[12px] text-ink/55">{a.redeemLabel}</span>
@@ -711,10 +847,21 @@ export default function PaymentPage() {
                   <div className="flex items-center justify-between text-ink/55">
                     <span className="flex items-center gap-1">
                       <Riyal className="h-3 w-3" />
-                      {booking.grossTotal}
+                      {/* The credit added back, so the line below can take it
+                          away. `grossTotal` arrives already reduced. */}
+                      {booking.grossTotal + creditTotal}
                     </span>
                     <span>{p.subtotal}</span>
                   </div>
+                  {creditTotal > 0 && (
+                    <div className="flex items-center justify-between font-semibold text-[#2f6b3f]">
+                      <span className="flex items-center gap-1">
+                        −<Riyal className="h-3 w-3" />
+                        {creditTotal}
+                      </span>
+                      <span>{p.membershipLine}</span>
+                    </div>
+                  )}
                   {booking.total < booking.grossTotal && (
                     <div className="flex items-center justify-between font-semibold text-red">
                       <span className="flex items-center gap-1">
@@ -749,12 +896,29 @@ export default function PaymentPage() {
                 </div>
               )}
 
-              <div className="mt-4 flex items-center justify-between rounded-[14px] bg-[#fbeaea] p-4">
+              {/* Two lines, always both there once a membership is involved.
+                  "Total" alone had to mean her whole appointment one moment and
+                  a lone coffee the next, and a bare red 0 in a money box reads
+                  as something that failed to load rather than something already
+                  settled. Covered says what her membership did; To pay now says
+                  what the card is for, and a treat moves that number from 0 to
+                  10 without anything else on the screen moving. */}
+              {creditTotal > 0 && (
+                <div className="mt-4 flex items-center justify-between rounded-[14px] bg-[#f2f7f2] px-4 py-3">
+                  <div className="flex items-center gap-1 font-display text-lg font-extrabold text-[#2f6b3f]">
+                    <Riyal className="h-4 w-4" />
+                    {creditTotal}
+                  </div>
+                  <p className="text-xs text-ink/45">{p.coveredTitle}</p>
+                </div>
+              )}
+
+              <div className="mt-2 flex items-center justify-between rounded-[14px] bg-[#fbeaea] p-4">
                 <div className="flex items-center gap-1 font-display text-2xl font-extrabold text-red">
                   <Riyal className="h-5 w-5" />
                   {payableTotal}
                 </div>
-                <p className="text-xs text-ink/45">{p.total}</p>
+                <p className="text-xs text-ink/45">{creditTotal > 0 ? p.toPayNow : p.total}</p>
               </div>
 
               {error && (
@@ -766,20 +930,31 @@ export default function PaymentPage() {
               <button
                 type="button"
                 onClick={confirm}
-                disabled={submitting || !canSubmit}
+                disabled={submitting || !readyToConfirm}
                 className={`mt-6 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
-                  submitting || !canSubmit
+                  submitting || !readyToConfirm
                     ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
                     : "bg-red-grad text-white hover:opacity-90"
                 }`}
               >
-                {submitting ? p.confirming : p.confirmPay}
+                {submitting ? p.confirming : nothingToPay ? p.confirmBooking : p.confirmPay}
               </button>
-              <p className="mt-3 text-center text-[11px] text-ink/40">{p.payFirstNote}</p>
-              <p className="mt-2 flex items-center justify-center gap-1.5 text-[12px] text-ink/45">
-                <Lock className="h-3.5 w-3.5" />
-                {p.secure}
-              </p>
+              {nothingToPay ? (
+                // Only when no membership is in play — a full reward, or a 100%
+                // code. The panel on the left already says it, at more length,
+                // when a credit is what covered the bill.
+                creditTotal > 0 ? null : (
+                  <p className="mt-3 text-center text-[12px] text-ink/55">{p.nothingToPay}</p>
+                )
+              ) : (
+                <>
+                  <p className="mt-3 text-center text-[11px] text-ink/40">{p.payFirstNote}</p>
+                  <p className="mt-2 flex items-center justify-center gap-1.5 text-[12px] text-ink/45">
+                    <Lock className="h-3.5 w-3.5" />
+                    {p.secure}
+                  </p>
+                </>
+              )}
             </>
           )}
         </aside>
