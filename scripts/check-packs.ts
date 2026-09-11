@@ -19,6 +19,7 @@ import { db } from "@/lib/db";
 import {
   bookings,
   branches,
+  payments,
   customerPacks,
   customers,
   packServices,
@@ -29,6 +30,7 @@ import {
 } from "@/lib/db/schema";
 import { buyPack, packCredits, quotePackCredit, returnPackCredits, spendPackCredit } from "@/lib/packs";
 import { createBookings } from "@/lib/bookings";
+import { confirmBookingPayment } from "@/lib/payments/confirm";
 
 const PHONE = "0500000077";
 
@@ -88,6 +90,8 @@ async function main() {
   assert.equal(credits.length, 2, "two services, two credit lines");
   assert.equal(credits.find((c) => c.serviceId === svcA.id)?.left, 3);
   assert.equal(credits.find((c) => c.serviceId === svcB.id)?.left, 1);
+  // What she was sold, which the profile subtracts from to say "2 of 3 used".
+  assert.equal(credits.find((c) => c.serviceId === svcA.id)?.granted, 3, "granted is the purchase");
   console.log("  bought: 3 + 1 credits, from the ledger and nowhere else ✓");
 
   // -- the purchase is a snapshot -------------------------------------------
@@ -191,6 +195,15 @@ async function main() {
 
   const again = await returnPackCredits([first], "cancelled");
   assert.equal(again, 0, "cancelling twice cannot mint a credit she never bought");
+
+  // The `+1` a return writes is a credit back, not a bigger membership. Counting
+  // every positive row as the grant would grow what she was sold each time she
+  // cancelled in time, and the profile would read "1 of 4 used" on a pack of 3.
+  assert.equal(
+    (await packCredits(customer.id)).find((c) => c.serviceId === svcA.id)?.granted,
+    3,
+    "a returned credit does not grow what the membership came with",
+  );
   console.log("  cancelled: one back, and only one ✓");
 
   // -- an expired pack is dead, not swept -----------------------------------
@@ -274,6 +287,157 @@ async function main() {
     "somebody else's pack pays for nothing — she is charged in full",
   );
   console.log("  another customer's pack pays for nothing ✓");
+
+  // -- a hold that died unpaid does not keep the credit ---------------------
+  // The credit comes off when the booking is *created*, before she has paid for
+  // anything. Nothing gives it back when that hold dies — returnPackCredits is
+  // wired to the cancel button, which she cannot press on a booking the sweep
+  // has already cancelled. So the rule lives in the read: see neverRedeemed.
+  const [walked] = await db
+    .insert(customers)
+    .values({ phone: "0500000080", name: "Walked Away" })
+    .returning({ id: customers.id });
+  made.customers.push(walked.id);
+
+  const walkedBuy = await buyPack(walked.id, pack.id);
+  assert.ok(walkedBuy.ok, "setup: bought a pack to strand");
+  const owned = (await packCredits(walked.id)).find((c) => c.serviceId === svcA.id)!.left;
+  const leftNow = async () =>
+    (await packCredits(walked.id)).find((c) => c.serviceId === svcA.id)?.left;
+
+  /** A booking in whatever state, with one credit already spent against it. */
+  const strand = async (
+    status: "pending" | "cancelled" | "no_show",
+    cancelReason: string | null,
+    createdAt: Date,
+    hour: number,
+  ) => {
+    const startsAt = new Date(Date.UTC(2031, 4, 6, hour, 0));
+    const [row] = await db
+      .insert(bookings)
+      .values({
+        code: `ZZS-${Math.random().toString(36).slice(2, 7)}`,
+        branchId: branch.id,
+        customerId: walked.id,
+        serviceId: svcA.id,
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 3_600_000),
+        status,
+        cancelReason,
+        source: "web",
+        createdAt,
+      })
+      .returning({ id: bookings.id });
+    made.bookings.push(row.id);
+    const spent = await spendPackCredit(db, walkedBuy.customerPackId, svcA.id, row.id);
+    assert.ok(spent, "setup: the credit was spent against this booking");
+    return row.id;
+  };
+
+  // Her card was declined and she closed the tab; the sweep collected the hold.
+  await strand("cancelled", "payment-timeout", new Date(), 7);
+  assert.equal(
+    await leftNow(),
+    owned,
+    "a hold the sweep cancelled was never redeemed — the credit is still hers",
+  );
+
+  // The same story before the sweep has run, which is the case that matters:
+  // sweepExpiredHolds only fires when some *other* customer books at this
+  // branch, so a balance that waited for it would be wrong for hours.
+  await strand("pending", null, new Date(Date.now() - 86_400_000), 9);
+  assert.equal(await leftNow(), owned, "and still hers before anything swept it");
+
+  // The other side of the rule, or this would just read "packs never run out".
+  // A hold still inside its window keeps the credit — she may yet pay — and a
+  // no-show forfeits it exactly as the money is forfeited.
+  await strand("pending", null, new Date(), 11);
+  assert.equal(
+    await leftNow(),
+    owned - 1,
+    "a hold still inside its window is a credit in flight, not a credit back",
+  );
+
+  await strand("no_show", null, new Date(), 13);
+  assert.equal(
+    await leftNow(),
+    owned - 2,
+    "a no-show forfeits the credit, the same way it forfeits the money",
+  );
+  console.log("  a hold that died unpaid keeps her credit; a no-show does not ✓");
+
+  // And the booking path has to count it the same way, or the screen offers a
+  // credit that createBookings then refuses.
+  const recovered = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(Date.UTC(2031, 4, 7, 7, 0)).toISOString(),
+    customer: { phone: "0500000080" },
+    customerId: walked.id,
+    source: "web",
+    status: "confirmed",
+    members: [{ serviceId: svcA.id, addonIds: [], customerPackId: walkedBuy.customerPackId }],
+  });
+  assert.ok(recovered.ok, "the recovered credit is spendable");
+  made.bookings.push(recovered.bookings[0].id);
+  assert.equal(recovered.totalHalalas, 0, "and it paid for the service line");
+  console.log("  spendPackCredit counts it the same way packCredits does ✓");
+
+  // -- a booking the credit pays for in full never reaches a gateway ---------
+  // She owes nothing, so there is nothing to authorise. A real PSP refuses a
+  // zero charge, and asking her for a card to be charged nothing is a step that
+  // exists only because the code could not tell the difference.
+  const [free] = await db
+    .insert(customers)
+    .values({ phone: "0500000081", name: "Nothing To Pay" })
+    .returning({ id: customers.id });
+  made.customers.push(free.id);
+
+  const freeBuy = await buyPack(free.id, pack.id);
+  assert.ok(freeBuy.ok, "setup: bought a pack to spend in full");
+
+  const freeBooking = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(Date.UTC(2031, 5, 9, 7, 0)).toISOString(),
+    customer: { phone: "0500000081" },
+    customerId: free.id,
+    source: "web",
+    // Pending, as the web flow leaves it: the chair is held and nothing is paid
+    // until confirmBookingPayment says so. createBookings defaults to
+    // `confirmed`, which is the walk-in case, so this has to be asked for.
+    status: "pending",
+    members: [{ serviceId: svcA.id, addonIds: [], customerPackId: freeBuy.customerPackId }],
+  });
+  assert.ok(
+    freeBooking.ok,
+    `booking with a full credit failed: ${freeBooking.ok ? "" : freeBooking.error}`,
+  );
+  made.bookings.push(freeBooking.bookings[0].id);
+  assert.equal(freeBooking.totalHalalas, 0, "setup: the credit covered the whole bill");
+
+  const paid = await confirmBookingPayment({ code: freeBooking.bookings[0].code, method: "card" });
+  assert.ok(paid.ok, `confirming a free booking failed: ${paid.ok ? "" : paid.error}`);
+  assert.equal(paid.totalHalalas, 0, "and it confirmed for nothing");
+  assert.ok(paid.tickets.length === 1, "with a ticket number, like any other booking");
+
+  const [settled] = await db
+    .select()
+    .from(bookings)
+    .where(eq(bookings.id, freeBooking.bookings[0].id))
+    .limit(1);
+  assert.equal(settled.status, "confirmed", "the booking is confirmed, not left pending");
+
+  // The zero still lands in `payments`: it is what the double-tap guard is keyed
+  // on, and a confirmed booking with no payment row is a hole in the day's
+  // takings rather than a zero in it.
+  const [row] = await db
+    .select()
+    .from(payments)
+    .where(eq(payments.bookingId, freeBooking.bookings[0].id))
+    .limit(1);
+  assert.ok(row, "a payment row was still written");
+  assert.equal(row.amountHalalas, 0, "for zero");
+  assert.equal(row.status, "paid", "and settled rather than left pending");
+  console.log("  a booking the credit covers in full confirms with no charge ✓");
 
   console.log("\ncheck:packs — pack credits hold against Postgres");
 }

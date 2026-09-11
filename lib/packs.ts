@@ -17,8 +17,89 @@
 import "server-only";
 import { and, eq, gt, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { customerPacks, packTxns, packs, packServices, services } from "@/lib/db/schema";
+import { bookings, customerPacks, packTxns, packs, packServices, services } from "@/lib/db/schema";
 import type { Localized } from "@/lib/db/schema";
+import { getSettings } from "@/lib/settings";
+
+/** One ledger row, reduced to what the liveness rule below needs. */
+export type PackLedgerRow = {
+  delta: number;
+  /** "purchase" for the grant, "booking" for a spend, else why it moved. */
+  reason?: string | null;
+  /** Null when the movement belongs to no booking — a purchase, or a return. */
+  bookingStatus: string | null;
+  bookingCancelReason: string | null;
+  bookingCreatedAt: Date | null;
+};
+
+/**
+ * A `-1` that was never actually redeemed, and must not be counted.
+ *
+ * The credit comes off when the booking is *created*, which is before she has
+ * paid for anything — the chair is only being held. Two ways that hold can end
+ * with nobody served and nobody charged, and in neither does anything give the
+ * credit back:
+ *
+ *   • the hold was collected by sweepExpiredHolds — `cancelled` with
+ *     `payment-timeout` on it, the card declined or the tab closed;
+ *   • it is *still* pending past the window it had to be paid in, because the
+ *     sweep only runs when some other customer happens to book at that branch.
+ *
+ * The second clause is the one that is easy to miss, and lib/rewards.ts warns
+ * about it in the same words: never make the balance depend on the sweep having
+ * run. A retry inside the window keeps its debit — same booking, same row —
+ * which is correct, not a leak.
+ *
+ * **Deliberately narrower than isDead() next door.** A customer cancellation or
+ * a no-show does *not* strand a credit here, because packs already answer both:
+ * returnPackCredits gives it back inside `cancel_cutoff_hours` and keeps it
+ * outside, exactly as the money is kept. Treating every `cancelled` row as dead
+ * would return the credit a second time on top of that `+1`, and would quietly
+ * delete the late-cancellation rule along the way.
+ */
+function neverRedeemed(row: PackLedgerRow, holdMin: number, now: Date): boolean {
+  const { bookingStatus: status, bookingCreatedAt: createdAt } = row;
+
+  // A spend whose booking is no longer there.
+  //
+  // `pack_txns.booking_id` is `on delete set null`, so a deleted booking leaves
+  // its `-1` behind pointing at nothing. Nobody was served for it — the
+  // appointment does not exist — so counting it would charge her a credit for an
+  // appointment that was erased out from under her.
+  //
+  // `reason` is what separates this from an adjustment somebody wrote by hand:
+  // "booking" says this row was a redemption, and a redemption with no booking
+  // is an orphan. Rows that never had a booking (a purchase grant, a manual
+  // credit) have no reason to be here and fall through to the null check below.
+  //
+  // The admin delete path already refuses to remove a booking that spent a
+  // credit (`has-pack-credit`), so the only way to make one of these is a raw
+  // delete — a script emptying a table, which is exactly how it happened here.
+  if (status === null && row.reason === "booking" && row.delta < 0) return true;
+
+  if (status === null) return false; // not attached to a booking at all
+  if (status === "cancelled") return row.bookingCancelReason === "payment-timeout";
+  if (status !== "pending") return false;
+  // No created_at shouldn't happen. Treated as stranded rather than spent: the
+  // failure mode of guessing wrong is a customer who cannot spend a credit she
+  // paid for, and that is the worse of the two.
+  if (!createdAt) return true;
+  return now.getTime() - createdAt.getTime() > holdMin * 60_000;
+}
+
+/**
+ * SUM(delta) over rows that still count. **This is the whole rule and the only
+ * copy of it** — packCredits and spendPackCredit both read their rows and hand
+ * them straight here, so the balance a screen shows and the balance a booking
+ * spends against can never disagree.
+ */
+export function spendableCredits(
+  rows: PackLedgerRow[],
+  holdMin: number,
+  now: Date = new Date(),
+): number {
+  return rows.reduce((sum, r) => (neverRedeemed(r, holdMin, now) ? sum : sum + r.delta), 0);
+}
 
 /** One line of what a customer has left, for a screen or a booking. */
 export type PackCredit = {
@@ -28,6 +109,16 @@ export type PackCredit = {
   serviceName: Localized | null;
   /** Credits still on it. Always > 0 — spent lines are not credits. */
   left: number;
+  /**
+   * What the membership came with for this service, so a screen can say "2 of 8
+   * used" rather than only "6 left".
+   *
+   * The purchase grant alone, which is the snapshot buyPack wrote — not the sum
+   * of every positive row. A credit handed back by returnPackCredits is also a
+   * `+1`, and counting it here would grow what she was sold every time she
+   * cancelled something in time.
+   */
+  granted: number;
   expiresAt: Date;
 };
 
@@ -55,15 +146,24 @@ export async function packCredits(customerId: string, now = new Date()): Promise
 
   if (owned.length === 0) return [];
 
+  const { booking_hold_min: holdMin } = await getSettings(["booking_hold_min"]);
+
+  // Left-joined onto the booking each movement belongs to, because a `-1` alone
+  // does not say whether anybody was ever served for it. See neverRedeemed.
   const rows = await db
     .select({
       customerPackId: packTxns.customerPackId,
       serviceId: packTxns.serviceId,
       delta: packTxns.delta,
+      reason: packTxns.reason,
       serviceName: services.name,
+      bookingStatus: bookings.status,
+      bookingCancelReason: bookings.cancelReason,
+      bookingCreatedAt: bookings.createdAt,
     })
     .from(packTxns)
     .leftJoin(services, eq(services.id, packTxns.serviceId))
+    .leftJoin(bookings, eq(bookings.id, packTxns.bookingId))
     .where(
       inArray(
         packTxns.customerPackId,
@@ -71,10 +171,10 @@ export async function packCredits(customerId: string, now = new Date()): Promise
       ),
     );
 
-  // SUM(delta) per (purchase, service), in TypeScript rather than SQL for the
-  // reason loyaltyBalance gives: one customer's ledger is small, and a rule
-  // written twice is a rule that drifts.
-  const totals = new Map<string, PackCredit>();
+  // Grouped per (purchase, service) and summed in TypeScript rather than SQL,
+  // for the reason loyaltyBalance gives: one customer's ledger is small, and a
+  // rule written twice is a rule that drifts.
+  const totals = new Map<string, PackCredit & { rows: PackLedgerRow[] }>();
   for (const row of rows) {
     const key = `${row.customerPackId}:${row.serviceId}`;
     const pack = owned.find((p) => p.id === row.customerPackId)!;
@@ -84,13 +184,20 @@ export async function packCredits(customerId: string, now = new Date()): Promise
       serviceId: row.serviceId,
       serviceName: row.serviceName ?? null,
       left: 0,
+      granted: 0,
       expiresAt: pack.expiresAt,
+      rows: [],
     };
-    at.left += row.delta;
+    at.rows.push(row);
     totals.set(key, at);
   }
 
   return [...totals.values()]
+    .map(({ rows: ledger, ...credit }) => ({
+      ...credit,
+      left: spendableCredits(ledger, holdMin, now),
+      granted: ledger.reduce((sum, r) => (r.reason === "purchase" ? sum + r.delta : sum), 0),
+    }))
     .filter((c) => c.left > 0)
     .sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime());
 }
@@ -170,15 +277,25 @@ export async function spendPackCredit(
   if (!owner || owner.expiresAt <= now) return false;
 
   // The balance, recounted now that nobody else can be mid-spend. Same SUM the
-  // quote did, and the same rule — it is just finally being read at a moment
-  // when the answer cannot change underneath it.
+  // quote did, through the same spendableCredits — it is just finally being read
+  // at a moment when the answer cannot change underneath it. Counting it by a
+  // different rule than packCredits would be the whole bug back: a credit the
+  // booking screen offers and this refuses.
+  const { booking_hold_min: holdMin } = await getSettings(["booking_hold_min"]);
   const ledger = await tx
-    .select({ delta: packTxns.delta })
+    .select({
+      delta: packTxns.delta,
+      reason: packTxns.reason,
+      bookingStatus: bookings.status,
+      bookingCancelReason: bookings.cancelReason,
+      bookingCreatedAt: bookings.createdAt,
+    })
     .from(packTxns)
+    .leftJoin(bookings, eq(bookings.id, packTxns.bookingId))
     .where(
       and(eq(packTxns.customerPackId, customerPackId), eq(packTxns.serviceId, serviceId)),
     );
-  if (ledger.reduce((sum, r) => sum + r.delta, 0) <= 0) return false;
+  if (spendableCredits(ledger, holdMin, now) <= 0) return false;
 
   await tx.insert(packTxns).values({
     customerPackId,
@@ -207,7 +324,7 @@ export async function returnPackCredits(bookingIds: string[], reason: string): P
   const spent = await db
     .select()
     .from(packTxns)
-    .where(and(inArray(packTxns.bookingId, bookingIds)));
+    .where(inArray(packTxns.bookingId, bookingIds));
 
   // One return per spend. Two cancellations of one booking must not mint a
   // credit the customer never bought.
