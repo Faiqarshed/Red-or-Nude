@@ -15,7 +15,7 @@
 // *of a service*, never of a pack.
 
 import "server-only";
-import { and, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customerPacks, packTxns, packs, packServices, services } from "@/lib/db/schema";
 import type { Localized } from "@/lib/db/schema";
@@ -24,7 +24,10 @@ import { getSettings } from "@/lib/settings";
 /** One ledger row, reduced to what the liveness rule below needs. */
 export type PackLedgerRow = {
   delta: number;
-  /** "purchase" for the grant, "booking" for a spend, else why it moved. */
+  /**
+   * "purchase" for the grant, "booking" for a spend, "return:<why>" for a credit
+   * handed back, else an adjustment somebody wrote by hand.
+   */
   reason?: string | null;
   /** Null when the movement belongs to no booking — a purchase, or a return. */
   bookingStatus: string | null;
@@ -60,24 +63,19 @@ export type PackLedgerRow = {
 function neverRedeemed(row: PackLedgerRow, holdMin: number, now: Date): boolean {
   const { bookingStatus: status, bookingCreatedAt: createdAt } = row;
 
-  // A spend whose booking is no longer there.
+  // A movement whose booking is gone — in either direction.
   //
   // `pack_txns.booking_id` is `on delete set null`, so a deleted booking leaves
-  // its `-1` behind pointing at nothing. Nobody was served for it — the
-  // appointment does not exist — so counting it would charge her a credit for an
-  // appointment that was erased out from under her.
+  // its rows pointing at nothing. Nobody was served, so the `-1` and the `+1`
+  // that reversed it both stop meaning anything, and they have to go together:
+  // dropping only the debit left the return standing alone as a credit she was
+  // never sold. `reason` is the discriminator — a purchase grant and a manual
+  // adjustment carry neither mark, and keep counting, which is right.
   //
-  // `reason` is what separates this from an adjustment somebody wrote by hand:
-  // "booking" says this row was a redemption, and a redemption with no booking
-  // is an orphan. Rows that never had a booking (a purchase grant, a manual
-  // credit) have no reason to be here and fall through to the null check below.
-  //
-  // The admin delete path already refuses to remove a booking that spent a
-  // credit (`has-pack-credit`), so the only way to make one of these is a raw
-  // delete — a script emptying a table, which is exactly how it happened here.
-  if (status === null && row.reason === "booking" && row.delta < 0) return true;
-
-  if (status === null) return false; // not attached to a booking at all
+  // deleteBooking already refuses a booking that touched a credit, so only a raw
+  // delete makes one of these. That guard is the first defence; this is the rule
+  // that does not depend on it staying.
+  if (status === null) return row.reason === "booking" || !!row.reason?.startsWith("return:");
   if (status === "cancelled") return row.bookingCancelReason === "payment-timeout";
   if (status !== "pending") return false;
   // No created_at shouldn't happen. Treated as stranded rather than spent: the
@@ -310,13 +308,19 @@ export async function spendPackCredit(
 /**
  * Give a credit back, for a booking that was cancelled in time.
  *
- * Called where refundBookings is: inside the same `cancel_cutoff_hours` window
- * that governs money. Cancel late and the credit is spent, exactly as money
- * would be — that symmetry is the whole rule, and it is why this is not called
- * from the cancel path unconditionally.
+ * From the customer's own cancel route this sits beside refundBookings, inside
+ * the same `cancel_cutoff_hours` window that governs money: cancel late and the
+ * credit is spent, exactly as the fee is kept.
  *
- * Idempotent by inspection rather than by index: returning twice would be a
- * second `+1`, and the ledger cannot tell those apart on its own.
+ * The desk's cancellation calls it unconditionally, and that is not a hole in
+ * the rule. The window exists because cancelling late is *her* choice; a
+ * technician off sick is not, and she should not lose an appointment she paid
+ * for over a decision that was never hers.
+ *
+ * **Idempotent by index, not by inspection.** `pack_txns_return_unique` refuses
+ * the second `+1` for a booking and service. Reading the ledger first and
+ * looking for an existing return was a check before a write, and two
+ * receptionists on one appointment raced straight past it.
  */
 export async function returnPackCredits(bookingIds: string[], reason: string): Promise<number> {
   if (bookingIds.length === 0) return 0;
@@ -324,27 +328,31 @@ export async function returnPackCredits(bookingIds: string[], reason: string): P
   const spent = await db
     .select()
     .from(packTxns)
-    .where(inArray(packTxns.bookingId, bookingIds));
+    .where(and(inArray(packTxns.bookingId, bookingIds), lt(packTxns.delta, 0)));
 
-  // One return per spend. Two cancellations of one booking must not mint a
-  // credit the customer never bought.
-  const key = (r: (typeof spent)[number]) => `${r.bookingId}:${r.serviceId}`;
-  const alreadyBack = new Set(spent.filter((r) => r.delta > 0).map(key));
-  const given = spent.filter((r) => r.delta < 0 && !alreadyBack.has(key(r)));
+  if (spent.length === 0) return 0;
 
-  if (given.length === 0) return 0;
+  // Whatever the index let through is what actually came back, which is what
+  // the caller is told. A row already returned conflicts and is skipped, so
+  // calling this twice is not an error — it is simply a second no-op.
+  const back = await db
+    .insert(packTxns)
+    .values(
+      spent.map((row) => ({
+        customerPackId: row.customerPackId,
+        serviceId: row.serviceId,
+        bookingId: row.bookingId,
+        delta: 1,
+        // Marked here, not by the caller: a new way to end a booking cannot
+        // invent a reason the orphan rule above fails to recognise. The caller's
+        // word survives in the log — "return:salon-cancelled".
+        reason: `return:${reason}`,
+      })),
+    )
+    .onConflictDoNothing()
+    .returning({ id: packTxns.id });
 
-  await db.insert(packTxns).values(
-    given.map((row) => ({
-      customerPackId: row.customerPackId,
-      serviceId: row.serviceId,
-      bookingId: row.bookingId,
-      delta: 1,
-      reason,
-    })),
-  );
-
-  return given.length;
+  return back.length;
 }
 
 /**

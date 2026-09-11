@@ -111,6 +111,11 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
   // slot whose hold has not even expired. Older than the hold window is the same
   // clock sweepExpiredHolds uses, and past it there is no checkout left to
   // protect.
+  //
+  // Inside the window she is still refused, deliberately: a charge that died in
+  // flight may have landed, and a retry could take the money twice. Do not turn
+  // this into an immediate retry without a gateway lookup that can say whether
+  // the first attempt settled.
   const { booking_hold_min: holdMin } = await getSettings(["booking_hold_min"]);
   await db
     .update(payments)

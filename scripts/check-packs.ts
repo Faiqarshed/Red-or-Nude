@@ -366,6 +366,49 @@ async function main() {
   );
   console.log("  a hold that died unpaid keeps her credit; a no-show does not ✓");
 
+  // The salon cancelling is not the customer cancelling, and not a dead hold
+  // either: the reason is whatever the desk typed. `neverRedeemed` only forgives
+  // `payment-timeout`, so nothing here gives the credit back on its own — the
+  // admin action has to, and unconditionally, because none of it was her doing.
+  const salonCancelled = await strand("cancelled", "technician off sick", new Date(), 15);
+  assert.equal(
+    await leftNow(),
+    owned - 3,
+    "a salon cancellation does not return the credit by itself",
+  );
+  assert.equal(
+    await returnPackCredits([salonCancelled], "salon-cancelled"),
+    1,
+    "returnPackCredits gives it back for the booking the salon cancelled",
+  );
+  assert.equal(
+    await leftNow(),
+    owned - 2,
+    "and she has it back — she lost an appointment she paid for through no choice of hers",
+  );
+
+  // Twice must not mint one. Two receptionists on the same row, or the same
+  // button pressed again.
+  assert.equal(
+    await returnPackCredits([salonCancelled], "salon-cancelled"),
+    0,
+    "a second return is refused",
+  );
+  assert.equal(await leftNow(), owned - 2, "and the balance did not move");
+  console.log("  a salon cancellation hands the credit back, once ✓");
+
+  // The orphan rule, both ways. A booking deleted out from under the ledger
+  // leaves its rows pointing at nothing: the -1 must stop counting, and so must
+  // the +1 that reversed it, or the pair nets her a credit she never bought.
+  await db.delete(bookings).where(eq(bookings.id, salonCancelled));
+  made.bookings = made.bookings.filter((b) => b !== salonCancelled);
+  assert.equal(
+    await leftNow(),
+    owned - 2,
+    "a deleted booking takes both its spend and its return with it",
+  );
+  console.log("  an orphaned spend and its orphaned return cancel out ✓");
+
   // And the booking path has to count it the same way, or the screen offers a
   // credit that createBookings then refuses.
   const recovered = await createBookings({

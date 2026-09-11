@@ -8,6 +8,7 @@ import { bookings, loyaltyTxns, packTxns, payments, reviews } from "@/lib/db/sch
 import { requireCan } from "@/lib/auth/guard";
 import { can } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
+import { returnPackCredits } from "@/lib/packs";
 import { createBooking, rescheduleBooking as moveBooking } from "@/lib/bookings";
 import { inviteReview } from "@/lib/reviews/invite";
 import { assignIfToday, notifyTechnician, pickTechnician } from "@/lib/assign";
@@ -97,6 +98,25 @@ export async function setBookingStatus(
       updatedAt: now,
     })
     .where(eq(bookings.id, id));
+
+  // Unconditionally, unlike the self-service button. `cancel_cutoff_hours`
+  // governs that one because cancelling late is her choice; none of it applies
+  // when the desk cancels — technician off sick, branch shut — and she should
+  // not lose an appointment she paid for over a decision that was not hers.
+  //
+  // Not resolveNoShow, which also ends at `cancelled`: she did not come, and the
+  // credit goes the way the money goes.
+  // Never allowed to fail the cancellation, the same bargain the customer's
+  // route strikes and inviteReview below: the chair is already released, and a
+  // credit that did not come back is a support ticket, not a reason to throw
+  // away the audit row and tell the desk an appointment is still standing.
+  if (entering("cancelled")) {
+    try {
+      await returnPackCredits([id], "salon-cancelled");
+    } catch (err) {
+      console.error("[bookings] could not return pack credits", err);
+    }
+  }
 
   await recordAudit(actor, {
     action: status === "cancelled" ? "cancel" : "update",
