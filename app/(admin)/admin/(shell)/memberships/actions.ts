@@ -14,13 +14,14 @@
 // bought.
 
 import { revalidatePath } from "next/cache";
-import { asc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { packServices, packs } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
-import { recordAudit } from "@/lib/audit";
+import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
+import { reorderBySort } from "@/lib/admin/reorder";
 
 const localizedText = z.object({
   ar: z.string().trim().min(1).max(120),
@@ -53,8 +54,8 @@ export type PackInput = z.input<typeof packSchema>;
 export type ActionResult = { ok: true; id: string } | { ok: false; error: string };
 
 function revalidateAll() {
-  revalidatePath("/admin/packs");
-  revalidatePath("/packs");
+  revalidatePath("/admin/memberships");
+  revalidatePath("/memberships");
   revalidatePath("/booking");
 }
 
@@ -82,13 +83,20 @@ export async function savePack(input: PackInput): Promise<ActionResult> {
     updatedAt: new Date(),
   };
 
+  // What it was, for the audit below. Kept rather than discarded: a log that
+  // records only the new price cannot answer "what did this pack cost last
+  // week?", which is the one question anybody opens it for.
+  let before: Record<string, unknown> | null = null;
+
   try {
     const id = await db.transaction(async (tx) => {
       let packId = d.id;
 
       if (packId) {
-        const [before] = await tx.select().from(packs).where(eq(packs.id, packId)).limit(1);
-        if (!before) throw new Error("not-found");
+        const [row] = await tx.select().from(packs).where(eq(packs.id, packId)).limit(1);
+        if (!row) throw new Error("not-found");
+        const had = await tx.select().from(packServices).where(eq(packServices.packId, packId));
+        before = { ...row, lines: had.length };
         await tx.update(packs).set(values).where(eq(packs.id, packId));
       } else {
         const [row] = await tx.insert(packs).values(values).returning({ id: packs.id });
@@ -109,7 +117,7 @@ export async function savePack(input: PackInput): Promise<ActionResult> {
       action: d.id ? "update" : "create",
       entity: "packs",
       entityId: id,
-      diff: { priceHalalas: { from: null, to: values.priceHalalas }, lines: { from: null, to: lines.length } },
+      diff: diffOf(before, { ...values, lines: lines.length }),
     });
     revalidateAll();
     return { ok: true, id };
@@ -161,27 +169,15 @@ export async function deletePack(id: string): Promise<ActionResult> {
 export async function movePack(id: string, direction: "up" | "down"): Promise<ActionResult> {
   const actor = await requireCan("catalog.manage");
 
-  const rows = await db
-    .select({ id: packs.id, sort: packs.sort })
-    .from(packs)
-    .orderBy(asc(packs.sort), asc(packs.id));
+  const moved = await reorderBySort(packs, id, direction);
+  if (!moved) return { ok: true, id };
 
-  const index = rows.findIndex((r) => r.id === id);
-  const target = direction === "up" ? index - 1 : index + 1;
-  if (index < 0 || target < 0 || target >= rows.length) return { ok: true, id };
-
-  // Rewrite the whole column so pre-existing duplicate sort values can't make a
-  // swap a no-op. Same reasoning as moveCatalogItem.
-  const reordered = [...rows];
-  [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
-
-  await db.transaction(async (tx) => {
-    for (const [position, row] of reordered.entries()) {
-      await tx.update(packs).set({ sort: position }).where(eq(packs.id, row.id));
-    }
+  await recordAudit(actor, {
+    action: "reorder",
+    entity: "packs",
+    entityId: id,
+    diff: { sort: { from: moved.from, to: moved.to } },
   });
-
-  await recordAudit(actor, { action: "reorder", entity: "packs", entityId: id });
   revalidateAll();
   return { ok: true, id };
 }
