@@ -15,7 +15,7 @@
 // *of a service*, never of a pack.
 
 import "server-only";
-import { and, eq, gt, inArray } from "drizzle-orm";
+import { and, eq, gt, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { customerPacks, packTxns, packs, packServices, services } from "@/lib/db/schema";
 import type { Localized } from "@/lib/db/schema";
@@ -31,8 +31,14 @@ export type PackCredit = {
   expiresAt: Date;
 };
 
-/** The db, or a transaction handle from inside createBookings. */
-type Inserter = Pick<typeof db, "insert">;
+/**
+ * The db, or a transaction handle from inside createBookings.
+ *
+ * `execute` is in there for the row lock in spendPackCredit; both the pool and a
+ * transaction handle satisfy this, which is what lets the check scripts call it
+ * directly while the booking engine passes its own `tx`.
+ */
+type Spender = Pick<typeof db, "insert" | "select" | "execute">;
 
 /**
  * Everything this customer can still spend, newest deadline last.
@@ -126,19 +132,54 @@ export async function quotePackCredit(
 }
 
 /**
- * Spend one credit on a booking.
+ * Spend one credit on a booking. False when there was nothing left to spend.
  *
  * Call inside the booking transaction. A booking that fails must not spend a
  * credit, and the partial unique index on (booking_id, service_id) is what stops
  * a retried request spending a second one — the same shape of guard as the
  * refill index, and for the same reason: a check before the write can be raced.
+ *
+ * That index is keyed on the booking, though, so it only ever sees one booking's
+ * worth of the story. Two tabs making two *different* bookings against the same
+ * purchase walk straight past it, and quotePackCredit cannot help: it read the
+ * ledger before either had written to it, so both were told yes. She bought one
+ * credit and spent two.
+ *
+ * So the purchase row is locked first and the balance recounted underneath it.
+ * The lock is what makes the count mean something — the second caller waits for
+ * the first to commit, then counts, then finds nothing and says so. Locking the
+ * purchase rather than the ledger because it is the row that exists exactly once
+ * per purchase; the ledger lines are what we are trying to count.
  */
 export async function spendPackCredit(
-  tx: Inserter,
+  tx: Spender,
   customerPackId: string,
   serviceId: string,
   bookingId: string,
-): Promise<void> {
+  now = new Date(),
+): Promise<boolean> {
+  // Serialises every spend against this purchase. Held to the end of the
+  // booking transaction, which is short and touches one customer's own row.
+  await tx.execute(sql`select 1 from customer_packs where id = ${customerPackId} for update`);
+
+  const [owner] = await tx
+    .select({ expiresAt: customerPacks.expiresAt })
+    .from(customerPacks)
+    .where(eq(customerPacks.id, customerPackId))
+    .limit(1);
+  if (!owner || owner.expiresAt <= now) return false;
+
+  // The balance, recounted now that nobody else can be mid-spend. Same SUM the
+  // quote did, and the same rule — it is just finally being read at a moment
+  // when the answer cannot change underneath it.
+  const ledger = await tx
+    .select({ delta: packTxns.delta })
+    .from(packTxns)
+    .where(
+      and(eq(packTxns.customerPackId, customerPackId), eq(packTxns.serviceId, serviceId)),
+    );
+  if (ledger.reduce((sum, r) => sum + r.delta, 0) <= 0) return false;
+
   await tx.insert(packTxns).values({
     customerPackId,
     serviceId,
@@ -146,6 +187,7 @@ export async function spendPackCredit(
     delta: -1,
     reason: "booking",
   });
+  return true;
 }
 
 /**

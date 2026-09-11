@@ -164,6 +164,11 @@ export type CreateBookingError =
   | "different-day"
   /** A pack credit was offered against a group booking, which is forbidden. */
   | "pack-not-in-group"
+  /**
+   * The credit she was quoted was spent by another tab before this booking
+   * committed. `guestIndex` says whose, as with `slot-taken`.
+   */
+  | "pack-credit-gone"
   /** A discount code was given and does not apply. `promoReason` says why. */
   | "promo-invalid"
   /**
@@ -1045,13 +1050,21 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
         // fails cannot spend a credit, and a credit that fails to record cannot
         // leave a free booking behind. The partial unique index on
         // (booking_id, service_id) refuses a second one for the same booking.
+        //
+        // It can still come back false. spendPackCredit locks the purchase and
+        // recounts, and the credit this guest was quoted may have been spent by
+        // another tab in the meantime — the quote ran before the transaction
+        // opened. Her service line is priced at zero on the strength of that
+        // quote, so a false here means the bill on screen is wrong: abort rather
+        // than seat her, because the alternative is giving the service away.
         if (guest.packCredit) {
-          await spendPackCredit(
+          const spent = await spendPackCredit(
             tx,
             guest.packCredit.customerPackId,
             guest.packCredit.serviceId,
             row.id,
           );
+          if (!spent) throw new BookingAbort("pack-credit-gone", i);
         }
 
         out.push({

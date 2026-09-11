@@ -44,7 +44,29 @@ export type ConfirmedTicket = {
 
 export type ConfirmResult =
   | { ok: true; tickets: ConfirmedTicket[]; totalHalalas: number }
-  | { ok: false; error: "not-found" | "expired" | "payment-declined" | "failed" };
+  | {
+      ok: false;
+      /**
+       * `in-progress` is the one that is not the customer's problem: another tab
+       * — or the same button, twice — is already paying for this party. Separate
+       * from `expired` because the answer is different. Expired means pick a slot
+       * again; this means wait a moment and look at your bookings, because the
+       * other attempt is probably about to succeed.
+       */
+      error: "not-found" | "expired" | "in-progress" | "payment-declined" | "failed";
+    };
+
+/**
+ * Two taps on Pay, or two tabs. The status read cannot catch it — both see the
+ * party pending — so `payments_booking_live_unique` decides which one owns the
+ * attempt, and the loser lands here before either has charged anything.
+ */
+function isLiveAttemptConflict(err: unknown): boolean {
+  for (let e = err; e instanceof Error; e = e.cause) {
+    if (e.message.includes("payments_booking_live_unique")) return true;
+  }
+  return false;
+}
 
 export type ConfirmInput = {
   /** Any member's booking code; a group is resolved from it. */
@@ -79,16 +101,38 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
   const driver = getDriver();
   const ref = randomUUID();
 
-  await db.insert(payments).values(
-    members.map((m) => ({
-      bookingId: m.id,
-      provider: driver.name,
-      providerRef: ref,
-      method: input.method,
-      amountHalalas: m.totalHalalas,
-      status: "pending" as const,
-    })),
-  );
+  // Claiming the party, not just recording it.
+  //
+  // The status read above is the polite check; this is the one that holds. Both
+  // halves of a double tap get past that read — it is a read, and nothing stops
+  // the other tab between it and here — but only one of them can own the live
+  // `payments` row for a booking, because `payments_booking_live_unique` says
+  // so. The loser lands in the catch below.
+  //
+  // Deliberately before the charge. The old order read, charged, and then wrote,
+  // so the loser of the race discovered it had lost only after the customer's
+  // card had been debited a second time. Nothing here has touched money yet.
+  try {
+    await db.insert(payments).values(
+      members.map((m) => ({
+        bookingId: m.id,
+        provider: driver.name,
+        providerRef: ref,
+        method: input.method,
+        amountHalalas: m.totalHalalas,
+        status: "pending" as const,
+      })),
+    );
+  } catch (err) {
+    if (isLiveAttemptConflict(err)) {
+      // Somebody is already paying for this party — the other tab, or the same
+      // button a moment ago. Not an error the customer caused, and not one a
+      // retry should make worse.
+      return { ok: false, error: "in-progress" };
+    }
+    console.error("[payments] could not record the attempt", err);
+    return { ok: false, error: "failed" };
+  }
 
   let charge;
   try {

@@ -670,23 +670,49 @@ export const reviews = pgTable(
 
 // ------------------------------------------------------------ commerce ------
 
-export const payments = pgTable("payments", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "set null" }),
-  giftCardId: uuid("gift_card_id"),
-  /**
-   * A membership pack sale. Plain uuid rather than a foreign key, like
-   * gift_card_id above: a receipt must outlive the thing it paid for.
-   */
-  customerPackId: uuid("customer_pack_id"),
-  provider: text("provider"), // moyasar | tap | manual
-  providerRef: text("provider_ref"),
-  method: paymentMethod("method"),
-  amountHalalas: integer("amount_halalas").notNull(),
-  status: paymentStatus("status").notNull().default("pending"),
-  raw: jsonb("raw"),
-  ...stamps,
-});
+export const payments = pgTable(
+  "payments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "set null" }),
+    giftCardId: uuid("gift_card_id"),
+    /**
+     * A membership pack sale. Plain uuid rather than a foreign key, like
+     * gift_card_id above: a receipt must outlive the thing it paid for.
+     */
+    customerPackId: uuid("customer_pack_id"),
+    provider: text("provider"), // moyasar | tap | manual
+    providerRef: text("provider_ref"),
+    method: paymentMethod("method"),
+    amountHalalas: integer("amount_halalas").notNull(),
+    status: paymentStatus("status").notNull().default("pending"),
+    raw: jsonb("raw"),
+    ...stamps,
+  },
+  (t) => ({
+    /**
+     * One live attempt per booking.
+     *
+     * confirmBookingPayment decided whether a party could be charged by reading
+     * every member's status, and then wrote — with a call to the gateway in
+     * between. Two taps arriving together both read "pending", both charged the
+     * card and both confirmed: the customer paid exactly double. A group lost
+     * every time, its transaction being slow enough for the reads to interleave;
+     * a solo booking survived on timing alone. A check that reads before it
+     * writes cannot close that. This can.
+     *
+     * The rows go in before the charge, so the loser of the race is refused
+     * here — before any money moves — rather than after.
+     *
+     * `failed` is outside the predicate on purpose: a declined card has to leave
+     * the booking payable, and the retry writes a fresh row beside the dead one.
+     * Gift card and pack sales carry no booking_id and are untouched.
+     */
+    oneLiveAttempt: uniqueIndex("payments_booking_live_unique")
+      .on(t.bookingId)
+      .where(sql`${t.bookingId} is not null and ${t.status} in ('pending', 'paid')`),
+  }),
+);
 
 export const refunds = pgTable("refunds", {
   id: uuid("id").primaryKey().defaultRandom(),

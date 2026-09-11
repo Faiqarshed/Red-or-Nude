@@ -153,7 +153,11 @@ export async function POST(request: Request) {
     // code is the same shape of problem, and carries the reason so the checkout
     // can say which of the six it was rather than "invalid code".
     const status =
-      result.error === "slot-taken" || result.error === "refill-expired"
+      result.error === "slot-taken" ||
+      result.error === "refill-expired" ||
+      // Same shape again: the credit was hers when the page quoted it and is
+      // not any more, so what she is looking at is stale rather than wrong.
+      result.error === "pack-credit-gone"
         ? 409
         : result.error === "blocked"
           ? 403
