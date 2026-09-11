@@ -23,7 +23,7 @@ import { halalasToSar, vatIncludedIn } from "@/lib/money";
 const DAYS_AGO = 3;
 
 /** Where the OTP goes, so the /my-bookings route can be tested for real. */
-const EMAIL = "humayunbaig046@gmail.com";
+const EMAIL = process.env.SEED_EMAIL ?? "dev@example.com";
 
 async function main() {
   const [branch] = await db.select().from(branches).where(eq(branches.active, true)).limit(1);
