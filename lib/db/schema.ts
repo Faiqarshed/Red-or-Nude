@@ -930,6 +930,23 @@ export const packTxns = pgTable(
     oneSpendPerBooking: uniqueIndex("pack_txns_booking_unique")
       .on(t.bookingId, t.serviceId)
       .where(sql`${t.bookingId} is not null and ${t.delta} < 0`),
+    /**
+     * And one return per booking per service, for the same reason in reverse.
+     *
+     * returnPackCredits used to decide this by reading the ledger and looking
+     * for an existing `+1`, which is a check before a write and can be raced
+     * exactly as the spend could: two receptionists cancelling the same
+     * appointment, or one cancel button pressed twice, both read nothing and
+     * both write. The customer's own cancel route never hit it only by luck —
+     * its update is guarded on the old status, so the second tap cancels nothing
+     * and returns nothing — and the desk's cancellation has no such guard.
+     *
+     * A second `+1` is a credit she was never sold, which is the same bug as a
+     * lost credit with the sign flipped.
+     */
+    oneReturnPerBooking: uniqueIndex("pack_txns_return_unique")
+      .on(t.bookingId, t.serviceId)
+      .where(sql`${t.bookingId} is not null and ${t.delta} > 0`),
   }),
 );
 
