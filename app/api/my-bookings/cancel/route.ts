@@ -71,19 +71,6 @@ export async function POST(request: Request) {
   }
 
   const { cancel_cutoff_hours: cutoff } = await getSettings(["cancel_cutoff_hours"]);
-  const refusal = cancelRefusal(anchor, cutoff);
-  if (refusal) {
-    return NextResponse.json(
-      {
-        error: refusal,
-        // The customer is being refused; telling them the deadline they missed
-        // is more use than telling them "no".
-        cancelBy: cancelDeadline(anchor, cutoff).toISOString(),
-        cutoffHours: cutoff,
-      },
-      { status: 409 },
-    );
-  }
 
   // A group cancels as a unit. It is one combined bill (§2.4) at a discount that
   // only exists because two people booked together, so releasing half of it
@@ -95,6 +82,32 @@ export async function POST(request: Request) {
         .where(eq(bookings.groupId, anchor.groupId))
         .orderBy(asc(bookings.createdAt), asc(bookings.id))
     : [anchor];
+
+  // Which means it has to be *cancellable* as a unit too, and that is judged on
+  // every guest rather than on the one whose reference was quoted.
+  //
+  // Asking only the anchor split parties down the middle. One friend arrives and
+  // the desk checks her in; the other cancels from her phone; the anchor is
+  // still `confirmed` so the request is allowed, and the update below silently
+  // passes over the guest who is already in the chair. Her friend is released,
+  // she is not, and she is left alone holding a price that existed because two
+  // of them booked together — the exact outcome the paragraph above forbids.
+  //
+  // So whoever is furthest along decides for all of them: a party with someone
+  // already in a chair is the branch's to sort out, not a self-service button's.
+  const refused = members.map((m) => cancelRefusal(m, cutoff)).find(Boolean);
+  if (refused) {
+    return NextResponse.json(
+      {
+        error: refused,
+        // The customer is being refused; telling them the deadline they missed
+        // is more use than telling them "no".
+        cancelBy: cancelDeadline(anchor, cutoff).toISOString(),
+        cutoffHours: cutoff,
+      },
+      { status: 409 },
+    );
+  }
 
   // One statement, so it needs no transaction to be atomic. Guarded on status as
   // well as id: two taps on a slow connection must not produce two refunds — the
