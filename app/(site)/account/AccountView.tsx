@@ -68,6 +68,20 @@ export default function AccountView({
 /** Bookings shown before "Show all". Three rows of two on a desktop. */
 const BOOKINGS_PREVIEW = 6;
 
+/**
+ * What she can filter her bookings by, each the question she comes with:
+ * what is coming up, what can I refill now, what is behind me. "Refill" reads
+ * the server's own `hasRefill`, so the chip can never offer a refill the refill
+ * button would not.
+ */
+const BOOKING_FILTER_TEST = {
+  all: () => true,
+  upcoming: (r: BookingSummary) => ["pending", "confirmed", "checked_in", "in_progress"].includes(r.status),
+  refill: (r: BookingSummary) => r.hasRefill,
+  past: (r: BookingSummary) => ["completed", "cancelled", "no_show"].includes(r.status),
+};
+type BookingFilter = keyof typeof BOOKING_FILTER_TEST;
+
 function SignedIn({
   customer,
   balance,
@@ -86,6 +100,16 @@ function SignedIn({
   const [verifying, setVerifying] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<BookingFilter>("all");
+
+  const q = query.trim().toLowerCase();
+  const shown = history.filter(
+    (r) =>
+      BOOKING_FILTER_TEST[filter](r) &&
+      (!q ||
+        [pick(r.serviceName, lang), r.code, r.ticketNo ?? ""].some((s) => s.toLowerCase().includes(q))),
+  );
 
   // Whether a booking can still be cancelled was decided when this page
   // rendered, so a tab left open all afternoon keeps offering a button whose
@@ -168,10 +192,48 @@ function SignedIn({
               <p className="mt-4 text-start text-sm text-ink/55">{a.noBookings}</p>
             )}
 
+            {/* Find one: by name, reference or ticket, and by what she can do
+                with it. In the browser — the page already holds her whole
+                history (50 at most), so a query per keystroke buys nothing.
+                Only once there is enough to need finding. */}
+            {history.length > BOOKINGS_PREVIEW && (
+              <div className="mt-4 space-y-3">
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder={a.searchBookings}
+                  aria-label={a.searchBookings}
+                  className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-start text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40"
+                />
+                <div className="flex flex-wrap gap-2">
+                  {(Object.keys(BOOKING_FILTER_TEST) as BookingFilter[]).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      aria-pressed={filter === key}
+                      onClick={() => setFilter(key)}
+                      className={`rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition-colors ${
+                        filter === key
+                          ? "bg-red text-white"
+                          : "bg-white text-ink/70 ring-1 ring-black/[0.08] hover:ring-red/40"
+                      }`}
+                    >
+                      {a.bookingFilters[key]} ({history.filter(BOOKING_FILTER_TEST[key]).length})
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {history.length > 0 && shown.length === 0 && (
+              <p className="mt-4 text-start text-sm text-ink/55">{a.noMatch}</p>
+            )}
+
             {/* Side by side once there is room for two cards at a readable
                 width, which halves how far a long history scrolls. */}
             <div className="mt-4 grid items-start gap-4 xl:grid-cols-2">
-              {(showAll ? history : history.slice(0, BOOKINGS_PREVIEW)).map((r) => (
+              {(showAll ? shown : shown.slice(0, BOOKINGS_PREVIEW)).map((r) => (
                 <BookingCard
                   key={r.code}
                   row={r}
@@ -191,13 +253,13 @@ function SignedIn({
 
             {/* The rest behind one tap. Newest first, so what is hidden is the
                 oldest — the visits she is least likely to be looking for. */}
-            {history.length > BOOKINGS_PREVIEW && (
+            {shown.length > BOOKINGS_PREVIEW && (
               <button
                 type="button"
                 onClick={() => setShowAll((v) => !v)}
                 className="mt-4 w-full rounded-[12px] border border-black/[0.08] bg-white py-3 text-center text-[13px] font-semibold text-ink transition-colors hover:border-red/40"
               >
-                {showAll ? a.showFewer : a.showAll.replace("{n}", String(history.length))}
+                {showAll ? a.showFewer : a.showAll.replace("{n}", String(shown.length))}
               </button>
             )}
           </section>

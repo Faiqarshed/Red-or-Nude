@@ -315,6 +315,9 @@ const ar = {
     noBookings: "لا توجد حجوزات بعد.",
     showAll: "عرض كل الحجوزات ({n})",
     showFewer: "عرض أقل",
+    searchBookings: "ابحثي بالخدمة أو الرقم المرجعي أو التذكرة",
+    bookingFilters: { all: "الكل", upcoming: "القادمة", refill: "إعادة تعبئة متاحة", past: "السابقة" },
+    noMatch: "لا توجد حجوزات مطابقة.",
     // -- errors --
     errors: {
       invalidEmail: "بريد إلكتروني غير صحيح",
@@ -857,6 +860,9 @@ const en: Content = {
     noBookings: "No bookings yet.",
     showAll: "Show all {n} bookings",
     showFewer: "Show fewer",
+    searchBookings: "Search by service, reference or ticket",
+    bookingFilters: { all: "All", upcoming: "Upcoming", refill: "Refill available", past: "Past" },
+    noMatch: "No bookings match.",
     // -- errors --
     errors: {
       invalidEmail: "That doesn't look like an email address",
