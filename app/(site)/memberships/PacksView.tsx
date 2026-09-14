@@ -66,16 +66,22 @@ export default function PacksView({
                   {pick(pack.name, lang)}
                 </p>
                 {pack.description && (
-                  <p className="mt-1 text-[13px] text-ink/55">{pick(pack.description, lang)}</p>
+                  <p className="mt-1 line-clamp-2 text-[13px] text-ink/55">
+                    {pick(pack.description, lang)}
+                  </p>
                 )}
 
                 {/* What is in it, spelled out — and each service opens, since
                     six of something is only worth buying once she knows what
                     the something is. */}
                 <div className="mt-4 border-t border-black/[0.05] pt-2">
-                  <PackLines lines={pack.lines} />
+                  <PackLines lines={pack.lines} compact />
                 </div>
 
+                {/* Everything from the rules down is pinned to the foot of the
+                    card, so the prices and buttons line up across a row however
+                    many services each membership holds. */}
+                <div className="mt-auto">
                 {/* The rules that decide whether it suits her, on the card she is
                     deciding with. They used to sit in the sidebar, which on a
                     phone is below every card on the page. */}
@@ -111,6 +117,7 @@ export default function PacksView({
                 >
                   {k.buy}
                 </Link>
+                </div>
               </div>
             );
           })}
