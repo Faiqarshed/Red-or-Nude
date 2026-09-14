@@ -428,34 +428,31 @@ export default function BookingCard({
     else setGate({ kind: "reschedule", startsAt });
   };
 
+  const title = row.serviceName ? pick(row.serviceName, lang) : row.code;
+
   return (
-    <article className="rounded-[20px] bg-white p-5 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
-      {/* The heading area opens the details, not the whole card: the buttons
-          below cancel and move real appointments, and a card-wide tap target
-          would sit underneath them.
-          
-          A div with role/tabIndex rather than a <button>, because the region
-          contains an <h2> and a button may only hold phrasing content. Keyboard
-          activation is therefore ours to provide, hence the Enter/Space handler
-          — without it this would be reachable by tab and impossible to press. */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setDetails(row)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setDetails(row);
-          }
-        }}
-        aria-label={h.detailsOpen}
-        className="-m-1 block w-full cursor-pointer rounded-[16px] p-1 text-start transition-colors hover:bg-black/[0.02] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red/50"
-      >
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    // A column with the heading taking the slack (`mb-auto` below), so when a
+    // grid stretches this card to its neighbour's height, the cancel and
+    // reschedule buttons settle at the foot rather than floating mid-card.
+    //
+    // `relative` anchors the title's stretched tap layer: the whole card opens
+    // the details through one control, and the few real actions on it sit above
+    // that layer on `z-10`. It used to be a role="button" div around the
+    // heading, which could not hold the refill button without nesting one
+    // control inside another.
+    <article className="relative flex flex-col rounded-[20px] bg-white p-5 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)] transition-shadow hover:shadow-[0_14px_36px_rgba(184,0,7,0.12)]">
+      <div className="mb-auto flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="font-display text-lg font-extrabold text-ink">
-              {row.serviceName ? pick(row.serviceName, lang) : row.code}
+              <button
+                type="button"
+                onClick={() => setDetails(row)}
+                aria-label={`${title} — ${h.detailsOpen}`}
+                className="text-start after:absolute after:inset-0 after:rounded-[20px] after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-red/40"
+              >
+                {title}
+              </button>
             </h2>
             {row.isRefill && (
               <span className="rounded-full bg-[#f7e8e8] px-2.5 py-0.5 text-[10px] font-semibold text-red">
@@ -500,24 +497,27 @@ export default function BookingCard({
             <Riyal className="h-3.5 w-3.5 text-red" />
             {row.totalSar}
           </span>
+
+          {/* The whole feature. Absent — not disabled — once the window lapses.
+              A pill in the corner the reference line leaves empty, rather than
+              a full-width bar: the bar made every card with a refill a row
+              taller than its neighbour. Still the one red thing on the card.
+
+              The countdown and price are deliberately NOT here: they come back
+              from the server only after the emailed code is verified, so a
+              forwarded reference alone reveals nothing about the offer. */}
+          {row.hasRefill && (
+            <button
+              type="button"
+              onClick={onOpenRefill}
+              className="relative z-10 -mt-0.5 inline-flex items-center gap-1 rounded-full bg-red-grad px-3 py-1 text-[11px] font-bold text-white transition-opacity hover:opacity-90"
+            >
+              {h.refillAvailable}
+              <span aria-hidden className="rtl:rotate-180">›</span>
+            </button>
+          )}
         </div>
       </div>
-      </div>
-
-      {/* The whole feature. Absent — not disabled — once the window lapses.
-          The countdown and price are deliberately NOT here: they come back from
-          the server only after the emailed code is verified, so a forwarded
-          reference alone reveals nothing about the offer. */}
-      {row.hasRefill && (
-        <button
-          type="button"
-          onClick={onOpenRefill}
-          className="mt-4 flex w-full items-center justify-between gap-3 rounded-[14px] bg-red-grad px-5 py-3 text-start text-sm font-bold text-white transition-opacity hover:opacity-90"
-        >
-          <span>{h.refillAvailable}</span>
-          <span className="text-[12px] font-semibold opacity-90">{h.refillTapToView}</span>
-        </button>
-      )}
 
       {/* Absent rather than disabled once the window shuts, like the refill
           button above — but the deadline stays on screen either way, so a
@@ -529,7 +529,7 @@ export default function BookingCard({
             type="button"
             onClick={() => setPicking(true)}
             disabled={busy !== null}
-            className="rounded-[12px] border border-black/[0.08] px-4 py-2 text-[13px] font-semibold text-ink transition-colors hover:border-red/40 disabled:opacity-40"
+            className="relative z-10 rounded-[12px] border border-black/[0.08] px-4 py-2 text-[13px] font-semibold text-ink transition-colors hover:border-red/40 disabled:opacity-40"
           >
             {busy === "reschedule" ? h.rescheduling : h.reschedule}
           </button>
@@ -537,7 +537,7 @@ export default function BookingCard({
             type="button"
             onClick={onCancelClick}
             disabled={busy !== null}
-            className="rounded-[12px] px-4 py-2 text-[13px] font-semibold text-red transition-colors hover:bg-red/[0.06] disabled:opacity-40"
+            className="relative z-10 rounded-[12px] px-4 py-2 text-[13px] font-semibold text-red transition-colors hover:bg-red/[0.06] disabled:opacity-40"
           >
             {busy === "cancel" ? h.cancelling : h.cancel}
           </button>

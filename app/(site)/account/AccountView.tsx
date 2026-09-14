@@ -231,8 +231,9 @@ function SignedIn({
             )}
 
             {/* Side by side once there is room for two cards at a readable
-                width, which halves how far a long history scrolls. */}
-            <div className="mt-4 grid items-start gap-4 xl:grid-cols-2">
+                width, which halves how far a long history scrolls. Cards in a
+                row stretch to one height, so their buttons line up. */}
+            <div className="mt-4 grid gap-4 xl:grid-cols-2">
               {(showAll ? shown : shown.slice(0, BOOKINGS_PREVIEW)).map((r) => (
                 <BookingCard
                   key={r.code}
