@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { Button, Field, Input } from "@/components/admin/ui";
+import { Button, Field, FormErrors, Input, invalidRing } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
+import { toStoredPhone, validateSaudiMobile } from "@/lib/phone";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
 import { createWalkIn } from "./actions";
@@ -35,6 +37,7 @@ export default function WalkInDrawer({
   const [startsAt, setStartsAt] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tried, setTried] = useState(false);
   const [pending, startTransition] = useTransition();
 
   useEffect(() => {
@@ -46,6 +49,7 @@ export default function WalkInDrawer({
     setName("");
     setStartsAt(null);
     setError(null);
+    setTried(false);
   }, [open, catalog.services]);
 
   // Duration drives which slots actually fit, so it has to be recomputed as the
@@ -69,10 +73,24 @@ export default function WalkInDrawer({
     };
   }, [open, branchId, date, durationMin, serviceId]);
 
+  const v = t.validation;
+  const phoneLabel = t.bookings.phone;
+  const check = () => {
+    const phoneError = validateSaudiMobile(phone);
+    return collect({
+      name: rules(v).text(t.bookings.customer, name, { required: false, max: 120 }),
+      phone: phoneError === "required" ? v.required(phoneLabel) : phoneError && v.mobile(phoneLabel),
+      serviceId: !serviceId && v.required(t.bookings.service),
+      startsAt: !startsAt && v.required(t.bookings.time),
+    });
+  };
+  const errors = tried ? check() : {};
+
   const submit = () =>
     startTransition(async () => {
       setError(null);
-      if (!startsAt) return setError(t.bookings.pickTime);
+      setTried(true);
+      if (hasErrors(check()) || !startsAt) return focusFirstInvalid();
       const res = await createWalkIn({
         branchId,
         serviceId,
@@ -80,7 +98,8 @@ export default function WalkInDrawer({
         removalTypeId: removalId || null,
         startsAt,
         name: name.trim() || undefined,
-        phone: phone.trim(),
+        // 05XXXXXXXX, the shape a returning customer is matched on — see lib/phone.ts.
+        phone: toStoredPhone(phone),
       });
       if (res.ok) onCreated();
       else setError(res.error === "slot-taken" ? t.bookings.slotTaken : t.common.error);
@@ -105,19 +124,25 @@ export default function WalkInDrawer({
           <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
             {t.common.cancel}
           </Button>
-          <Button size="sm" onClick={submit} disabled={pending || !phone.trim() || !startsAt}>
+          <Button size="sm" onClick={submit} disabled={pending}>
             {pending ? t.common.saving : t.bookings.create}
           </Button>
         </>
       }
     >
       <div className="space-y-5">
-        <Field label={t.bookings.customer}>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t.bookings.optional} />
+        <Field label={t.bookings.customer} error={errors.name}>
+          <Input
+            aria-invalid={!!errors.name}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={t.bookings.optional}
+          />
         </Field>
 
-        <Field label={`${t.bookings.phone} *`}>
+        <Field label={`${t.bookings.phone} *`} error={errors.phone}>
           <Input
+            aria-invalid={!!errors.phone}
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             dir="ltr"
@@ -127,11 +152,15 @@ export default function WalkInDrawer({
           />
         </Field>
 
-        <Field label={t.bookings.service}>
+        <Field label={t.bookings.service} error={errors.serviceId}>
           <select
             value={serviceId}
+            aria-invalid={!!errors.serviceId}
             onChange={(e) => setServiceId(e.target.value)}
-            className="h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink outline-none focus:border-sky"
+            className={cn(
+              "h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink outline-none focus:border-sky",
+              invalidRing,
+            )}
           >
             {catalog.services.map((s) => (
               <option key={s.id} value={s.id}>
@@ -211,13 +240,10 @@ export default function WalkInDrawer({
               ))}
             </div>
           )}
+          {errors.startsAt ? <p className="mt-1 text-xs text-red">{errors.startsAt}</p> : null}
         </div>
 
-        {error ? (
-          <p role="alert" className="rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
-            {error}
-          </p>
-        ) : null}
+        <FormErrors errors={errors} summary={t.validation.summary} server={error} />
       </div>
     </Drawer>
   );

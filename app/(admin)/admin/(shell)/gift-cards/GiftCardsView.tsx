@@ -3,10 +3,21 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Gift, Plus, Trash2 } from "lucide-react";
-import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader } from "@/components/admin/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  Field,
+  FormErrors,
+  Input,
+  PageHeader,
+} from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import MediaPicker from "@/components/admin/MediaPicker";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
 import type { Localized } from "@/lib/db/schema";
@@ -71,12 +82,23 @@ export default function GiftCardsView({
   const [editDesign, setEditDesign] = useState<DesignRow | null>(null);
   const [newDesign, setNewDesign] = useState(false);
   const [newValue, setNewValue] = useState("");
+  const [valueTried, setValueTried] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
 
   const run = (fn: () => Promise<{ ok: boolean }>) =>
     startTransition(async () => {
-      await fn();
+      setSetupError(null);
+      const res = await fn();
+      if (!res.ok) setSetupError(t.common.error);
       router.refresh();
     });
+
+  // Same ceiling a card can be issued at — a value nobody can buy is no use.
+  const valueCheck = rules(t.validation).number(t.giftCards.amount, newValue, {
+    positive: true,
+    max: 20_000,
+  });
+  const valueError = valueTried ? valueCheck : undefined;
 
   return (
     <>
@@ -105,6 +127,12 @@ export default function GiftCardsView({
           </button>
         ))}
       </div>
+
+      {setupError ? (
+        <p role="alert" className="mb-4 rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
+          {setupError}
+        </p>
+      ) : null}
 
       {tab === "issued" ? (
         <Card className="overflow-hidden">
@@ -178,23 +206,26 @@ export default function GiftCardsView({
               ))}
             </ul>
             {canAdjust && (
-              <div className="flex items-end gap-2 border-t border-black/[0.06] p-4">
-                <Field label={t.giftCards.amount}>
+              <div className="flex items-start gap-2 border-t border-black/[0.06] p-4">
+                <Field label={t.giftCards.amount} error={valueError}>
                   <Input
                     type="number"
                     min={1}
                     dir="ltr"
                     className="text-left tabular-nums"
+                    aria-invalid={!!valueError}
                     value={newValue}
                     onChange={(e) => setNewValue(e.target.value)}
                   />
                 </Field>
                 <Button
+                  className="mt-6"
                   onClick={() => {
-                    const n = Number(newValue);
-                    if (!n) return;
-                    run(() => addGiftValue(n));
+                    setValueTried(true);
+                    if (valueCheck) return focusFirstInvalid();
+                    run(() => addGiftValue(Number(newValue)));
                     setNewValue("");
+                    setValueTried(false);
                   }}
                 >
                   <Plus className="h-4 w-4" strokeWidth={2} />
@@ -243,18 +274,22 @@ export default function GiftCardsView({
         </div>
       )}
 
-      <IssueDrawer
-        open={issuing}
-        designs={designs}
-        values={values}
-        onClose={() => setIssuing(false)}
-        onDone={() => {
-          setIssuing(false);
-          router.refresh();
-        }}
-      />
+      {/* Mounted only while open, so every card starts from a blank form. */}
+      {issuing && (
+        <IssueDrawer
+          open
+          designs={designs}
+          values={values}
+          onClose={() => setIssuing(false)}
+          onDone={() => {
+            setIssuing(false);
+            router.refresh();
+          }}
+        />
+      )}
 
       <CardDrawer
+        key={selected?.id ?? "none"}
         card={selected}
         canAdjust={canAdjust}
         onClose={() => setSelected(null)}
@@ -303,17 +338,32 @@ function IssueDrawer({
   const [message, setMessage] = useState("");
   const [issued, setIssued] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tried, setTried] = useState(false);
   const [pending, startTransition] = useTransition();
+
+  const amountLabel = `${t.giftCards.amount} (${t.common.riyal})`;
+  const r = rules(t.validation);
+  const check = () =>
+    collect({
+      amount: r.number(amountLabel, amount, { min: 1, max: 20_000 }),
+      buyerName: r.text(t.giftCards.buyer, buyerName, { required: false, max: 120 }),
+      recipientName: r.text(t.giftCards.recipient, recipientName, { required: false, max: 120 }),
+      recipientEmail: r.email(t.customers.email, recipientEmail),
+      message: r.text(t.giftCards.message, message, { required: false, max: 500 }),
+    });
+  const errors = tried ? check() : {};
 
   const submit = () =>
     startTransition(async () => {
       setError(null);
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
       const res = await issueCard({
         amountSar: amount,
         designId: designId || null,
         buyerName,
         recipientName,
-        recipientEmail,
+        recipientEmail: recipientEmail.trim(),
         message,
       });
       if (res.ok && res.code) setIssued(res.code);
@@ -323,10 +373,7 @@ function IssueDrawer({
   return (
     <Drawer
       open={open}
-      onClose={() => {
-        setIssued(null);
-        onClose();
-      }}
+      onClose={onClose}
       title={t.giftCards.issue}
       footer={
         issued ? (
@@ -338,7 +385,7 @@ function IssueDrawer({
             <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
               {t.common.cancel}
             </Button>
-            <Button size="sm" onClick={submit} disabled={pending || !Number(amount)}>
+            <Button size="sm" onClick={submit} disabled={pending}>
               {pending ? t.common.saving : t.giftCards.issue}
             </Button>
           </>
@@ -354,12 +401,13 @@ function IssueDrawer({
         </div>
       ) : (
         <div className="space-y-5">
-          <Field label={`${t.giftCards.amount} (${t.common.riyal})`}>
+          <Field label={amountLabel} error={errors.amount}>
             <Input
               type="number"
               min={1}
               dir="ltr"
               className="text-left tabular-nums"
+              aria-invalid={!!errors.amount}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
             />
@@ -395,30 +443,39 @@ function IssueDrawer({
             </select>
           </Field>
 
-          <Field label={t.giftCards.buyer}>
-            <Input value={buyerName} onChange={(e) => setBuyerName(e.target.value)} />
+          <Field label={t.giftCards.buyer} error={errors.buyerName}>
+            <Input
+              aria-invalid={!!errors.buyerName}
+              value={buyerName}
+              onChange={(e) => setBuyerName(e.target.value)}
+            />
           </Field>
-          <Field label={t.giftCards.recipient}>
-            <Input value={recipientName} onChange={(e) => setRecipientName(e.target.value)} />
+          <Field label={t.giftCards.recipient} error={errors.recipientName}>
+            <Input
+              aria-invalid={!!errors.recipientName}
+              value={recipientName}
+              onChange={(e) => setRecipientName(e.target.value)}
+            />
           </Field>
-          <Field label={t.customers.email}>
+          <Field label={t.customers.email} error={errors.recipientEmail}>
             <Input
               type="email"
               dir="ltr"
               className="text-left"
+              aria-invalid={!!errors.recipientEmail}
               value={recipientEmail}
               onChange={(e) => setRecipientEmail(e.target.value)}
             />
           </Field>
-          <Field label={t.giftCards.message}>
-            <Input value={message} onChange={(e) => setMessage(e.target.value)} />
+          <Field label={t.giftCards.message} error={errors.message}>
+            <Input
+              aria-invalid={!!errors.message}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+            />
           </Field>
 
-          {error ? (
-            <p role="alert" className="rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
-              {error}
-            </p>
-          ) : null}
+          <FormErrors errors={errors} summary={t.validation.summary} server={error} />
         </div>
       )}
     </Drawer>
@@ -440,16 +497,36 @@ function CardDrawer({
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [tried, setTried] = useState(false);
   const [pending, startTransition] = useTransition();
 
   if (!card) return null;
 
+  const r = rules(t.validation);
+  const check = () =>
+    collect({
+      amount:
+        r.number(t.giftCards.adjustAmount, amount) ||
+        (Number(amount) === 0 && t.validation.nonZero(t.giftCards.adjustAmount)),
+      reason: r.text(t.giftCards.adjustReason, reason, { max: 200 }),
+    });
+  const errors = tried ? check() : {};
+
   const apply = () =>
     startTransition(async () => {
       setError(null);
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
       const res = await adjustCard({ id: card.id, amountSar: amount, reason });
       if (res.ok) onChanged();
-      else setError(res.error === "insufficient" ? t.giftCards.insufficient : t.common.error);
+      else
+        setError(
+          res.error === "insufficient"
+            ? t.giftCards.insufficient
+            : res.error === "not-found"
+              ? t.validation.notFound
+              : t.common.error,
+        );
     });
 
   return (
@@ -519,21 +596,26 @@ function CardDrawer({
         {canAdjust && card.status !== "cancelled" ? (
           <div className="space-y-3 border-t border-black/[0.06] pt-4">
             <div className="grid grid-cols-2 gap-3">
-              <Field label={t.giftCards.adjustAmount}>
+              <Field label={t.giftCards.adjustAmount} error={errors.amount}>
                 <Input
                   type="number"
                   dir="ltr"
                   className="text-left tabular-nums"
+                  aria-invalid={!!errors.amount}
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                 />
               </Field>
-              <Field label={t.giftCards.adjustReason}>
-                <Input value={reason} onChange={(e) => setReason(e.target.value)} />
+              <Field label={t.giftCards.adjustReason} error={errors.reason}>
+                <Input
+                  aria-invalid={!!errors.reason}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                />
               </Field>
             </div>
             <div className="flex gap-2">
-              <Button size="sm" onClick={apply} disabled={pending || !Number(amount) || !reason.trim()}>
+              <Button size="sm" onClick={apply} disabled={pending}>
                 {t.giftCards.adjust}
               </Button>
               <Button
@@ -548,11 +630,7 @@ function CardDrawer({
                 {t.giftCards.cancelCard}
               </Button>
             </div>
-            {error ? (
-              <p role="alert" className="rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
-                {error}
-              </p>
-            ) : null}
+            <FormErrors errors={errors} summary={t.validation.summary} server={error} />
           </div>
         ) : null}
       </div>
@@ -576,6 +654,8 @@ function DesignDrawer({
   const [nameEn, setNameEn] = useState("");
   const [image, setImage] = useState<string | null>(null);
   const [active, setActive] = useState(true);
+  const [tried, setTried] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   // Reset when the drawer opens onto a different design.
@@ -587,10 +667,39 @@ function DesignDrawer({
     setNameEn(design?.name.en ?? "");
     setImage(design?.image ?? null);
     setActive(design?.active ?? true);
+    setTried(false);
+    setError(null);
   }
   if (!open && loadedKey !== null) setLoadedKey(null);
 
   if (!open) return null;
+
+  const r = rules(t.validation);
+  const check = () =>
+    collect({
+      nameAr: r.text(t.catalog.nameAr, nameAr, { max: 120 }),
+      nameEn: r.text(t.catalog.nameEn, nameEn, { max: 120 }),
+    });
+  const errors = tried ? check() : {};
+
+  const save = () =>
+    startTransition(async () => {
+      setError(null);
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
+      const res = await saveGiftDesign({ id: design?.id, nameAr, nameEn, image, active });
+      if (res.ok) onSaved();
+      else setError(t.common.error);
+    });
+
+  const remove = () =>
+    startTransition(async () => {
+      if (!design) return;
+      setError(null);
+      const res = await deleteGiftDesign(design.id);
+      if (res.ok) onSaved();
+      else setError(res.error === "in-use" ? t.giftCards.designInUse : t.common.error);
+    });
 
   return (
     <Drawer
@@ -601,11 +710,9 @@ function DesignDrawer({
         <>
           {design ? (
             <button
-              onClick={() => startTransition(async () => {
-                await deleteGiftDesign(design.id);
-                onSaved();
-              })}
-              className="me-auto text-xs text-red hover:underline"
+              onClick={remove}
+              disabled={pending}
+              className="me-auto text-xs text-red hover:underline disabled:opacity-50"
             >
               {t.catalog.delete}
             </button>
@@ -613,14 +720,7 @@ function DesignDrawer({
           <Button variant="secondary" size="sm" onClick={onClose}>
             {t.common.cancel}
           </Button>
-          <Button
-            size="sm"
-            disabled={pending || !nameAr.trim() || !nameEn.trim()}
-            onClick={() => startTransition(async () => {
-              await saveGiftDesign({ id: design?.id, nameAr, nameEn, image, active });
-              onSaved();
-            })}
-          >
+          <Button size="sm" disabled={pending} onClick={save}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>
@@ -628,11 +728,22 @@ function DesignDrawer({
     >
       <div className="space-y-5">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t.catalog.nameAr}>
-            <Input dir="rtl" value={nameAr} onChange={(e) => setNameAr(e.target.value)} />
+          <Field label={t.catalog.nameAr} error={errors.nameAr}>
+            <Input
+              dir="rtl"
+              aria-invalid={!!errors.nameAr}
+              value={nameAr}
+              onChange={(e) => setNameAr(e.target.value)}
+            />
           </Field>
-          <Field label={t.catalog.nameEn}>
-            <Input dir="ltr" className="text-left" value={nameEn} onChange={(e) => setNameEn(e.target.value)} />
+          <Field label={t.catalog.nameEn} error={errors.nameEn}>
+            <Input
+              dir="ltr"
+              className="text-left"
+              aria-invalid={!!errors.nameEn}
+              value={nameEn}
+              onChange={(e) => setNameEn(e.target.value)}
+            />
           </Field>
         </div>
         <MediaPicker label={t.catalog.image} value={image} onChange={setImage} />
@@ -645,6 +756,8 @@ function DesignDrawer({
           />
           {t.catalog.active}
         </label>
+
+        <FormErrors errors={errors} summary={t.validation.summary} server={error} />
       </div>
     </Drawer>
   );

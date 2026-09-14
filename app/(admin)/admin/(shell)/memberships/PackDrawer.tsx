@@ -9,11 +9,12 @@
 
 import { useState, useTransition } from "react";
 import { AlertTriangle, Minus, Plus, Trash2 } from "lucide-react";
-import { Button, Field, Input } from "@/components/admin/ui";
+import { Button, Field, FormErrors, Input, invalidRing } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import MediaPicker from "@/components/admin/MediaPicker";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
+import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
 import type { PackLine, PackRow, ServiceOption } from "./PacksView";
 import { deletePack, savePack } from "./actions";
 
@@ -33,6 +34,7 @@ export default function PackDrawer({
   const { t, lang } = useAdminI18n();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [tried, setTried] = useState(false);
 
   const [form, setForm] = useState({
     nameAr: row?.name.ar ?? "",
@@ -82,9 +84,28 @@ export default function PackDrawer({
 
   const missingAr = form.nameAr.trim() !== "" && form.nameAr.trim() === form.nameEn.trim();
 
+  const r = rules(t.validation);
+  const priceLabel = `${t.catalog.price} (${t.common.riyal})`;
+  const check = () =>
+    collect({
+      nameAr: r.text(t.catalog.nameAr, form.nameAr, { max: 120 }),
+      nameEn: r.text(t.catalog.nameEn, form.nameEn, { max: 120 }),
+      descAr: r.text(t.catalog.descAr, form.descAr, { required: false, max: 400 }),
+      descEn: r.text(t.catalog.descEn, form.descEn, { required: false, max: 400 }),
+      lines:
+        lines.length === 0
+          ? t.packs.needsServices
+          : lines.length > 30 && t.validation.max(t.packs.contents, 30),
+      priceSar: r.number(priceLabel, form.priceSar, { min: 0, max: 100_000 }),
+      validDays: r.number(t.packs.validDays, form.validDays, { int: true, min: 1, max: 730 }),
+    });
+  const errors = tried ? check() : {};
+
   const save = () =>
     startTransition(async () => {
       setError(null);
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
       const res = await savePack({
         id: row?.id,
         name: { ar: form.nameAr.trim(), en: form.nameEn.trim() },
@@ -97,7 +118,14 @@ export default function PackDrawer({
         lines,
       });
       if (res.ok) onSaved();
-      else setError(res.error === "no-services" ? t.packs.needsServices : t.common.error);
+      else
+        setError(
+          res.error === "no-services"
+            ? t.packs.needsServices
+            : res.error === "not-found"
+              ? t.validation.notFound
+              : t.common.error,
+        );
     });
 
   const remove = () =>
@@ -136,13 +164,19 @@ export default function PackDrawer({
     >
       <div className="space-y-5">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t.catalog.nameAr}>
-            <Input dir="rtl" value={form.nameAr} onChange={(e) => set("nameAr", e.target.value)} />
+          <Field label={t.catalog.nameAr} error={errors.nameAr}>
+            <Input
+              dir="rtl"
+              aria-invalid={!!errors.nameAr}
+              value={form.nameAr}
+              onChange={(e) => set("nameAr", e.target.value)}
+            />
           </Field>
-          <Field label={t.catalog.nameEn}>
+          <Field label={t.catalog.nameEn} error={errors.nameEn}>
             <Input
               dir="ltr"
               className="text-left"
+              aria-invalid={!!errors.nameEn}
               value={form.nameEn}
               onChange={(e) => set("nameEn", e.target.value)}
             />
@@ -157,13 +191,19 @@ export default function PackDrawer({
         ) : null}
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t.catalog.descAr}>
-            <Input dir="rtl" value={form.descAr} onChange={(e) => set("descAr", e.target.value)} />
+          <Field label={t.catalog.descAr} error={errors.descAr}>
+            <Input
+              dir="rtl"
+              aria-invalid={!!errors.descAr}
+              value={form.descAr}
+              onChange={(e) => set("descAr", e.target.value)}
+            />
           </Field>
-          <Field label={t.catalog.descEn}>
+          <Field label={t.catalog.descEn} error={errors.descEn}>
             <Input
               dir="ltr"
               className="text-left"
+              aria-invalid={!!errors.descEn}
               value={form.descEn}
               onChange={(e) => set("descEn", e.target.value)}
             />
@@ -203,7 +243,8 @@ export default function PackDrawer({
                     <button
                       onClick={() => bump(l.serviceId, 1)}
                       title={t.packs.more}
-                      className="grid h-6 w-6 place-items-center rounded-lg text-ink/45 transition-colors hover:bg-black/[0.05] hover:text-ink"
+                      disabled={l.quantity >= 99}
+                      className="grid h-6 w-6 place-items-center rounded-lg text-ink/45 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-30"
                     >
                       <Plus className="h-3.5 w-3.5" strokeWidth={2} />
                     </button>
@@ -215,8 +256,12 @@ export default function PackDrawer({
 
           <select
             value=""
+            aria-invalid={!!errors.lines}
             onChange={(e) => addLine(e.target.value)}
-            className="w-full rounded-lg border border-black/[0.1] bg-white px-3 py-2 text-sm text-ink outline-none focus:border-red/40"
+            className={cn(
+              "w-full rounded-lg border border-black/[0.1] bg-white px-3 py-2 text-sm text-ink outline-none focus:border-red/40",
+              invalidRing,
+            )}
           >
             <option value="">{t.packs.addService}</option>
             {services.map((s) => (
@@ -226,27 +271,30 @@ export default function PackDrawer({
               </option>
             ))}
           </select>
+          {errors.lines ? <p className="mt-1 text-start text-xs text-red">{errors.lines}</p> : null}
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={`${t.catalog.price} (${t.common.riyal})`}>
+          <Field label={priceLabel} error={errors.priceSar}>
             <Input
               type="number"
               min={0}
               step="1"
               dir="ltr"
               className="text-left tabular-nums"
+              aria-invalid={!!errors.priceSar}
               value={form.priceSar}
               onChange={(e) => set("priceSar", e.target.value)}
             />
           </Field>
-          <Field label={t.packs.validDays} hint={t.packs.validDaysHint}>
+          <Field label={t.packs.validDays} hint={t.packs.validDaysHint} error={errors.validDays}>
             <Input
               type="number"
               min={1}
               step="1"
               dir="ltr"
               className="text-left tabular-nums"
+              aria-invalid={!!errors.validDays}
               value={form.validDays}
               onChange={(e) => set("validDays", e.target.value)}
             />
@@ -288,7 +336,7 @@ export default function PackDrawer({
           {t.catalog.active}
         </label>
 
-        {error ? <p className="text-xs text-red">{error}</p> : null}
+        <FormErrors errors={errors} summary={t.validation.summary} server={error} />
       </div>
     </Drawer>
   );

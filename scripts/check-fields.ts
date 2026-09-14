@@ -29,6 +29,8 @@ import {
   toStoredPhone,
   validateSaudiMobile,
 } from "@/lib/phone";
+import { adminStrings } from "@/lib/admin/strings";
+import { collect, hasErrors, rules } from "@/lib/admin/validate";
 
 // -- number ------------------------------------------------------------------
 
@@ -232,5 +234,36 @@ assert.deepEqual(
   "a one-day closure starts and ends on that day",
 );
 console.log("  closures: a stored range reads back as the days the admin typed ✓");
+
+// -- admin form checks -------------------------------------------------------
+
+{
+  const r = rules(adminStrings.en.validation);
+  const errors = collect({
+    name: r.text("Name", "   "),
+    desc: r.text("Description", "", { required: false, max: 400 }),
+    code: r.text("Code", "AB", { min: 3 }),
+    price: r.number("Price", "-1", { min: 0 }),
+    days: r.number("Days", "1.5", { int: true, min: 1 }),
+    value: r.number("Value", 0, { positive: true }),
+    uses: r.number("Uses", null, { required: false, min: 1 }),
+    email: r.email("Email", "not-an-email"),
+    optionalEmail: r.email("Email", ""),
+    branch: false,
+  });
+  assert.deepEqual(errors, {
+    name: "Name is required",
+    code: "Code needs at least 3 characters",
+    price: "Price must be at least 0",
+    days: "Days must be a whole number",
+    value: "Value must be more than 0",
+    email: "Email isn't a valid email address (e.g. name@example.com)",
+  });
+  assert.equal(hasErrors(errors), true);
+  assert.equal(r.number("Price", "100000", { min: 0, max: 100_000 }), undefined, "the limit itself is allowed");
+  assert.equal(r.number("Price", "100001", { max: 100_000 }), "Price can't be more than 100000");
+  assert.equal(hasErrors(collect({ a: undefined, b: "" })), false, "passing fields are dropped");
+}
+console.log("  admin forms: each failing field gets its own message, passing ones none ✓");
 
 console.log("\nAll field boundary checks passed.");

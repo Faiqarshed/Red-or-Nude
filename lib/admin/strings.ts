@@ -369,6 +369,7 @@ const ar = {
     noClosures: "لا توجد إغلاقات",
     weekdays: ["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"],
     saved: "تم الحفظ",
+    stationInUse: "لا يمكن حذف هذا الكرسي لارتباطه بحجوزات. عطّليه بدلاً من ذلك.",
   },
 
   packs: {
@@ -417,6 +418,7 @@ const ar = {
     message: "الرسالة",
     cancelCard: "إلغاء البطاقة",
     insufficient: "الرصيد غير كافٍ",
+    designInUse: "لا يمكن حذف هذا التصميم لأنه مستخدم في بطاقات مُصدرة. عطّليه بدلاً من ذلك.",
     statuses: { active: "فعّالة", redeemed: "مستخدمة", expired: "منتهية", cancelled: "ملغاة" },
   },
 
@@ -601,6 +603,26 @@ const ar = {
       invalid: "تحققي من الحقول",
       failed: "حدث خطأ، حاول مرة أخرى",
     },
+  },
+
+  // Form checks. Each takes the field's own label, so the message names the
+  // exact box to fix rather than "check the fields".
+  validation: {
+    summary: (n: number) => (n === 1 ? "قبل الحفظ، يرجى تصحيح ما يلي:" : `قبل الحفظ، يرجى تصحيح ${n} أمور:`),
+    required: (f: string) => `«${f}» مطلوب`,
+    number: (f: string) => `«${f}» يجب أن يكون رقماً`,
+    whole: (f: string) => `«${f}» يجب أن يكون عدداً صحيحاً بدون كسور`,
+    min: (f: string, n: number) => `«${f}» يجب ألا يقل عن ${n}`,
+    max: (f: string, n: number) => `«${f}» يجب ألا يزيد عن ${n}`,
+    positive: (f: string) => `«${f}» يجب أن يكون أكبر من صفر`,
+    nonZero: (f: string) => `«${f}» لا يمكن أن يكون صفراً`,
+    tooShort: (f: string, n: number) => `«${f}» يجب أن يكون ${n} أحرف على الأقل`,
+    tooLong: (f: string, n: number) => `«${f}» يجب ألا يتجاوز ${n} حرفاً`,
+    email: (f: string) => `«${f}» ليس بريداً إلكترونياً صحيحاً (مثال: name@example.com)`,
+    mobile: (f: string) => `«${f}» يجب أن يكون رقم جوال سعودي: 05 ثم 8 أرقام`,
+    after: (f: string, other: string) => `«${f}» يجب أن يكون بعد «${other}»`,
+    notBefore: (f: string, other: string) => `«${f}» لا يمكن أن يكون قبل «${other}»`,
+    notFound: "لم يعد هذا العنصر موجوداً — أغلقي النافذة وحدّثي الصفحة",
   },
 
   common: {
@@ -988,6 +1010,7 @@ const en: AdminStrings = {
     noClosures: "No closures",
     weekdays: ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
     saved: "Saved",
+    stationInUse: "This chair has bookings on it, so it can't be deleted. Switch it off instead.",
   },
 
   packs: {
@@ -1036,6 +1059,7 @@ const en: AdminStrings = {
     message: "Message",
     cancelCard: "Cancel card",
     insufficient: "Insufficient balance",
+    designInUse: "This design is on cards already issued, so it can't be deleted. Switch it off instead.",
     statuses: { active: "Active", redeemed: "Redeemed", expired: "Expired", cancelled: "Cancelled" },
   },
 
@@ -1221,6 +1245,24 @@ const en: AdminStrings = {
       invalid: "Check the fields",
       failed: "Something went wrong, please try again",
     },
+  },
+
+  validation: {
+    summary: (n: number) => (n === 1 ? "Fix this before saving:" : `Fix these ${n} things before saving:`),
+    required: (f: string) => `${f} is required`,
+    number: (f: string) => `${f} must be a number`,
+    whole: (f: string) => `${f} must be a whole number`,
+    min: (f: string, n: number) => `${f} must be at least ${n}`,
+    max: (f: string, n: number) => `${f} can't be more than ${n}`,
+    positive: (f: string) => `${f} must be more than 0`,
+    nonZero: (f: string) => `${f} can't be 0`,
+    tooShort: (f: string, n: number) => `${f} needs at least ${n} characters`,
+    tooLong: (f: string, n: number) => `${f} can't be longer than ${n} characters`,
+    email: (f: string) => `${f} isn't a valid email address (e.g. name@example.com)`,
+    mobile: (f: string) => `${f} must be a Saudi mobile: 05 followed by 8 digits`,
+    after: (f: string, other: string) => `${f} must be after ${other}`,
+    notBefore: (f: string, other: string) => `${f} can't be before ${other}`,
+    notFound: "This item no longer exists — close this and refresh the page",
   },
 
   common: {

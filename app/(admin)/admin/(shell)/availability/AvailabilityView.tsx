@@ -4,8 +4,9 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, QrCode, Trash2 } from "lucide-react";
-import { Badge, Button, Card, CardHeader, Field, Input, PageHeader } from "@/components/admin/ui";
+import { Badge, Button, Card, CardHeader, Field, Input, invalidRing, PageHeader } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
 import { closureDays } from "@/lib/time";
@@ -51,14 +52,57 @@ export default function AvailabilityView({
   const [draft, setDraft] = useState<Hours[]>(hours);
   const [newStation, setNewStation] = useState("");
   const [closure, setClosure] = useState({ from: "", to: "", reasonAr: "", reasonEn: "" });
+  const [stationTried, setStationTried] = useState(false);
+  const [closureTried, setClosureTried] = useState(false);
+
+  const a = t.availability;
+  const v = t.validation;
+  const r = rules(v);
+
+  // The server's refusals, as sentences. It used to print the code itself.
+  const messageFor = (code?: string) =>
+    code === "closes-before-opens"
+      ? v.after(a.closes, a.opens)
+      : code === "to-before-from"
+        ? v.notBefore(a.to, a.from)
+        : code === "in-use"
+          ? a.stationInUse
+          : t.common.error;
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) =>
     startTransition(async () => {
       setError(null);
       const res = await fn();
-      if (!res.ok) setError(res.error ?? t.common.error);
+      if (!res.ok) setError(messageFor(res.error));
       router.refresh();
     });
+
+  // Checked as she types, not on a save press: hours save the moment a box
+  // loses focus, so there is no later moment to tell her.
+  const dayError = (day: Hours) =>
+    day.closed
+      ? undefined
+      : !day.opens
+        ? v.required(a.opens)
+        : !day.closes
+          ? v.required(a.closes)
+          : day.closes <= day.opens
+            ? v.after(a.closes, a.opens)
+            : undefined;
+
+  const stationError = stationTried
+    ? r.text(a.stationLabel, newStation, { max: 40 })
+    : undefined;
+
+  const checkClosure = () =>
+    collect({
+      from: !closure.from && v.required(a.from),
+      to: !closure.to
+        ? v.required(a.to)
+        : closure.from && closure.to < closure.from && v.notBefore(a.to, a.from),
+      reason: r.text(a.reason, closure.reasonAr, { required: false, max: 120 }),
+    });
+  const closureErrors = closureTried ? checkClosure() : {};
 
   const setBranch = (id: string) => {
     const sp = new URLSearchParams(params.toString());
@@ -72,7 +116,7 @@ export default function AvailabilityView({
 
   const saveDay = (weekday: number) => {
     const day = draft.find((d) => d.weekday === weekday);
-    if (!day) return;
+    if (!day || dayError(day)) return;
     run(() => saveBranchHours({ branchId, ...day }));
   };
 
@@ -119,8 +163,9 @@ export default function AvailabilityView({
                   role="switch"
                   aria-checked={!day.closed}
                   onClick={() => {
-                    updateDay(day.weekday, { closed: !day.closed });
-                    run(() => saveBranchHours({ branchId, ...day, closed: !day.closed }));
+                    const next = { ...day, closed: !day.closed };
+                    updateDay(day.weekday, { closed: next.closed });
+                    if (!dayError(next)) run(() => saveBranchHours({ branchId, ...next }));
                   }}
                   className={cn(
                     "relative h-5 w-9 shrink-0 rounded-full transition-colors",
@@ -141,19 +186,34 @@ export default function AvailabilityView({
                   <>
                     <input
                       type="time"
+                      aria-label={a.opens}
+                      aria-invalid={!!dayError(day)}
                       value={day.opens}
                       onChange={(e) => updateDay(day.weekday, { opens: e.target.value })}
                       onBlur={() => saveDay(day.weekday)}
-                      className="h-9 rounded-lg border border-black/10 bg-white px-2 text-sm tabular-nums text-ink outline-none focus:border-sky"
+                      className={cn(
+                        "h-9 rounded-lg border border-black/10 bg-white px-2 text-sm tabular-nums text-ink outline-none focus:border-sky",
+                        invalidRing,
+                      )}
                     />
                     <span className="text-xs text-ink/35">–</span>
                     <input
                       type="time"
+                      aria-label={a.closes}
+                      aria-invalid={!!dayError(day)}
                       value={day.closes}
                       onChange={(e) => updateDay(day.weekday, { closes: e.target.value })}
                       onBlur={() => saveDay(day.weekday)}
-                      className="h-9 rounded-lg border border-black/10 bg-white px-2 text-sm tabular-nums text-ink outline-none focus:border-sky"
+                      className={cn(
+                        "h-9 rounded-lg border border-black/10 bg-white px-2 text-sm tabular-nums text-ink outline-none focus:border-sky",
+                        invalidRing,
+                      )}
                     />
+                    {dayError(day) ? (
+                      <span role="alert" className="text-xs text-red">
+                        {dayError(day)}
+                      </span>
+                    ) : null}
                   </>
                 )}
               </li>
@@ -197,16 +257,23 @@ export default function AvailabilityView({
               </li>
             ))}
           </ul>
-          <div className="flex items-end gap-2 border-t border-black/[0.06] p-4">
-            <Field label={t.availability.stationLabel}>
-              <Input value={newStation} onChange={(e) => setNewStation(e.target.value)} />
+          <div className="flex items-start gap-2 border-t border-black/[0.06] p-4">
+            <Field label={a.stationLabel} error={stationError}>
+              <Input
+                aria-invalid={!!stationError}
+                value={newStation}
+                onChange={(e) => setNewStation(e.target.value)}
+              />
             </Field>
             <Button
               size="md"
+              className="mt-6"
               onClick={() => {
-                if (!newStation.trim()) return;
+                setStationTried(true);
+                if (r.text(a.stationLabel, newStation, { max: 40 })) return focusFirstInvalid();
                 run(() => addStation(branchId, newStation));
                 setNewStation("");
+                setStationTried(false);
               }}
             >
               <Plus className="h-4 w-4" strokeWidth={2} />
@@ -264,33 +331,39 @@ export default function AvailabilityView({
           )}
           <div className="space-y-3 border-t border-black/[0.06] p-4">
             <div className="grid grid-cols-2 gap-2">
-              <Field label={t.availability.from}>
+              <Field label={a.from} error={closureErrors.from}>
                 <Input
                   type="date"
+                  aria-invalid={!!closureErrors.from}
                   value={closure.from}
                   onChange={(e) => setClosure((c) => ({ ...c, from: e.target.value }))}
                 />
               </Field>
-              <Field label={t.availability.to}>
+              <Field label={a.to} error={closureErrors.to}>
                 <Input
                   type="date"
+                  min={closure.from || undefined}
+                  aria-invalid={!!closureErrors.to}
                   value={closure.to}
                   onChange={(e) => setClosure((c) => ({ ...c, to: e.target.value }))}
                 />
               </Field>
             </div>
-            <Field label={t.availability.reason}>
+            <Field label={a.reason} error={closureErrors.reason}>
               <Input
+                aria-invalid={!!closureErrors.reason}
                 value={closure.reasonAr}
                 onChange={(e) => setClosure((c) => ({ ...c, reasonAr: e.target.value }))}
               />
             </Field>
             <Button
               size="sm"
-              disabled={!closure.from || !closure.to}
               onClick={() => {
+                setClosureTried(true);
+                if (hasErrors(checkClosure())) return focusFirstInvalid();
                 run(() => addClosure({ branchId, ...closure }));
                 setClosure({ from: "", to: "", reasonAr: "", reasonEn: "" });
+                setClosureTried(false);
               }}
             >
               <Plus className="h-4 w-4" strokeWidth={2} />

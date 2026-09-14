@@ -3,9 +3,20 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { IdCard, Plus, Trash2 } from "lucide-react";
-import { Badge, Button, Card, EmptyState, Field, Input, PageHeader } from "@/components/admin/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  FormErrors,
+  Input,
+  invalidRing,
+  PageHeader,
+} from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
 import { mustHaveBranch, ROLE_LABELS } from "@/lib/auth/rbac";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
@@ -184,7 +195,7 @@ export default function StaffView({
           setEditing(null);
           router.refresh();
         }}
-        onError={(code) => setError(messageFor(code))}
+        messageFor={messageFor}
       />
     </>
   );
@@ -197,7 +208,7 @@ function StaffDrawer({
   currentRole,
   onClose,
   onSaved,
-  onError,
+  messageFor,
 }: {
   member: StaffRow | null;
   open: boolean;
@@ -205,7 +216,8 @@ function StaffDrawer({
   currentRole: StaffRole;
   onClose: () => void;
   onSaved: () => void;
-  onError: (code: string) => void;
+  /** Server refusal code → sentence. Shown inside the drawer, not behind it. */
+  messageFor: (code: string) => string;
 }) {
   const { t, lang } = useAdminI18n();
   const [pending, startTransition] = useTransition();
@@ -218,6 +230,8 @@ function StaffDrawer({
   const [branchId, setBranchId] = useState("");
   const [password, setPassword] = useState("");
   const [active, setActive] = useState(true);
+  const [tried, setTried] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const key = member?.id ?? "new";
   if (open && loadedKey !== key) {
@@ -229,6 +243,8 @@ function StaffDrawer({
     setBranchId(member?.branchId ?? "");
     setPassword("");
     setActive(member?.active ?? true);
+    setTried(false);
+    setError(null);
   }
   if (!open && loadedKey !== null) setLoadedKey(null);
 
@@ -242,6 +258,39 @@ function StaffDrawer({
   // Same rule the server refuses on — see mustHaveBranch.
   const needsBranch = mustHaveBranch(role);
 
+  const r = rules(t.validation);
+  const check = () =>
+    collect({
+      name: r.text(t.staff.name, name, { max: 120 }),
+      email: r.email(t.staff.email, email, { required: true, max: 200 }),
+      phone: r.text(t.staff.phone, phone, { required: false, max: 20 }),
+      branchId: needsBranch && !branchId && t.staff.branchRequired,
+      // Blank keeps the current password on an edit; a new account needs one.
+      password: password
+        ? r.text(t.staff.password, password, { min: 8, max: 200 })
+        : !member && t.staff.passwordRequired,
+    });
+  const errors = tried ? check() : {};
+
+  const submit = () =>
+    startTransition(async () => {
+      setError(null);
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
+      const res = await saveStaff({
+        id: member?.id,
+        name,
+        email,
+        phone,
+        role,
+        branchId: branchId || null,
+        password: password || "",
+        active,
+      });
+      if (res.ok) onSaved();
+      else setError(messageFor(res.error));
+    });
+
   return (
     <Drawer
       open
@@ -252,48 +301,36 @@ function StaffDrawer({
           <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
             {t.common.cancel}
           </Button>
-          <Button
-            size="sm"
-            disabled={pending || !name.trim() || !email.trim() || (needsBranch && !branchId)}
-            onClick={() =>
-              startTransition(async () => {
-                const res = await saveStaff({
-                  id: member?.id,
-                  name,
-                  email,
-                  phone,
-                  role,
-                  branchId: branchId || null,
-                  password: password || "",
-                  active,
-                });
-                if (res.ok) onSaved();
-                else onError(res.error);
-              })
-            }
-          >
+          <Button size="sm" disabled={pending} onClick={submit}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>
       }
     >
       <div className="space-y-5">
-        <Field label={t.staff.name}>
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
+        <Field label={t.staff.name} error={errors.name}>
+          <Input aria-invalid={!!errors.name} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
 
-        <Field label={t.staff.email}>
+        <Field label={t.staff.email} error={errors.email}>
           <Input
             type="email"
             dir="ltr"
             className="text-left"
+            aria-invalid={!!errors.email}
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
         </Field>
 
-        <Field label={t.staff.phone}>
-          <Input dir="ltr" className="text-left" value={phone} onChange={(e) => setPhone(e.target.value)} />
+        <Field label={t.staff.phone} error={errors.phone}>
+          <Input
+            dir="ltr"
+            className="text-left"
+            aria-invalid={!!errors.phone}
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+          />
         </Field>
 
         <div className="grid gap-3 sm:grid-cols-2">
@@ -311,11 +348,15 @@ function StaffDrawer({
             </select>
           </Field>
 
-          <Field label={t.staff.branch}>
+          <Field label={t.staff.branch} error={errors.branchId}>
             <select
               value={branchId}
+              aria-invalid={!!errors.branchId}
               onChange={(e) => setBranchId(e.target.value)}
-              className="h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink outline-none focus:border-sky"
+              className={cn(
+                "h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink outline-none focus:border-sky",
+                invalidRing,
+              )}
             >
               <option value="" disabled={needsBranch}>
                 {needsBranch ? t.staff.pickBranch : t.staff.allBranches}
@@ -332,11 +373,13 @@ function StaffDrawer({
         <Field
           label={t.staff.password}
           hint={member ? t.staff.passwordHint : t.staff.passwordRequired}
+          error={errors.password}
         >
           <Input
             type="password"
             dir="ltr"
             className="text-left"
+            aria-invalid={!!errors.password}
             autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -355,7 +398,11 @@ function StaffDrawer({
 
         {/* Only for the people the assignment run actually deals work to.
             A receptionist's day off changes nothing any code reads. */}
-        {member && role === "technician" && <DaysOff member={member} onError={onError} />}
+        {member && role === "technician" && (
+          <DaysOff member={member} onError={(code) => setError(messageFor(code))} />
+        )}
+
+        <FormErrors errors={errors} summary={t.validation.summary} server={error} />
       </div>
     </Drawer>
   );
@@ -378,15 +425,26 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
   const [pending, startTransition] = useTransition();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [tried, setTried] = useState(false);
+
+  const check = () =>
+    collect({
+      from: !from && t.validation.required(t.staff.from),
+      to: from && to && to < from && t.staff.badRange,
+    });
+  const errors = tried ? check() : {};
 
   const add = () =>
     startTransition(async () => {
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
       // An empty end means a single day, which is the common case — typing the
       // same date twice to book one day off is a small daily annoyance.
       const res = await addTimeOff({ staffId: member.id, startsOn: from, endsOn: to || from });
       if (!res.ok) return onError(res.error);
       setFrom("");
       setTo("");
+      setTried(false);
       router.refresh();
     });
 
@@ -428,20 +486,27 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
         </ul>
       )}
 
-      <div className="mt-3 flex items-end gap-2">
-        <Field label={t.staff.from}>
-          <Input type="date" dir="ltr" value={from} onChange={(e) => setFrom(e.target.value)} />
-        </Field>
-        <Field label={t.staff.to}>
+      <div className="mt-3 flex items-start gap-2">
+        <Field label={t.staff.from} error={errors.from}>
           <Input
             type="date"
             dir="ltr"
+            aria-invalid={!!errors.from}
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+          />
+        </Field>
+        <Field label={t.staff.to} error={errors.to}>
+          <Input
+            type="date"
+            dir="ltr"
+            aria-invalid={!!errors.to}
             min={from}
             value={to}
             onChange={(e) => setTo(e.target.value)}
           />
         </Field>
-        <Button size="sm" variant="secondary" disabled={pending || !from} onClick={add}>
+        <Button size="sm" variant="secondary" className="mt-6" disabled={pending} onClick={add}>
           {t.staff.addDayOff}
         </Button>
       </div>

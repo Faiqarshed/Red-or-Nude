@@ -124,11 +124,54 @@ export function Input({
         "h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink",
         "text-start outline-none transition-colors placeholder:text-ink/35",
         "focus:border-sky focus:ring-2 focus:ring-sky/20",
+        invalidRing,
         "disabled:bg-black/[0.03] disabled:text-ink/40",
         className,
       )}
       {...props}
     />
+  );
+}
+
+/**
+ * Red outline for a control marked `aria-invalid`. Driven by the attribute
+ * rather than a prop, so the same flag a screen reader hears is what paints it —
+ * and native selects and textareas can take the class too.
+ */
+export const invalidRing =
+  "aria-[invalid=true]:border-red aria-[invalid=true]:focus:border-red aria-[invalid=true]:focus:ring-red/15";
+
+/**
+ * Everything a refused save is waiting on, in one box beside the Save button:
+ * the field checks (also shown under their fields, for the ones scrolled out of
+ * view), or the server's own refusal once those have passed.
+ */
+export function FormErrors({
+  errors,
+  summary,
+  server,
+}: {
+  errors: Record<string, string>;
+  summary: (n: number) => string;
+  server?: string | null;
+}) {
+  const list = Object.values(errors);
+  if (list.length === 0 && !server) return null;
+  return (
+    <div role="alert" className="rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
+      {list.length > 0 ? (
+        <>
+          <p className="font-medium">{summary(list.length)}</p>
+          <ul className="mt-1 list-disc space-y-0.5 ps-4">
+            {list.map((m) => (
+              <li key={m}>{m}</li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        server
+      )}
+    </div>
   );
 }
 

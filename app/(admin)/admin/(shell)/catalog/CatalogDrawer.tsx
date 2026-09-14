@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { AlertTriangle, Trash2 } from "lucide-react";
-import { Button, Field, Input } from "@/components/admin/ui";
+import { Button, Field, FormErrors, Input } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import MediaPicker from "@/components/admin/MediaPicker";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
 import type { CatalogRow, DesignRow } from "./CatalogView";
 import { deleteCatalogItem, saveCatalogItem, type CatalogKind } from "./actions";
 
@@ -53,6 +54,7 @@ export default function CatalogDrawer({
   const { t } = useAdminI18n();
   const [form, setForm] = useState<FormState>(empty);
   const [error, setError] = useState<string | null>(null);
+  const [tried, setTried] = useState(false);
   const [pending, startTransition] = useTransition();
   // Its own state rather than a field on the form: this is a list, and the
   // form holds scalars.
@@ -62,6 +64,7 @@ export default function CatalogDrawer({
   useEffect(() => {
     if (!open) return;
     setError(null);
+    setTried(false);
     setForm(
       row
         ? {
@@ -91,7 +94,10 @@ export default function CatalogDrawer({
   // it (lib/refill.ts, the reminder job, the customer's history) keeps working
   // unchanged. The tick is a way of asking the question, not a second field to
   // hold in sync with this one.
-  const hasRefill = Number(form.refillDays) > 0;
+  //
+  // Anything but "0" counts as ticked, so clearing the box to retype it keeps
+  // the box on screen (and asks for a number) instead of unticking under her.
+  const hasRefill = form.refillDays !== "0";
 
   // Remembered so unticking and re-ticking does not lose the length that was
   // typed — an accidental click should cost nothing.
@@ -114,9 +120,45 @@ export default function CatalogDrawer({
           ? t.catalog.newUpsell
           : t.catalog.newRemoval;
 
+  const r = rules(t.validation);
+  const priceLabel = `${t.catalog.price} (${t.common.riyal})`;
+  const offersDesigns = kind === "addon" && form.isSeasonal;
+  const check = () =>
+    collect({
+      nameAr: r.text(t.catalog.nameAr, form.nameAr, { max: 120 }),
+      nameEn: r.text(t.catalog.nameEn, form.nameEn, { max: 120 }),
+      descAr: kind === "service" && r.text(t.catalog.descAr, form.descAr, { required: false, max: 400 }),
+      descEn: kind === "service" && r.text(t.catalog.descEn, form.descEn, { required: false, max: 400 }),
+      priceSar: r.number(priceLabel, form.priceSar, { min: 0, max: 100_000 }),
+      durationMin:
+        kind !== "upsell" &&
+        r.number(t.catalog.duration, form.durationMin, { int: true, min: 0, max: 600 }),
+      refillDays:
+        kind === "service" &&
+        hasRefill &&
+        r.number(t.catalog.refillDays, form.refillDays, { int: true, min: 1, max: 365 }),
+      // A design row with anything in it needs both names; a blank row is
+      // simply dropped on save.
+      ...(offersDesigns
+        ? Object.fromEntries(
+            designs.flatMap((d, i) => {
+              if (!d.name.ar.trim() && !d.name.en.trim() && !d.image) return [];
+              const prefix = `${t.catalog.designs} ${i + 1} · `;
+              return [
+                [`design${i}ar`, r.text(prefix + t.catalog.nameAr, d.name.ar, { max: 120 })],
+                [`design${i}en`, r.text(prefix + t.catalog.nameEn, d.name.en, { max: 120 })],
+              ];
+            }),
+          )
+        : {}),
+    });
+  const errors = tried ? check() : {};
+
   const save = () =>
     startTransition(async () => {
       setError(null);
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
       const res = await saveCatalogItem({
         kind,
         id: row?.id,
@@ -133,14 +175,14 @@ export default function CatalogDrawer({
         designs:
           kind === "addon" && form.isSeasonal
             ? designs
-                .filter((d) => d.name.ar.trim() || d.name.en.trim())
+                .filter((d) => d.name.ar.trim() || d.name.en.trim() || d.image)
                 .map((d) => ({ id: d.id, name: d.name, image: d.image ?? null }))
             : undefined,
         active: form.active,
         sort: row?.sort ?? nextSort,
       });
       if (res.ok) onSaved();
-      else setError(res.error === "save-failed" ? t.common.error : t.common.error);
+      else setError(res.error === "not-found" ? t.validation.notFound : t.common.error);
     });
 
   const remove = () =>
@@ -183,13 +225,19 @@ export default function CatalogDrawer({
         {/* Side-by-side AR/EN, so a missing translation is visible rather than
             buried behind a language switch. */}
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t.catalog.nameAr}>
-            <Input dir="rtl" value={form.nameAr} onChange={(e) => set("nameAr", e.target.value)} />
+          <Field label={t.catalog.nameAr} error={errors.nameAr}>
+            <Input
+              dir="rtl"
+              aria-invalid={!!errors.nameAr}
+              value={form.nameAr}
+              onChange={(e) => set("nameAr", e.target.value)}
+            />
           </Field>
-          <Field label={t.catalog.nameEn}>
+          <Field label={t.catalog.nameEn} error={errors.nameEn}>
             <Input
               dir="ltr"
               className="text-left"
+              aria-invalid={!!errors.nameEn}
               value={form.nameEn}
               onChange={(e) => set("nameEn", e.target.value)}
             />
@@ -208,13 +256,19 @@ export default function CatalogDrawer({
 
         {kind === "service" ? (
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label={t.catalog.descAr}>
-              <Input dir="rtl" value={form.descAr} onChange={(e) => set("descAr", e.target.value)} />
+            <Field label={t.catalog.descAr} error={errors.descAr}>
+              <Input
+                dir="rtl"
+                aria-invalid={!!errors.descAr}
+                value={form.descAr}
+                onChange={(e) => set("descAr", e.target.value)}
+              />
             </Field>
-            <Field label={t.catalog.descEn}>
+            <Field label={t.catalog.descEn} error={errors.descEn}>
               <Input
                 dir="ltr"
                 className="text-left"
+                aria-invalid={!!errors.descEn}
                 value={form.descEn}
                 onChange={(e) => set("descEn", e.target.value)}
               />
@@ -223,13 +277,14 @@ export default function CatalogDrawer({
         ) : null}
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={`${t.catalog.price} (${t.common.riyal})`}>
+          <Field label={priceLabel} error={errors.priceSar}>
             <Input
               type="number"
               min={0}
               step="1"
               dir="ltr"
               className="text-left tabular-nums"
+              aria-invalid={!!errors.priceSar}
               value={form.priceSar}
               onChange={(e) => set("priceSar", e.target.value)}
             />
@@ -237,13 +292,14 @@ export default function CatalogDrawer({
           {/* Not asked of an upsell: it is chosen after the chair has been
               quoted, so it takes no time on it. The action forces 0. */}
           {kind === "upsell" ? null : (
-            <Field label={t.catalog.duration} hint={t.catalog.durationHint}>
+            <Field label={t.catalog.duration} hint={t.catalog.durationHint} error={errors.durationMin}>
               <Input
                 type="number"
                 min={0}
                 step="5"
                 dir="ltr"
                 className="text-left tabular-nums"
+                aria-invalid={!!errors.durationMin}
                 value={form.durationMin}
                 onChange={(e) => set("durationMin", e.target.value)}
               />
@@ -266,7 +322,7 @@ export default function CatalogDrawer({
                 onChange={(e) =>
                   // Ticking restores the last length typed, or the usual 30,
                   // so nobody has to think about a number to answer "yes".
-                  set("refillDays", e.target.checked ? (lastRefillDays.current ?? "30") : "0")
+                  set("refillDays", e.target.checked ? (lastRefillDays.current || "30") : "0")
                 }
                 className="h-4 w-4 accent-red"
               />
@@ -276,7 +332,7 @@ export default function CatalogDrawer({
 
             {hasRefill ? (
               <div className="mt-3">
-                <Field label={t.catalog.refillDays} hint={t.catalog.refillDaysHint}>
+                <Field label={t.catalog.refillDays} hint={t.catalog.refillDaysHint} error={errors.refillDays}>
                   <Input
                     type="number"
                     min={1}
@@ -284,6 +340,7 @@ export default function CatalogDrawer({
                     step="1"
                     dir="ltr"
                     className="text-left tabular-nums"
+                    aria-invalid={!!errors.refillDays}
                     value={form.refillDays}
                     onChange={(e) => set("refillDays", e.target.value)}
                   />
@@ -327,16 +384,18 @@ export default function CatalogDrawer({
                 {designs.map((d, i) => (
                   <div key={i} className="flex flex-wrap items-end gap-3 border-t border-black/[0.05] pt-3 first:border-0 first:pt-0">
                     <div className="grid min-w-[180px] flex-1 gap-2 sm:grid-cols-2">
-                      <Field label={t.catalog.nameAr}>
+                      <Field label={t.catalog.nameAr} error={errors[`design${i}ar`]}>
                         <Input
+                          aria-invalid={!!errors[`design${i}ar`]}
                           value={d.name.ar}
                           onChange={(e) => setDesign(i, { name: { ...d.name, ar: e.target.value } })}
                         />
                       </Field>
-                      <Field label={t.catalog.nameEn}>
+                      <Field label={t.catalog.nameEn} error={errors[`design${i}en`]}>
                         <Input
                           dir="ltr"
                           className="text-left"
+                          aria-invalid={!!errors[`design${i}en`]}
                           value={d.name.en}
                           onChange={(e) => setDesign(i, { name: { ...d.name, en: e.target.value } })}
                         />
@@ -380,11 +439,7 @@ export default function CatalogDrawer({
           />
         </div>
 
-        {error ? (
-          <p role="alert" className="rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
-            {error}
-          </p>
-        ) : null}
+        <FormErrors errors={errors} summary={t.validation.summary} server={error} />
       </div>
     </Drawer>
   );

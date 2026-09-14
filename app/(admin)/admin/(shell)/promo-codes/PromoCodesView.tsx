@@ -2,9 +2,10 @@
 
 import { useState, useTransition } from "react";
 import { Ticket } from "lucide-react";
-import { Badge, Button, Card, EmptyState, Field, Input, PageHeader } from "@/components/admin/ui";
+import { Badge, Button, Card, EmptyState, Field, FormErrors, Input, PageHeader } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
 import { formatDateTime } from "@/lib/time";
 import { savePromoCode, setPromoActive } from "./actions";
 
@@ -45,12 +46,44 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
 
   const [editing, setEditing] = useState<PromoRow | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tried, setTried] = useState(false);
   const [pending, startTransition] = useTransition();
+
+  const open = (row: PromoRow) => {
+    setError(null);
+    setTried(false);
+    setEditing(row);
+  };
+
+  const r = rules(t.validation);
+  const valueLabel = editing?.type === "percent" ? p.percentValue : p.fixedValue;
+  const check = () => {
+    if (!editing) return {};
+    const code = editing.code.trim();
+    return collect({
+      code:
+        r.text(p.code, code, { min: 3, max: 40 }) ||
+        (!/^[A-Za-z0-9]+$/.test(code) && p.errors["code-format"]),
+      value:
+        r.number(valueLabel, editing.value, { positive: true, max: 100_000 }) ||
+        (editing.type === "percent" && editing.value > 100 && p.errors["percent-range"]),
+      minTotalSar: r.number(p.minTotal, editing.minTotalSar, { min: 0, max: 100_000 }),
+      endsAt:
+        editing.startsAt &&
+        editing.endsAt &&
+        editing.endsAt <= editing.startsAt &&
+        p.errors["bad-window"],
+      maxUses: r.number(p.maxUses, editing.maxUses, { required: false, int: true, min: 1, max: 1_000_000 }),
+    });
+  };
+  const errors = tried ? check() : {};
 
   const save = () => {
     if (!editing) return;
     startTransition(async () => {
       setError(null);
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
       const res = await savePromoCode({
         id: editing.id || undefined,
         code: editing.code,
@@ -77,7 +110,7 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
       <PageHeader
         title={p.title}
         subtitle={p.subtitle}
-        action={<Button onClick={() => setEditing(blank())}>{p.newCode}</Button>}
+        action={<Button onClick={() => open(blank())}>{p.newCode}</Button>}
       />
 
       <Card className="overflow-hidden">
@@ -142,7 +175,7 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
                     </td>
                     <td className="px-4 py-3 text-end">
                       <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="secondary" onClick={() => setEditing(row)}>
+                        <Button size="sm" variant="secondary" onClick={() => open(row)}>
                           {t.common.edit}
                         </Button>
                         <Button
@@ -172,7 +205,7 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
             <Button variant="secondary" onClick={() => setEditing(null)}>
               {t.common.cancel}
             </Button>
-            <Button onClick={save} disabled={pending || !editing?.code.trim()}>
+            <Button onClick={save} disabled={pending}>
               {pending ? t.common.saving : t.common.save}
             </Button>
           </>
@@ -180,8 +213,9 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
       >
         {editing && (
           <div className="space-y-4">
-            <Field label={p.code} hint={p.codeHint}>
+            <Field label={p.code} hint={p.codeHint} error={errors.code}>
               <Input
+                aria-invalid={!!errors.code}
                 value={editing.code}
                 onChange={(e) =>
                   setEditing({ ...editing, code: e.target.value.toUpperCase().replace(/\s/g, "") })
@@ -208,10 +242,12 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
             </Field>
 
             <Field
-              label={editing.type === "percent" ? p.percentValue : p.fixedValue}
+              label={valueLabel}
               hint={editing.type === "percent" ? p.percentHint : undefined}
+              error={errors.value}
             >
               <Input
+                aria-invalid={!!errors.value}
                 type="number"
                 min={1}
                 max={editing.type === "percent" ? 100 : undefined}
@@ -221,8 +257,9 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
               />
             </Field>
 
-            <Field label={p.minTotal} hint={p.minTotalHint}>
+            <Field label={p.minTotal} hint={p.minTotalHint} error={errors.minTotalSar}>
               <Input
+                aria-invalid={!!errors.minTotalSar}
                 type="number"
                 min={0}
                 value={editing.minTotalSar}
@@ -240,8 +277,9 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
                   dir="ltr"
                 />
               </Field>
-              <Field label={p.endsAt}>
+              <Field label={p.endsAt} error={errors.endsAt}>
                 <Input
+                  aria-invalid={!!errors.endsAt}
                   type="datetime-local"
                   value={toLocalInput(editing.endsAt)}
                   onChange={(e) => setEditing({ ...editing, endsAt: toIso(e.target.value) })}
@@ -250,8 +288,9 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
               </Field>
             </div>
 
-            <Field label={p.maxUses} hint={p.maxUsesHint}>
+            <Field label={p.maxUses} hint={p.maxUsesHint} error={errors.maxUses}>
               <Input
+                aria-invalid={!!errors.maxUses}
                 type="number"
                 min={1}
                 value={editing.maxUses ?? ""}
@@ -276,11 +315,7 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
               {p.activeLabel}
             </label>
 
-            {error && (
-              <p role="alert" className="rounded-xl bg-red/[0.08] px-4 py-3 text-xs text-red">
-                {error}
-              </p>
-            )}
+            <FormErrors errors={errors} summary={t.validation.summary} server={error} />
           </div>
         )}
       </Drawer>

@@ -3,9 +3,21 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Ban, Search, Users } from "lucide-react";
-import { Badge, Button, Card, EmptyState, Field, Input, PageHeader } from "@/components/admin/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  FormErrors,
+  Input,
+  invalidRing,
+  PageHeader,
+} from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
+import { cn } from "@/lib/cn";
 import { pick } from "@/lib/localized";
 import type { Localized } from "@/lib/db/schema";
 import { STATUS_TONE, type BookingStatus } from "../bookings/BookingsView";
@@ -156,6 +168,8 @@ function CustomerDrawer({
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
   const [blocked, setBlocked] = useState(false);
+  const [tried, setTried] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (customer && loadedId !== customer.id) {
     setLoadedId(customer.id);
@@ -163,9 +177,32 @@ function CustomerDrawer({
     setEmail(customer.email ?? "");
     setNotes(customer.notes ?? "");
     setBlocked(customer.blocked);
+    setTried(false);
+    setError(null);
   }
 
   if (!customer) return null;
+
+  const r = rules(t.validation);
+  const check = () =>
+    collect({
+      name: r.text(t.customers.name, name, { required: false, max: 120 }),
+      email: r.email(t.customers.email, email),
+      notes: notes.length > 2000 && t.validation.tooLong(t.customers.notes, 2000),
+    });
+  const errors = tried ? check() : {};
+
+  const save = () =>
+    startTransition(async () => {
+      setError(null);
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
+      // It used to close whatever came back, so a refused save looked like a
+      // successful one.
+      const res = await updateCustomer({ id: customer.id, name, email: email.trim(), notes, blocked });
+      if (res.ok) onSaved();
+      else setError(res.error === "not-found" ? t.validation.notFound : t.common.error);
+    });
 
   return (
     <Drawer
@@ -178,16 +215,7 @@ function CustomerDrawer({
           <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
             {t.common.cancel}
           </Button>
-          <Button
-            size="sm"
-            disabled={pending}
-            onClick={() =>
-              startTransition(async () => {
-                await updateCustomer({ id: customer.id, name, email, notes, blocked });
-                onSaved();
-              })
-            }
-          >
+          <Button size="sm" disabled={pending} onClick={save}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>
@@ -208,8 +236,8 @@ function CustomerDrawer({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t.customers.name}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
+          <Field label={t.customers.name} error={errors.name}>
+            <Input aria-invalid={!!errors.name} value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
           <Field label={t.customers.phone}>
             {/* The phone is the customer's identity key — changing it here would
@@ -218,18 +246,31 @@ function CustomerDrawer({
           </Field>
         </div>
 
-        <Field label={t.customers.email}>
-          <Input type="email" dir="ltr" className="text-left" value={email} onChange={(e) => setEmail(e.target.value)} />
-        </Field>
-
-        <Field label={t.customers.notes}>
-          <textarea
-            rows={3}
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            className="w-full resize-none rounded-xl border border-black/10 bg-white px-3 py-2 text-start text-sm text-ink outline-none focus:border-sky focus:ring-2 focus:ring-sky/20"
+        <Field label={t.customers.email} error={errors.email}>
+          <Input
+            type="email"
+            dir="ltr"
+            className="text-left"
+            aria-invalid={!!errors.email}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
           />
         </Field>
+
+        <Field label={t.customers.notes} error={errors.notes}>
+          <textarea
+            rows={3}
+            aria-invalid={!!errors.notes}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            className={cn(
+              "w-full resize-none rounded-xl border border-black/10 bg-white px-3 py-2 text-start text-sm text-ink outline-none focus:border-sky focus:ring-2 focus:ring-sky/20",
+              invalidRing,
+            )}
+          />
+        </Field>
+
+        <FormErrors errors={errors} summary={t.validation.summary} server={error} />
 
         <label className="flex items-start justify-between gap-4 rounded-xl border border-black/[0.06] bg-white px-4 py-3">
           <span className="text-start">
