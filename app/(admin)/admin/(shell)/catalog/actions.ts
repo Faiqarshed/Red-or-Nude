@@ -8,26 +8,35 @@
 // the customer-facing booking page now reads.
 
 import { revalidatePath } from "next/cache";
-import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { addons, designs, removalTypes, services } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
+import { reorderBySort } from "@/lib/admin/reorder";
 
-export type CatalogKind = "service" | "addon" | "removal";
+/**
+ * `upsell` is the coffee-and-cookie kind. Same `addons` table as `addon` — which
+ * is what lets the booking engine price it with no new code — but a separate
+ * kind here, because to the salon it is not an add-on: it is never offered
+ * beside the services, only at checkout.
+ */
+export type CatalogKind = "service" | "addon" | "removal" | "upsell";
 
 const TABLES = {
   service: services,
   addon: addons,
   removal: removalTypes,
+  upsell: addons,
 } as const;
 
 const ENTITY: Record<CatalogKind, string> = {
   service: "services",
   addon: "addons",
   removal: "removal_types",
+  upsell: "addons",
 };
 
 const localizedText = z.object({
@@ -36,7 +45,7 @@ const localizedText = z.object({
 });
 
 const itemSchema = z.object({
-  kind: z.enum(["service", "addon", "removal"]),
+  kind: z.enum(["service", "addon", "removal", "upsell"]),
   id: z.string().uuid().optional(),
   name: localizedText,
   description: z
@@ -143,7 +152,18 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
         }
       : data.kind === "addon"
         ? { ...common, image: data.image ?? null, isSeasonal: data.isSeasonal ?? false }
-        : common;
+        : data.kind === "upsell"
+          ? {
+              ...common,
+              image: data.image ?? null,
+              atCheckout: true,
+              // Forced, not asked. A checkout upsell is picked after the chair
+              // has been quoted, so any duration would move `ends_at` under a
+              // booking that is already about to be held. The form does not
+              // offer the field; this is what makes that a rule.
+              durationMin: 0,
+            }
+          : common;
 
   try {
     if (data.id) {
@@ -223,33 +243,23 @@ export async function moveCatalogItem(
   direction: "up" | "down",
 ): Promise<ActionResult> {
   const actor = await requireCan("catalog.manage");
-  const table = TABLES[kind];
 
-  const rows = await db
-    .select({ id: table.id, sort: table.sort })
-    .from(table)
-    .orderBy(asc(table.sort), asc(table.id));
+  // `addon` and `upsell` share one table, and the admin lists them as two tabs
+  // with their own arrows. Scoped, or moving an upsell would swap places with an
+  // ordinary add-on that is nowhere near it on screen.
+  const within =
+    kind === "addon" || kind === "upsell"
+      ? eq(addons.atCheckout, kind === "upsell")
+      : undefined;
 
-  const index = rows.findIndex((r) => r.id === id);
-  const target = direction === "up" ? index - 1 : index + 1;
-  if (index < 0 || target < 0 || target >= rows.length) return { ok: true, id };
-
-  // Rewrite the whole column so pre-existing duplicate sort values can't make
-  // a swap a no-op.
-  const reordered = [...rows];
-  [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
-
-  await db.transaction(async (tx) => {
-    for (const [position, row] of reordered.entries()) {
-      await tx.update(table).set({ sort: position }).where(eq(table.id, row.id));
-    }
-  });
+  const moved = await reorderBySort(TABLES[kind], id, direction, within);
+  if (!moved) return { ok: true, id };
 
   await recordAudit(actor, {
     action: "reorder",
     entity: ENTITY[kind],
     entityId: id,
-    diff: { sort: { from: index, to: target } },
+    diff: { sort: { from: moved.from, to: moved.to } },
   });
   revalidateAll();
   return { ok: true, id };

@@ -1,4 +1,5 @@
 import { requirePage } from "@/lib/auth/guard";
+import { can } from "@/lib/auth/rbac";
 import { branchScope } from "@/lib/admin/branch-scope";
 import { loadFloor } from "./data";
 import FloorView from "./FloorView";
@@ -27,6 +28,7 @@ export default async function FloorPage({
       data={await loadFloor(branchId)}
       branchId={branchId}
       branchOptions={options}
+      canReschedule={can(user.role, "bookings.reschedule")}
     />
   );
 }

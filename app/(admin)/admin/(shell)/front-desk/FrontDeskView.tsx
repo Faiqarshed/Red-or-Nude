@@ -625,6 +625,10 @@ export default function FrontDeskView({
         partners={
           open?.groupId ? data.rows.filter((r) => r.groupId === open.groupId && r.id !== open.id) : []
         }
+        partnersElsewhere={
+          open?.groupId ? data.partnersElsewhere.filter((p) => p.groupId === open.groupId) : []
+        }
+        branchName={data.branchName}
         canSetStatus={canSetStatus}
         canReschedule={canReschedule}
         // Never from the desk, whoever is signed in. Deleting is a records job

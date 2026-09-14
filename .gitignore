@@ -18,3 +18,16 @@ npm-debug.log*
 
 # Client brief docs (local only)
 /brief/
+
+# Local vitest harness (local only, never deployed).
+#
+# The suites under /tests exercise the booking engine, the payment path and the
+# pack ledger against a real local Postgres, and they are deliberately not part
+# of the repo: they need TEST_DATABASE_URL pointed at a throwaway `*_test`
+# database and they build their fixtures by deleting rows. The committed checks
+# are the `npm run check:*` scripts under scripts/.
+#
+# Anchored with a leading slash so this only hides the harness at the root — a
+# `tests/` folder anywhere else in the tree is still tracked as normal.
+/tests/
+/vitest.config.mts

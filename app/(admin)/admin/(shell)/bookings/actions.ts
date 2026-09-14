@@ -4,10 +4,11 @@ import { revalidatePath } from "next/cache";
 import { and, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookings, loyaltyTxns, payments, reviews } from "@/lib/db/schema";
+import { bookings, loyaltyTxns, packTxns, payments, reviews } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { can } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
+import { returnPackCredits } from "@/lib/packs";
 import { createBooking, rescheduleBooking as moveBooking } from "@/lib/bookings";
 import { inviteReview } from "@/lib/reviews/invite";
 import { assignIfToday, notifyTechnician, pickTechnician } from "@/lib/assign";
@@ -97,6 +98,25 @@ export async function setBookingStatus(
       updatedAt: now,
     })
     .where(eq(bookings.id, id));
+
+  // Unconditionally, unlike the self-service button. `cancel_cutoff_hours`
+  // governs that one because cancelling late is her choice; none of it applies
+  // when the desk cancels — technician off sick, branch shut — and she should
+  // not lose an appointment she paid for over a decision that was not hers.
+  //
+  // Not resolveNoShow, which also ends at `cancelled`: she did not come, and the
+  // credit goes the way the money goes.
+  // Never allowed to fail the cancellation, the same bargain the customer's
+  // route strikes and inviteReview below: the chair is already released, and a
+  // credit that did not come back is a support ticket, not a reason to throw
+  // away the audit row and tell the desk an appointment is still standing.
+  if (entering("cancelled")) {
+    try {
+      await returnPackCredits([id], "salon-cancelled");
+    } catch (err) {
+      console.error("[bookings] could not return pack credits", err);
+    }
+  }
 
   await recordAudit(actor, {
     action: status === "cancelled" ? "cancel" : "update",
@@ -417,7 +437,7 @@ export async function deleteBooking(id: string): Promise<Result> {
     : [before];
   const ids = members.map((m) => m.id);
 
-  const [paid, reviewed, points] = await Promise.all([
+  const [paid, reviewed, points, credits] = await Promise.all([
     db
       .select({ id: payments.id })
       .from(payments)
@@ -429,11 +449,18 @@ export async function deleteBooking(id: string): Promise<Result> {
       .where(and(inArray(reviews.bookingId, ids), isNotNull(reviews.submittedAt)))
       .limit(1),
     db.select({ id: loyaltyTxns.id }).from(loyaltyTxns).where(inArray(loyaltyTxns.bookingId, ids)).limit(1),
+    // A spent pack credit, for exactly the reason points are refused above — it
+    // is the customer's balance, not a log beside it. And worse here than there:
+    // pack_txns.booking_id is `set null`, so the -1 would survive the delete
+    // pointing at nothing, and returnPackCredits matches by booking. The credit
+    // could then never come back to her by any path at all.
+    db.select({ id: packTxns.id }).from(packTxns).where(inArray(packTxns.bookingId, ids)).limit(1),
   ]);
 
   if (paid.length) return { ok: false, error: "has-payment" };
   if (reviewed.length) return { ok: false, error: "has-review" };
   if (points.length) return { ok: false, error: "has-points" };
+  if (credits.length) return { ok: false, error: "has-pack-credit" };
 
   for (const m of members) {
     await recordAudit(actor, {

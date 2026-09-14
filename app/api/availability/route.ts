@@ -18,8 +18,10 @@ const query = z.object({
   duration: z.coerce.number().int().min(5).max(600).default(60),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
-  // How many chairs must be free at once — 2 when booking for a pair.
-  guests: z.coerce.number().int().min(1).max(2).default(1),
+  // How many chairs must be free at once. The group screen asks for one at a
+  // time now, since each guest picks her own branch and hour — but a party that
+  // wants the same slot together still asks for all of them at once.
+  guests: z.coerce.number().int().min(1).max(4).default(1),
   /**
    * The receptionist is seating someone who is already here, so the booking lead
    * time does not apply. Requested by the walk-in drawer only.
@@ -69,6 +71,13 @@ export async function GET(request: Request) {
       // reason the picker has to show, and without it every unbookable slot
       // renders as "taken" whether the chairs were free or not.
       //
+      // `freeCount` is how many, which is a different question from which, and
+      // the group picker cannot do its job without it. Every guest asks this
+      // endpoint on her own — nothing is reserved until the party pays — so four
+      // friends are each told, truthfully, that the branch's last chair is free.
+      // The count is what lets the screen subtract the friends it already knows
+      // about before showing an hour as green. See ScheduleModal's `partyHolds`.
+      //
       // `leadTimeMin` rides along so the picker can state the rule exactly. It
       // cannot be inferred from the slots — the first bookable one is wherever
       // the grid happens to fall after the cutoff, which is a different number.
@@ -76,11 +85,12 @@ export async function GET(request: Request) {
       const { booking_lead_time_min } = await getSettings(["booking_lead_time_min"]);
       return NextResponse.json({
         leadTimeMin: staff ? 0 : booking_lead_time_min,
-        slots: slots.map(({ time, startsAt, available, blockedBy }) => ({
+        slots: slots.map(({ time, startsAt, available, blockedBy, freeStationIds }) => ({
           time,
           startsAt,
           available,
           blockedBy,
+          freeCount: freeStationIds.length,
         })),
       });
     }

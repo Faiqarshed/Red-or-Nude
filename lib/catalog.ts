@@ -16,6 +16,8 @@ import {
   designs,
   giftCardDesigns,
   giftCardValues,
+  packServices,
+  packs,
   removalTypes,
   services,
 } from "@/lib/db/schema";
@@ -35,6 +37,12 @@ export type CatalogItem = {
 export type PublicCatalog = {
   services: (CatalogItem & { description: Localized | null })[];
   addons: (CatalogItem & { seasonal: boolean })[];
+  /**
+   * Offered on the payment page instead of beside the services — the coffee and
+   * cookie. Kept as its own list so the pickers keep showing service add-ons
+   * only and this one cannot appear in two places.
+   */
+  checkoutAddons: CatalogItem[];
   removals: CatalogItem[];
   /**
    * Every design, each tagged with the add-on whose picker shows it. Kept as
@@ -71,6 +79,14 @@ export async function getPublicCatalog(): Promise<PublicCatalog> {
     db.select().from(designs).where(eq(designs.active, true)).orderBy(asc(designs.sort)),
   ]);
 
+  const addonItem = (r: (typeof addonRows)[number]) => ({
+    id: r.id,
+    name: r.name,
+    price: halalasToSar(r.priceHalalas),
+    img: mediaUrl(r.image),
+    durationMin: r.durationMin,
+  });
+
   return {
     services: serviceRows.map((r) => ({
       id: r.id,
@@ -80,14 +96,10 @@ export async function getPublicCatalog(): Promise<PublicCatalog> {
       img: mediaUrl(r.image),
       durationMin: r.durationMin,
     })),
-    addons: addonRows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      price: halalasToSar(r.priceHalalas),
-      img: mediaUrl(r.image),
-      durationMin: r.durationMin,
-      seasonal: r.isSeasonal,
-    })),
+    addons: addonRows
+      .filter((r) => !r.atCheckout)
+      .map((r) => ({ ...addonItem(r), seasonal: r.isSeasonal })),
+    checkoutAddons: addonRows.filter((r) => r.atCheckout).map(addonItem),
     removals: removalRows.map((r) => ({
       id: r.id,
       name: r.name,
@@ -102,6 +114,80 @@ export async function getPublicCatalog(): Promise<PublicCatalog> {
       img: mediaUrl(r.image),
     })),
   };
+}
+
+// ---- membership packs -------------------------------------------------------
+
+export type PublicPack = {
+  id: string;
+  name: Localized;
+  description: Localized | null;
+  priceSar: number;
+  validDays: number;
+  img: string | null;
+  /**
+   * What is in it, in catalogue order. With the service's own picture, blurb
+   * and length, so she can see what a line is before paying for six of it —
+   * the same fields the booking grid already shows for that service.
+   */
+  lines: {
+    serviceId: string;
+    name: Localized;
+    quantity: number;
+    description: Localized | null;
+    img: string | null;
+    durationMin: number;
+  }[];
+  /** What the same services cost bought one at a time. The reason to buy one. */
+  listPriceSar: number;
+};
+
+/** Packs on the shelf, with their contents resolved. Admin-managed, like everything else. */
+export async function getPublicPacks(): Promise<PublicPack[]> {
+  const [packRows, lineRows, serviceRows] = await Promise.all([
+    db.select().from(packs).where(eq(packs.active, true)).orderBy(asc(packs.sort)),
+    db.select().from(packServices),
+    // Active only, as getPublicCatalog reads them. A pack is a promise of
+    // appointments, and a service the salon switched off is one she could buy a
+    // credit for and then never find in the booking list.
+    db.select().from(services).where(eq(services.active, true)).orderBy(asc(services.sort)),
+  ]);
+
+  return packRows.flatMap((p) => {
+    // Priced while the service row is still to hand — the total is the only
+    // part anybody outside needs, so the per-line price never leaves.
+    let listPriceSar = 0;
+    const lines = serviceRows
+      .filter((s) => lineRows.some((l) => l.packId === p.id && l.serviceId === s.id))
+      .map((s) => {
+        const quantity = lineRows.find((l) => l.packId === p.id && l.serviceId === s.id)!.quantity;
+        listPriceSar += halalasToSar(s.priceHalalas) * quantity;
+        return {
+          serviceId: s.id,
+          name: s.name,
+          quantity,
+          description: s.description,
+          img: mediaUrl(s.image),
+          durationMin: s.durationMin,
+        };
+      });
+
+    // Off the shelf entirely rather than quietly short. Selling it at the full
+    // price minus a service is worse than not selling it, and the gap is what
+    // tells the salon to go and fix the pack.
+    if (lines.length !== lineRows.filter((l) => l.packId === p.id).length) return [];
+
+    return {
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      priceSar: halalasToSar(p.priceHalalas),
+      validDays: p.validDays,
+      img: mediaUrl(p.image),
+      lines,
+      listPriceSar,
+    };
+  });
 }
 
 // ---- gift cards -------------------------------------------------------------

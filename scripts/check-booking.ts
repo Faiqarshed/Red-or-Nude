@@ -15,15 +15,33 @@
 import "./_test-db";
 
 import assert from "node:assert";
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, inArray, like, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, branches, customers, services, stations } from "@/lib/db/schema";
+import { addons, bookings, branches, customers, services, stations, ticketCounters } from "@/lib/db/schema";
 import { createBooking, createBookings, sweepNoShows } from "@/lib/bookings";
+import { confirmBookingPayment } from "@/lib/payments/confirm";
+import { utcToLocalDate } from "@/lib/availability";
 import { splitGroupPrice, vatIncludedIn } from "@/lib/money";
-import { refillDaysLeft, refillPriceHalalas } from "@/lib/refill";
+import { refillDaysLeft } from "@/lib/refill";
 import { formatTicketNo } from "@/lib/tickets";
 
 const TEST_PHONE = "0500000001";
+
+/**
+ * Inverse of formatTicketNo, so "B99" and "C1" read as consecutive. The counter
+ * is per branch per day and survives cleanup(), so which side of a letter
+ * boundary a fixture lands on is luck — comparing the digits alone fails there.
+ */
+const ticketOrdinal = (t: string) => (t.charCodeAt(0) - 65) * 99 + Number(t.slice(1));
+
+/** Where each branch's ticket queue has got to, so a run can assert it moved. */
+async function counters(branchIds: string[], day: string): Promise<Record<string, number>> {
+  const rows = await db
+    .select()
+    .from(ticketCounters)
+    .where(and(inArray(ticketCounters.branchId, branchIds), eq(ticketCounters.day, day)));
+  return Object.fromEntries(branchIds.map((id) => [id, rows.find((r) => r.branchId === id)?.next ?? 1]));
+}
 
 async function cleanup(branchId: string) {
   await db.delete(bookings).where(eq(bookings.branchId, branchId));
@@ -120,19 +138,6 @@ function checkRefill() {
     "a past confirmed booking counts as served even if staff never pressed End",
   );
 
-  // Pricing: never a fraction of a halala, and the ends behave.
-  assert.equal(refillPriceHalalas(28000, 50), 14000);
-  assert.equal(refillPriceHalalas(15000, 40), 9000);
-  assert.equal(refillPriceHalalas(12345, 33), 8271); // 12345 - round(4073.85)
-  assert.equal(refillPriceHalalas(28000, 0), 28000, "0% off is full price");
-  assert.equal(refillPriceHalalas(28000, 100), 0);
-  for (const price of [100, 9999, 28000, 33333]) {
-    for (const pct of [0, 15, 33, 50, 99, 100]) {
-      const out = refillPriceHalalas(price, pct);
-      assert.ok(Number.isInteger(out), "money stays in whole halalas");
-      assert.ok(out >= 0 && out <= price, "a refill is never free money or a surcharge");
-    }
-  }
   console.log("  refill: window opens, counts down, and shuts ✓");
 }
 
@@ -254,7 +259,7 @@ async function main() {
   const [t1, t2] = group.bookings.map((b) => b.ticketNo!);
   assert.ok(t1 && t2, "a confirmed booking must carry a ticket");
   assert.equal(
-    Number(t2.slice(1)) - Number(t1.slice(1)),
+    ticketOrdinal(t2) - ticketOrdinal(t1),
     1,
     `group tickets must be consecutive, got ${t1} and ${t2}`,
   );
@@ -274,6 +279,314 @@ async function main() {
     assert.ok(row.discountHalalas > 0, "each group row carries its share of the discount");
   }
   console.log("  group: subtotal + VAT == total on both rows ✓");
+
+  // -- Four guests, each with her own hour ----------------------------------
+  // The engine always took any N; what is new is that a member may carry her own
+  // branch and start. Two here sit at the party's hour and two sit four hours
+  // later, which is the case a single party-wide reservation could not express:
+  // the later pair may reuse a chair the earlier pair has finished with.
+  await cleanup(branch.id);
+  const later = new Date(base + 240 * 60_000).toISOString();
+  const four = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: TEST_PHONE },
+    source: "web",
+    status: "confirmed",
+    members: [
+      { serviceId: svcA.id, addonIds: [] },
+      { serviceId: svcB.id, addonIds: [] },
+      { serviceId: svcA.id, addonIds: [], startsAt: later },
+      { serviceId: svcB.id, addonIds: [], startsAt: later },
+    ],
+  });
+  assert.ok(four.ok, `four guests failed: ${four.ok ? "" : four.error}`);
+  assert.equal(four.bookings.length, 4, "four guests, four bookings");
+
+  const fourRows = await db.select().from(bookings).where(eq(bookings.groupId, four.groupId!));
+  assert.equal(fourRows.length, 4, "all four must share the group id");
+
+  // The two who asked for the same moment cannot be given the same chair, and
+  // this is the pair that would collide if reservation forgot what it had just
+  // promised inside the transaction.
+  const atBase = fourRows.filter((r) => r.startsAt.getTime() === base);
+  assert.equal(atBase.length, 2, "two guests kept the party's hour");
+  assert.notEqual(atBase[0].stationId, atBase[1].stationId, "same hour must mean different chairs");
+  assert.equal(
+    fourRows.filter((r) => r.startsAt.toISOString() === later).length,
+    2,
+    "two guests kept their own later hour",
+  );
+
+  // One discount, over all four, however they are spread across the day.
+  const gross4 = 2 * svcA.priceHalalas + 2 * svcB.priceHalalas;
+  assert.equal(
+    four.totalHalalas,
+    gross4 - Math.round(gross4 * 0.1),
+    "the group discount covers a party that is not sitting together",
+  );
+  console.log("  group of four: own hours, own chairs, one discount ✓");
+
+  // -- One day is the whole of what a party shares --------------------------
+  await cleanup(branch.id);
+  const nextDay = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: TEST_PHONE },
+    source: "web",
+    status: "confirmed",
+    members: [
+      { serviceId: svcA.id, addonIds: [] },
+      { serviceId: svcB.id, addonIds: [], startsAt: new Date(base + 24 * 3_600_000).toISOString() },
+    ],
+  });
+  assert.ok(!nextDay.ok, "a guest on another day is not a group booking");
+  assert.equal(nextDay.ok ? "" : nextDay.error, "different-day");
+  console.log("  group: a guest on another day is refused ✓");
+
+  // -- A party split across two salons takes a number from each -------------
+  // ticket_counters is keyed (branch_id, day), so the guest at the other branch
+  // must draw from that branch's queue rather than a queue she is not standing
+  // in. Skipped rather than failed where the seed has only one branch.
+  const [other] = await db
+    .select()
+    .from(branches)
+    .where(ne(branches.id, branch.id))
+    .limit(1);
+  const otherChairs = other
+    ? await db
+        .select()
+        .from(stations)
+        .where(and(eq(stations.branchId, other.id), eq(stations.active, true)))
+    : [];
+
+  if (other && otherChairs.length > 0) {
+    await cleanup(branch.id);
+    await cleanup(other.id);
+    const day = utcToLocalDate(new Date(base));
+    const before = await counters([branch.id, other.id], day);
+
+    const apart = await createBookings({
+      branchId: branch.id,
+      startsAt: new Date(base).toISOString(),
+      customer: { phone: TEST_PHONE },
+      source: "web",
+      status: "confirmed",
+      members: [
+        { serviceId: svcA.id, addonIds: [] },
+        { serviceId: svcB.id, addonIds: [], branchId: other.id },
+      ],
+    });
+    assert.ok(apart.ok, `split party failed: ${apart.ok ? "" : apart.error}`);
+
+    const apartRows = await db.select().from(bookings).where(eq(bookings.groupId, apart.groupId!));
+    assert.deepEqual(
+      apartRows.map((r) => r.branchId).sort(),
+      [branch.id, other.id].sort(),
+      "each guest's row belongs to the salon she is sitting in",
+    );
+
+    const after = await counters([branch.id, other.id], day);
+    assert.equal(after[branch.id] - before[branch.id], 1, "one number from this branch");
+    assert.equal(after[other.id] - before[other.id], 1, "one number from the other branch");
+    assert.ok(apartRows.every((r) => r.ticketNo), "both guests get a ticket");
+    await cleanup(other.id);
+    console.log("  group: split across two salons, a ticket from each queue ✓");
+
+    // -- The same, down the path a customer actually walks -----------------
+    // The block above books `confirmed`, which is the walk-in shape: the desk
+    // seats her and createBookings issues the number on the spot. The web does
+    // not do that. It holds the chairs `pending` and the number is issued by
+    // confirmBookingPayment once the card clears — a different function, which
+    // has to split the party by branch for itself. Asserting only the walk-in
+    // path is how a party could draw both numbers from one queue and no check
+    // would notice.
+    //
+    // The queues are deliberately left at different positions first, so "she
+    // took a number from the right branch" is a statement the numbers can
+    // actually distinguish.
+    await cleanup(branch.id);
+    await cleanup(other.id);
+
+    const bump = await createBooking({
+      branchId: other.id,
+      serviceId: svcA.id,
+      addonIds: [],
+      startsAt: new Date(base).toISOString(),
+      customer: { phone: TEST_PHONE },
+      source: "walk_in",
+    });
+    assert.ok(bump.ok, "could not move the other branch's queue on");
+
+    const paidDay = utcToLocalDate(new Date(base + 60 * 60_000));
+    const beforePaid = await counters([branch.id, other.id], paidDay);
+
+    const held = await createBookings({
+      branchId: branch.id,
+      startsAt: new Date(base + 60 * 60_000).toISOString(),
+      customer: { phone: TEST_PHONE },
+      source: "web",
+      // The web shape: chairs held, nothing issued until the card clears.
+      status: "pending",
+      members: [
+        { serviceId: svcA.id, addonIds: [] },
+        { serviceId: svcB.id, addonIds: [], branchId: other.id },
+      ],
+    });
+    assert.ok(held.ok, `split hold failed: ${held.ok ? "" : held.error}`);
+    assert.ok(
+      held.bookings.every((b) => b.ticketNo === null),
+      "a pending hold has no number yet",
+    );
+
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    assert.ok(paid.ok, `confirming the split party failed: ${paid.ok ? "" : paid.error}`);
+
+    const afterPaid = await counters([branch.id, other.id], paidDay);
+    assert.equal(
+      afterPaid[branch.id] - beforePaid[branch.id],
+      1,
+      "one number from this branch's queue, on payment",
+    );
+    assert.equal(
+      afterPaid[other.id] - beforePaid[other.id],
+      1,
+      "one number from the other branch's queue, on payment",
+    );
+
+    const paidRows = await db.select().from(bookings).where(eq(bookings.groupId, held.groupId!));
+    for (const row of paidRows) {
+      assert.ok(row.ticketNo, "every guest leaves with a number");
+      assert.equal(
+        ticketOrdinal(row.ticketNo!),
+        ticketOrdinal(formatTicketNo(beforePaid[row.branchId])),
+        "her number is the next one from the queue she will be standing in",
+      );
+    }
+
+    // -- A refusal says which guest could not be seated --------------------
+    // The party is refused as a whole and that part is right: they came out
+    // together. But four guests now hold four hours at up to four branches, and
+    // "that time has gone" does not say which of them to change. So the refusal
+    // carries the guest it was about (docs/SCOPE-ENHANCEMENT.md §5.1).
+    //
+    // Guest 0 can be seated and guest 1 cannot, so a refusal that simply
+    // pointed at the first guest — or at nobody — would still pass the two
+    // assertions above it. The index is the whole point of the check.
+    await cleanup(branch.id);
+    await cleanup(other.id);
+
+    const wall = new Date(base + 2 * 60 * 60_000).toISOString();
+    for (let i = 0; i < otherChairs.length; i++) {
+      const filled = await createBooking({
+        branchId: other.id,
+        serviceId: svcA.id,
+        addonIds: [],
+        startsAt: wall,
+        customer: { phone: TEST_PHONE },
+        source: "walk_in",
+      });
+      assert.ok(filled.ok, "could not fill the other branch's chairs");
+    }
+
+    const refused = await createBookings({
+      branchId: branch.id,
+      startsAt: wall,
+      customer: { phone: TEST_PHONE },
+      source: "web",
+      status: "pending",
+      members: [
+        // Room for her here.
+        { serviceId: svcA.id, addonIds: [] },
+        // Nowhere left to sit over there.
+        { serviceId: svcB.id, addonIds: [], branchId: other.id },
+      ],
+    });
+    assert.ok(!refused.ok, "a party with nowhere to seat one guest must be refused");
+    assert.equal(refused.ok ? "" : refused.error, "slot-taken");
+    assert.equal(
+      refused.ok ? -1 : refused.guestIndex,
+      1,
+      "the refusal names the guest who could not be seated, not the first one",
+    );
+    console.log("  group: the refusal says which guest could not be seated ✓");
+
+    await cleanup(other.id);
+    console.log("  group: split across two salons, paid for on the web, a ticket from each ✓");
+  }
+
+  // -- The checkout upsell (coffee and a cookie) ----------------------------
+  // Picked on the payment page, after the chair has been quoted and while it is
+  // about to be held. So it must add its price to the bill and nothing at all to
+  // the chair's time — an at_checkout add-on with a duration would move ends_at
+  // underneath a booking that has already been priced and reserved.
+  await cleanup(branch.id);
+  const [treat] = await db
+    .select()
+    .from(addons)
+    .where(and(eq(addons.atCheckout, true), eq(addons.active, true)))
+    .limit(1);
+  assert.ok(treat, "migration 0016 must leave one active at_checkout add-on");
+  assert.equal(treat.durationMin, 0, "a checkout add-on must not lengthen the appointment");
+
+  const treated = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: TEST_PHONE },
+    source: "web",
+    status: "confirmed",
+    members: [{ serviceId: svcA.id, addonIds: [treat.id] }],
+  });
+  assert.ok(treated.ok, `checkout add-on booking failed: ${treated.ok ? "" : treated.error}`);
+  assert.equal(
+    treated.totalHalalas,
+    svcA.priceHalalas + treat.priceHalalas,
+    "the coffee is billed by the add-on machinery, at its catalogue price",
+  );
+
+  const [treatedRow] = await db
+    .select()
+    .from(bookings)
+    .where(eq(bookings.id, treated.bookings[0].id));
+  assert.equal(
+    (treatedRow.endsAt.getTime() - treatedRow.startsAt.getTime()) / 60_000,
+    svcA.durationMin,
+    "a coffee must not move ends_at",
+  );
+  console.log("  checkout add-on: billed, chair unchanged ✓");
+
+  // And it is never discounted. The group discount applies to the services on
+  // the bill, not to the refreshments — 10 SAR is 10 SAR however many people
+  // booked together. This is the assertion that would catch it drifting back
+  // inside splitGroupPrice.
+  await cleanup(branch.id);
+  const groupTreat = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: TEST_PHONE },
+    source: "web",
+    status: "confirmed",
+    members: [
+      { serviceId: svcA.id, addonIds: [treat.id] },
+      { serviceId: svcB.id, addonIds: [] },
+    ],
+  });
+  assert.ok(groupTreat.ok, `group with a treat failed: ${groupTreat.ok ? "" : groupTreat.error}`);
+
+  const services2 = svcA.priceHalalas + svcB.priceHalalas;
+  assert.equal(
+    groupTreat.totalHalalas,
+    services2 - Math.round(services2 * 0.1) + treat.priceHalalas,
+    "the group discount takes 10% of the services and nothing off the coffee",
+  );
+  assert.equal(
+    groupTreat.bookings.reduce((sum, b) => sum + b.totalHalalas, 0),
+    groupTreat.totalHalalas,
+    "the rows must still add up to the bill with a treat on one of them",
+  );
+  console.log(
+    `  checkout add-on: ${treat.priceHalalas / 100} SAR flat, outside the group discount ✓`,
+  );
 
   // -- Walk-ins are not payment-gated, and share the web ticket queue -------
   // The admin form calls createBooking(), the compatibility wrapper. A walk-in
@@ -306,7 +619,7 @@ async function main() {
   const [walkRow] = await db.select().from(bookings).where(eq(bookings.id, walkIn.id));
   assert.equal(walkRow.status, "confirmed", "a walk-in is confirmed on the spot");
   assert.equal(
-    Number(walkIn.ticketNo.slice(1)) - Number(webRow.ticketNo!.slice(1)),
+    ticketOrdinal(walkIn.ticketNo) - ticketOrdinal(webRow.ticketNo!),
     1,
     `walk-in must take the next number after the web booking, got ${webRow.ticketNo} then ${walkIn.ticketNo}`,
   );

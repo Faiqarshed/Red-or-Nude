@@ -24,14 +24,30 @@ const member = z.object({
   addonIds: z.array(z.string().uuid()).max(20).default([]),
   removalTypeId: z.string().uuid().nullable().optional(),
   designId: z.string().uuid().nullable().optional(),
+  /**
+   * This guest's own branch and start. Both optional and both default to the
+   * party's, so the solo shape is unchanged. The engine holds every guest to
+   * the party's local day and refuses the booking otherwise.
+   */
+  branchId: z.string().uuid().nullable().optional(),
+  startsAt: z.string().datetime().nullable().optional(),
+  /**
+   * Pay this guest's service line with a credit from a pack she owns. Which
+   * purchase, not whose — the owner comes from the session cookie, exactly as
+   * `redeemPoints` does, so a request cannot nominate somebody else's pack.
+   */
+  customerPackId: z.string().uuid().nullable().optional(),
 });
 
 const body = z.object({
+  // The party's branch and start. A guest may hold her own of either; what they
+  // all share is the day, which is what makes this one group booking rather
+  // than four bookings that happen to be on one card.
   branchId: z.string().uuid(),
-  // Every guest on one bill starts at the same moment — that is what makes it a
-  // group booking rather than two bookings that happen to be on one card.
   startsAt: z.string().datetime(),
-  members: z.array(member).min(1).max(2),
+  // Four is the cap the client asked for. The engine takes any N — only this
+  // line and the availability route decide how many are allowed through.
+  members: z.array(member).min(1).max(4),
   customer: z.object({
     name: z.string().trim().max(120).optional(),
     // Saudi mobile numbers, with or without country code.
@@ -137,7 +153,11 @@ export async function POST(request: Request) {
     // code is the same shape of problem, and carries the reason so the checkout
     // can say which of the six it was rather than "invalid code".
     const status =
-      result.error === "slot-taken" || result.error === "refill-expired"
+      result.error === "slot-taken" ||
+      result.error === "refill-expired" ||
+      // Same shape again: the credit was hers when the page quoted it and is
+      // not any more, so what she is looking at is stale rather than wrong.
+      result.error === "pack-credit-gone"
         ? 409
         : result.error === "blocked"
           ? 403
@@ -151,6 +171,9 @@ export async function POST(request: Request) {
         // a stale one can correct itself instead of offering the rung again.
         rewardReason: result.rewardReason,
         pointsBalance: result.pointsBalance,
+        // Which guest lost her chair, so the checkout can name her instead of
+        // refusing a party of four without saying whose time went.
+        guestIndex: result.guestIndex,
       },
       { status },
     );

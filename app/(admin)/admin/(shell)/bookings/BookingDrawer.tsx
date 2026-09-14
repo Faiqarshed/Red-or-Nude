@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { CalendarClock, ChevronRight, Phone, Trash2, Users } from "lucide-react";
+import { CalendarClock, ChevronRight, Phone, RefreshCw, Trash2, Users } from "lucide-react";
 import { Badge, Button, scoreTone } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
@@ -11,6 +11,8 @@ import { cn } from "@/lib/cn";
 import { formatCountdown, formatDuration, localTime } from "@/lib/time";
 import { deleteBooking, setBookingStatus } from "./actions";
 import RescheduleDialog from "./RescheduleDialog";
+import type { PartnerElsewhere } from "./partners";
+import type { Localized } from "@/lib/db/schema";
 import { STATUS_TONE, type BookingReview, type BookingRow, type BookingStatus } from "./BookingsView";
 
 // Which status a booking can move to next. Cancelled/no-show are terminal —
@@ -180,8 +182,18 @@ export function BookingFacts({ booking, now }: { booking: BookingRow; now: numbe
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Badge tone={STATUS_TONE[booking.status]}>{t.bookings.statuses[booking.status]}</Badge>
+        {/* Beside the status, not only as a line in the list below: a refill is
+            priced flat and repeats an earlier visit, and the desk reading "109
+            SAR" for a BIAB needs the reason before the number, not six rows
+            under it. Amber so it cannot be mistaken for a status. */}
+        {booking.refillOfCode ? (
+          <Badge tone="warning" className="gap-1 font-semibold">
+            <RefreshCw className="h-3 w-3" strokeWidth={2.25} />
+            {t.bookings.refillTag}
+          </Badge>
+        ) : null}
         <span className="ms-auto font-display text-xl font-bold tabular-nums text-ink">
           {booking.totalSar.toLocaleString("en-US")}
           <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
@@ -216,9 +228,33 @@ export function BookingFacts({ booking, now }: { booking: BookingRow; now: numbe
   );
 }
 
+/** One branch's share of a party, under that branch's name. */
+function PartyBranch({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="mt-3">
+      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink/45">{label}</p>
+      <div className="flex flex-col gap-1.5">{children}</div>
+    </div>
+  );
+}
+
+/** Who, what, and her own hour — guests of one party no longer share one. */
+function PartyMember({ name, service, startsAt }: { name: string; service: string; startsAt: string }) {
+  return (
+    <span className="min-w-0">
+      <span className="block truncate text-sm font-medium text-ink">{name}</span>
+      <span className="block truncate text-[11px] text-ink/50">
+        {service} · {localTime(startsAt)}
+      </span>
+    </span>
+  );
+}
+
 export default function BookingDrawer({
   booking,
   partners,
+  partnersElsewhere = [],
+  branchName = null,
   canSetStatus,
   canReschedule,
   canDelete,
@@ -237,6 +273,16 @@ export default function BookingDrawer({
    * customer standing in front of her came with somebody.
    */
   partners: BookingRow[];
+  /**
+   * Members of the same party booked at another branch (./partners.ts).
+   *
+   * Named, not opened. This drawer's reschedule picker works against the branch
+   * on screen, so opening her here would offer to move her into chairs at a
+   * salon she is not booked at. Where she sits and when is what the desk needs.
+   */
+  partnersElsewhere?: PartnerElsewhere[];
+  /** The branch on screen, to head the partners seated here. */
+  branchName?: Localized | null;
   /** `bookings.delete` — CEO and admin. The action refuses anything paid for. */
   canDelete: boolean;
   /**
@@ -302,7 +348,9 @@ export default function BookingDrawer({
             ? t.bookings.delHasReview
             : res.error === "has-points"
               ? t.bookings.delHasPoints
-              : t.common.error,
+              : res.error === "has-pack-credit"
+                ? t.bookings.delHasPackCredit
+                : t.common.error,
       );
     });
   };
@@ -355,41 +403,6 @@ export default function BookingDrawer({
       }
     >
       <div className="space-y-5">
-        {/* Above the facts rather than among them: the party is not a
-            property of this booking, it is the other half of the appointment,
-            and it is the one thing in this drawer worth clicking. */}
-        {partners.length > 0 ? (
-          <div className="rounded-xl border border-sky/40 bg-sky/[0.07] p-3 text-start">
-            <p className="flex items-center gap-1.5 text-xs font-semibold text-[#2c6a88]">
-              <Users className="h-3.5 w-3.5" strokeWidth={2} />
-              {t.bookings.groupWith}
-            </p>
-            <div className="mt-2 flex flex-col gap-1.5">
-              {partners.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => onOpenPartner?.(p)}
-                  className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-start transition-colors hover:bg-black/[0.03]"
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-medium text-ink">
-                      {p.customerName || p.customerPhone || p.code}
-                    </span>
-                    <span className="block truncate text-[11px] text-ink/50">
-                      {pick(p.serviceName, lang)}
-                    </span>
-                  </span>
-                  <ChevronRight
-                    className="h-4 w-4 shrink-0 text-ink/30 rtl:rotate-180"
-                    strokeWidth={2}
-                  />
-                </button>
-              ))}
-            </div>
-            <p className="mt-2 text-[11px] text-ink/50">{t.bookings.groupNote}</p>
-          </div>
-        ) : null}
-
         <BookingFacts booking={booking} now={now} />
 
         {/* Only once the ticket is ended. Before that there is nothing to show
@@ -452,6 +465,55 @@ export default function BookingDrawer({
           <p role="alert" className="rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
             {error}
           </p>
+        ) : null}
+
+        {/* The rest of the party, last: this booking's own facts and controls
+            are what the drawer was opened for, and the party is where she goes
+            next. One block per branch, this one first, because a guest at
+            another salon is somebody this desk can see but not seat. */}
+        {partners.length + partnersElsewhere.length > 0 ? (
+          <div className="rounded-xl border border-sky/40 bg-sky/[0.07] p-3 text-start">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-[#2c6a88]">
+              <Users className="h-3.5 w-3.5" strokeWidth={2} />
+              {t.bookings.groupWith}
+            </p>
+
+            {partners.length > 0 ? (
+              <PartyBranch label={t.bookings.groupHere(pick(branchName, lang))}>
+                {partners.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => onOpenPartner?.(p)}
+                    className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-start transition-colors hover:bg-black/[0.03]"
+                  >
+                    <PartyMember name={p.customerName || p.customerPhone || p.code} service={pick(p.serviceName, lang)} startsAt={p.startsAt} />
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      <Badge tone={STATUS_TONE[p.status]}>{t.bookings.statuses[p.status]}</Badge>
+                      <ChevronRight className="h-4 w-4 text-ink/30 rtl:rotate-180" strokeWidth={2} />
+                    </span>
+                  </button>
+                ))}
+              </PartyBranch>
+            ) : null}
+
+            {[...new Set(partnersElsewhere.map((p) => pick(p.branchName, lang)))].map((name) => (
+              <PartyBranch key={name} label={name}>
+                {partnersElsewhere
+                  .filter((p) => pick(p.branchName, lang) === name)
+                  .map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex items-center justify-between gap-3 rounded-lg bg-white/60 px-3 py-2 text-start"
+                    >
+                      <PartyMember name={p.customerName || p.customerPhone || p.code} service={pick(p.serviceName, lang)} startsAt={p.startsAt} />
+                      <Badge tone={STATUS_TONE[p.status]}>{t.bookings.statuses[p.status]}</Badge>
+                    </div>
+                  ))}
+              </PartyBranch>
+            ))}
+
+            <p className="mt-3 text-[11px] text-ink/50">{t.bookings.groupNote}</p>
+          </div>
         ) : null}
       </div>
 

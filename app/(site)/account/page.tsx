@@ -7,6 +7,7 @@
 import type { Metadata } from "next";
 import { currentCustomer } from "@/lib/account/guard";
 import { loyaltyBalance } from "@/lib/loyalty";
+import { packCredits } from "@/lib/packs";
 import { bookingSummaries } from "@/lib/bookings";
 import AccountView from "./AccountView";
 
@@ -22,8 +23,12 @@ export default async function AccountPage() {
   // and none is sent.
   if (!customer) return <AccountView />;
 
-  const [balance, history] = await Promise.all([
+  const [balance, credits, history] = await Promise.all([
     loyaltyBalance(customer.id),
+    // What her memberships have left. This is the screen a customer opens to
+    // check, and until now it was the one place that did not say: she bought a
+    // membership and the only trace of it was on the shelf she bought it from.
+    packCredits(customer.id),
     // Every booking this customer has, newest first. No reference and no code:
     // the session *is* the credential here, which is the whole reason an account
     // is worth having over /my-bookings.
@@ -43,6 +48,15 @@ export default async function AccountPage() {
         birthday: customer.birthday,
       }}
       balance={balance}
+      credits={credits.map((c) => ({
+        customerPackId: c.customerPackId,
+        packName: c.packName,
+        serviceId: c.serviceId,
+        serviceName: c.serviceName,
+        left: c.left,
+        granted: c.granted,
+        expiresAt: c.expiresAt.toISOString(),
+      }))}
       history={history}
     />
   );

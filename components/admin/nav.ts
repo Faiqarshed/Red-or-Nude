@@ -48,6 +48,7 @@ export const NAV: NavGroup[] = [
       { key: "catalog", href: "/admin/catalog", icon: "Sparkles", cap: "catalog.manage" },
       { key: "media", href: "/admin/media", icon: "Images", cap: "media.manage" },
       { key: "designs", href: "/admin/designs", icon: "Palette", cap: "designs.manage", soon: true },
+      { key: "packs", href: "/admin/memberships", icon: "Package", cap: "catalog.manage" },
       { key: "giftCards", href: "/admin/gift-cards", icon: "Gift", cap: "giftcards.issue" },
     ],
   },

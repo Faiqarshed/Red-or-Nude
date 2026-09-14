@@ -22,7 +22,7 @@ import { bookings, services } from "@/lib/db/schema";
 import { claimedWindows } from "@/lib/bookings";
 import { halalasToSar } from "@/lib/money";
 import { OTP_LENGTH } from "@/lib/otp";
-import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
+import { refillDaysLeft, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 import { refuseBookingAction } from "@/lib/booking-auth";
 import { clientIp, throttled } from "@/lib/throttle";
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
   }
 
   const spentOn = await claimedWindows([row.id]);
-  const settings = await getSettings(["refill_discount_percent"]);
+  const settings = await getSettings(["refill_price_halalas"]);
 
   const offer = {
     startsAt: row.startsAt,
@@ -99,9 +99,7 @@ export async function POST(request: Request) {
     refill: {
       daysLeft,
       expiresAt: expiresAt?.toISOString() ?? null,
-      priceSar: halalasToSar(
-        refillPriceHalalas(row.servicePriceHalalas ?? 0, settings.refill_discount_percent),
-      ),
+      priceSar: halalasToSar(settings.refill_price_halalas),
       bookUrl: daysLeft > 0 ? `/booking?refill=${code}` : null,
     },
   });

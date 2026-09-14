@@ -9,6 +9,7 @@ import { staff, staffTimeOff } from "@/lib/db/schema";
 import { requireCan, type SessionStaff } from "@/lib/auth/guard";
 import { mustHaveBranch } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
+import { assignDay } from "@/lib/assign";
 import type { StaffRole } from "@/lib/db/schema";
 import { issueMonthlyCode } from "@/lib/staff-codes";
 
@@ -95,6 +96,14 @@ export async function saveStaff(input: StaffInput): Promise<Result> {
   };
   if (d.password) values.passwordHash = await hash(d.password, 10);
 
+  // Did this edit stop her being a technician on the floor she was on? Three
+  // different edits do it — a move, a switch-off, a change of role — and to her
+  // old branch they are the same fact.
+  const leftTheFloor =
+    existing?.role === "technician" &&
+    !!existing.branchId &&
+    (existing.branchId !== (d.branchId ?? null) || d.role !== "technician" || !d.active);
+
   try {
     if (d.id) {
       await db.update(staff).set(values).where(eq(staff.id, d.id));
@@ -135,6 +144,22 @@ export async function saveStaff(input: StaffInput): Promise<Result> {
     return { ok: false, error: "failed" };
   }
 
+  // Her old floor is holding bookings with her name on them. assignDay reclaims
+  // those on its own — but only when it next runs for that branch, which may be
+  // tomorrow morning, and until then they sit on nobody's day. So run it now.
+  //
+  // Deliberately after the save and deliberately swallowed: a technician's
+  // record must not fail to move because the floor could not be re-dealt.
+  if (leftTheFloor && existing?.branchId) {
+    try {
+      await assignDay(existing.branchId);
+      revalidatePath("/admin/my-day");
+      revalidatePath("/admin/front-desk");
+    } catch (err) {
+      console.error("[staff] could not re-deal the old branch", err);
+    }
+  }
+
   revalidatePath("/admin/staff");
   return { ok: true };
 }
@@ -161,6 +186,18 @@ export async function setStaffActive(id: string, active: boolean): Promise<Resul
     entityId: id,
     diff: { active: { from: !active, to: active } },
   });
+
+  // Switching a technician off leaves her holding today's bookings, exactly as
+  // moving her branch does. Same reclaim, same reason it is swallowed.
+  if (target.role === "technician" && target.branchId) {
+    try {
+      await assignDay(target.branchId);
+      revalidatePath("/admin/my-day");
+      revalidatePath("/admin/front-desk");
+    } catch (err) {
+      console.error("[staff] could not re-deal after an active change", err);
+    }
+  }
 
   revalidatePath("/admin/staff");
   return { ok: true };
