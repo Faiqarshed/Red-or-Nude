@@ -12,13 +12,14 @@
 // capability that governs staff records applies.
 
 import { revalidatePath } from "next/cache";
-import { and, eq, gte, lte } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, lte } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "@/lib/db";
-import { staff, staffTimeOff } from "@/lib/db/schema";
+import { bookings, staff, staffTimeOff } from "@/lib/db/schema";
 import { requireCan, type SessionStaff } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
-import { releaseToday } from "@/lib/assign";
-import { riyadhDateKey } from "@/lib/time";
+import { offOn, releaseToday } from "@/lib/assign";
+import { riyadhDateKey, riyadhDayRange } from "@/lib/time";
 
 /** `released` is how many customers just lost their technician — see sendHome. */
 export type Result = { ok: true; released?: number } | { ok: false; error: string };
@@ -46,31 +47,93 @@ function revalidate() {
   revalidatePath("/admin/front-desk");
 }
 
+const movesSchema = z
+  .array(z.object({ bookingId: z.string().uuid(), technicianId: z.string().uuid() }))
+  .max(200);
+
 /**
- * She has gone home.
+ * She has gone home — and every customer she was still waiting on has somebody.
  *
- * Writes a one-day time-off row, which is all it takes for the morning run and
- * the check-in picker to stop choosing her, and for both dropdowns to grey her
- * out.
+ * **One call, after the desk has placed them all.** This used to take her
+ * customers off her the moment Send home was pressed and then open a popup asking
+ * where they should go. There was no way back from that popup: close it and the
+ * bookings were already sitting unassigned behind it. Now the screen asks first,
+ * and nothing changes until it sends the whole answer here.
  *
- * Then her waiting customers are taken off her — and left for a person to place.
+ * Refused as `unplaced` if a waiting booking has no move — re-read here, not
+ * trusted from the screen, because one may have been assigned to her since the
+ * popup opened. Refused as `bad-target` for a move to herself, to somebody off
+ * today, or to anyone who is not a technician at her branch.
  *
- * Dealing them again automatically was tried and dropped. The run fits whoever
- * is free into whichever slot, and four customers at the same hour with two
- * technicians left simply cannot all be placed, so it silently returned some of
- * them unassigned while looking like it had done the job. Who waits, who is
- * asked to come back tomorrow, and who gets the technician they asked for are
- * not questions a first-fit loop can answer. The desk decides, off the list this
- * action's `released` count sends it to.
+ * Dealing them automatically was tried and dropped: four customers at one hour
+ * with two technicians left cannot all be placed, and the run silently returned
+ * some unassigned while looking like it had done the job. Who waits and who is
+ * rescheduled is the desk's call.
  *
  * Anything she has already started stays hers, because the customer is sitting
  * in front of her.
  */
-export async function sendHome(staffId: string): Promise<Result> {
+export async function sendHome(
+  staffId: string,
+  moves: { bookingId: string; technicianId: string }[] = [],
+): Promise<Result> {
   const actor = await requireCan("bookings.checkin");
 
   const mine = await myTechnician(actor, staffId);
   if (!mine.ok) return mine;
+
+  const parsed = movesSchema.safeParse(moves);
+  if (!parsed.success) return { ok: false, error: "invalid" };
+  const to = new Map(parsed.data.map((m) => [m.bookingId, m.technicianId]));
+
+  // What she is still owed today: everything confirmed she has not started.
+  // `checked_in` and `in_progress` stay hers — see releaseToday for why the
+  // rule is the status and not the clock.
+  const { start, end } = riyadhDayRange();
+  const waiting = await db
+    .select({ id: bookings.id })
+    .from(bookings)
+    .where(
+      and(
+        eq(bookings.technicianId, staffId),
+        eq(bookings.status, "confirmed"),
+        gte(bookings.startsAt, start),
+        lt(bookings.startsAt, end),
+      ),
+    );
+  if (waiting.some((w) => !to.has(w.id))) return { ok: false, error: "unplaced" };
+
+  const targets = [...new Set(waiting.map((w) => to.get(w.id)!))];
+  if (targets.length) {
+    const [valid, off] = await Promise.all([
+      db
+        .select({ id: staff.id })
+        .from(staff)
+        .where(
+          and(
+            inArray(staff.id, targets),
+            eq(staff.role, "technician"),
+            eq(staff.active, true),
+            mine.branchId ? eq(staff.branchId, mine.branchId) : undefined,
+          ),
+        ),
+      offOn(),
+    ]);
+    if (targets.includes(staffId) || valid.length !== targets.length || targets.some((id) => off.has(id))) {
+      return { ok: false, error: "bad-target" };
+    }
+  }
+
+  // Each only while it is still hers and still waiting, so a booking somebody
+  // checked in or moved a second ago is left as that person made it.
+  for (const w of waiting) {
+    await db
+      .update(bookings)
+      .set({ technicianId: to.get(w.id)!, updatedAt: new Date() })
+      .where(
+        and(eq(bookings.id, w.id), eq(bookings.technicianId, staffId), eq(bookings.status, "confirmed")),
+      );
+  }
 
   const day = riyadhDateKey();
   const [existing] = await db
@@ -85,10 +148,9 @@ export async function sendHome(staffId: string): Promise<Result> {
     )
     .limit(1);
 
-  // What she is still owed today: everything confirmed she has not started.
-  // `checked_in` and `in_progress` stay hers on purpose — that customer is
-  // already with her, and moving them would be a lie on a screen. See
-  // releaseToday for why the rule is the status and not the clock.
+  // Normally nothing: every waiting booking was just moved. Only a booking handed
+  // to her in the moment between the read above and now is left, and it goes to
+  // the unassigned list at the top of the floor rather than staying on her.
   const released = await releaseToday(staffId);
 
   // Pressed twice, or already on leave from Staff — either way she is out, and
@@ -114,7 +176,7 @@ export async function sendHome(staffId: string): Promise<Result> {
   //
   // Silent only when nothing happened: pressed twice, second press, no rows
   // left to release. There is no change to record.
-  if (released.length || !existing) {
+  if (waiting.length || released.length || !existing) {
     await recordAudit(actor, {
       action: "send-home",
       entity: "staff_time_off",
@@ -122,6 +184,8 @@ export async function sendHome(staffId: string): Promise<Result> {
       diff: {
         staffId: { from: null, to: staffId },
         day: { from: null, to: day },
+        // Who took which customer — the question the trail has to answer.
+        moved: { from: null, to: waiting.map((w) => ({ bookingId: w.id, technicianId: to.get(w.id) })) },
         released: { from: null, to: released.length },
       },
     });

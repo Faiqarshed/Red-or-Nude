@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { Coffee } from "lucide-react";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
@@ -795,7 +796,7 @@ export default function PaymentPage() {
                         return (
                           <label
                             key={key}
-                            className={`flex items-center justify-between gap-3 rounded-[12px] border px-4 py-3 text-[13px] ${
+                            className={`flex items-center gap-3 rounded-[12px] border p-2.5 pe-4 text-[13px] ${
                               taken
                                 ? "border-red/40 bg-red/[0.04] text-red"
                                 : heldCode
@@ -803,35 +804,37 @@ export default function PaymentPage() {
                                   : "cursor-pointer border-black/[0.08] text-ink hover:border-red/30"
                             }`}
                           >
-                            <span className="flex items-center gap-2.5">
-                              <input
-                                type="checkbox"
-                                checked={taken}
-                                disabled={heldCode !== null}
-                                onChange={() =>
-                                  setTreats((prev) =>
-                                    prev.includes(key)
-                                      ? prev.filter((k) => k !== key)
-                                      : [...prev, key],
-                                  )
-                                }
-                                className="accent-red"
-                              />
-                              {/* Only when the salon has uploaded one — an
-                                  empty tile reads as a broken image. */}
-                              {a.img && (
-                                <span
-                                  className="h-9 w-9 shrink-0 rounded-[8px] bg-[#e7d9c9] bg-cover bg-center bg-no-repeat"
-                                  style={{ backgroundImage: `url(${a.img})` }}
-                                />
-                              )}
-                              <span className="font-semibold">
-                                {booking.members.length > 1
-                                  ? `${c.booking.guestN.replace("{n}", String(i + 1))} — ${pick(a.name, lang)}`
-                                  : pick(a.name, lang)}
-                              </span>
+                            <input
+                              type="checkbox"
+                              checked={taken}
+                              disabled={heldCode !== null}
+                              onChange={() =>
+                                setTreats((prev) =>
+                                  prev.includes(key)
+                                    ? prev.filter((k) => k !== key)
+                                    : [...prev, key],
+                                )
+                              }
+                              className="ms-1.5 h-4 w-4 shrink-0 accent-red"
+                            />
+                            {/* A picture sells a coffee a line of text does not,
+                                so the tile is always there: the salon's photo
+                                (Admin → Catalog → the upsell's Image), or a cup
+                                on the beige every other image tile waits on —
+                                a drawn placeholder, not an empty box that reads
+                                as a broken image. */}
+                            <span
+                              className="grid h-14 w-20 shrink-0 place-items-center rounded-[10px] bg-[#e7d9c9] bg-cover bg-center bg-no-repeat text-[#8a6a4a]"
+                              style={a.img ? { backgroundImage: `url(${a.img})` } : undefined}
+                            >
+                              {!a.img && <Coffee className="h-6 w-6" strokeWidth={1.75} aria-hidden />}
                             </span>
-                            <span className="flex items-center gap-1">
+                            <span className="min-w-0 flex-1 font-semibold">
+                              {booking.members.length > 1
+                                ? `${c.booking.guestN.replace("{n}", String(i + 1))} — ${pick(a.name, lang)}`
+                                : pick(a.name, lang)}
+                            </span>
+                            <span className="flex shrink-0 items-center gap-1">
                               <Riyal className="h-3 w-3" />
                               {a.price}
                             </span>
