@@ -523,6 +523,88 @@ export default function PaymentPage() {
               <PaymentMethods onMethodChange={setMethod} onValidityChange={setCardValid} />
             </>
           )}
+
+          {/* The loyalty ladder (brief §2.8), beside how she is paying rather
+              than in the summary: it is a way of paying, and three locked rows
+              made the summary column twice the length of this one.
+
+              Outside the card-form branch above on purpose. A rung big enough
+              to clear the bill hides the card form, and the way to un-pick that
+              rung must not go with it.
+
+              Only the rungs she can afford, and nothing at all when that is
+              none — a checkout is where points are spent, not where she is told
+              how far off she is; /account shows the whole ladder for that. Kept
+              while a refusal is on screen, or its message would vanish with the
+              rung it was about.
+
+              Signed-in only — an account is optional and a guest checkout must
+              never grow a sign-in wall. Hidden on a bill a membership already
+              cleared, for the reason the promo field is: there is nothing left
+              to take a percentage of. */}
+          {(() => {
+            if (balance === null || fullyCovered) return null;
+            const affordable = REWARDS.filter((r) => balance >= r.points);
+            if (affordable.length === 0 && !redeemError) return null;
+            return (
+              <section className="rounded-[20px] bg-white p-5 text-start ring-1 ring-black/[0.04]">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <span className="font-display text-base font-extrabold text-ink">{a.redeemLabel}</span>
+                  <span className="text-[12px] font-semibold text-red">
+                    {a.redeemBalance.replace("{n}", String(balance))}
+                  </span>
+                </div>
+
+                <div className="space-y-1.5">
+                  {affordable.map((r) => {
+                    const picked = redeemPoints === r.points;
+                    return (
+                      <label
+                        key={r.points}
+                        className={`flex cursor-pointer items-center gap-2.5 rounded-[12px] border px-4 py-3 text-[13px] ${
+                          picked
+                            ? "border-red/40 bg-red/[0.04] text-red"
+                            : "border-black/[0.08] text-ink hover:border-red/30"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="reward"
+                          checked={picked}
+                          onChange={() => void pickReward(r.points)}
+                          className="accent-red"
+                        />
+                        <span className="font-semibold">
+                          {a.rewardRow
+                            .replace("{points}", String(r.points))
+                            .replace("{percent}", String(r.percent))}
+                        </span>
+                      </label>
+                    );
+                  })}
+
+                  {/* Opt out explicitly. Without this row the only way to
+                      un-pick a radio is to reload the page. */}
+                  <label className="flex cursor-pointer items-center gap-2.5 px-4 py-1.5 text-[12px] text-ink/45">
+                    <input
+                      type="radio"
+                      name="reward"
+                      checked={redeemPoints === null}
+                      onChange={() => void pickReward(null)}
+                      className="accent-red"
+                    />
+                    {a.redeemNone}
+                  </label>
+                </div>
+
+                {redeemError && (
+                  <p role="alert" className="mt-1.5 text-[11px] text-red">
+                    {redeemError}
+                  </p>
+                )}
+              </section>
+            );
+          })()}
         </div>
 
         {/* Summary */}
@@ -695,85 +777,6 @@ export default function PaymentPage() {
                   </p>
                 )}
               </div>
-              )}
-
-              {/* The loyalty ladder (brief §2.8). Rendered only for a signed-in
-                  customer — an account is optional and a guest checkout must
-                  never grow a sign-in wall. Locked rungs are shown but not
-                  selectable, so the customer can see what they are working
-                  towards instead of an empty box.
-
-                  Hidden on a bill a membership already cleared, for the reason
-                  the promo field is: there is nothing left to take a percentage
-                  of, and spending points against it would burn them for nothing. */}
-              {balance !== null && !fullyCovered && (
-                <div className="mt-4">
-                  <div className="mb-1.5 flex items-center justify-between gap-2">
-                    <span className="text-[12px] text-ink/55">{a.redeemLabel}</span>
-                    <span className="text-[11px] font-semibold text-red">
-                      {a.redeemBalance.replace("{n}", String(balance))}
-                    </span>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    {REWARDS.map((r) => {
-                      const unlocked = balance >= r.points;
-                      const picked = redeemPoints === r.points;
-                      return (
-                        <label
-                          key={r.points}
-                          className={`flex items-center justify-between gap-3 rounded-[12px] border px-4 py-3 text-[13px] ${
-                            picked
-                              ? "border-red/40 bg-red/[0.04] text-red"
-                              : unlocked
-                                ? "cursor-pointer border-black/[0.08] text-ink hover:border-red/30"
-                                : "cursor-not-allowed border-black/[0.05] text-ink/35"
-                          }`}
-                        >
-                          <span className="flex items-center gap-2.5">
-                            <input
-                              type="radio"
-                              name="reward"
-                              checked={picked}
-                              disabled={!unlocked}
-                              onChange={() => void pickReward(r.points)}
-                              className="accent-red"
-                            />
-                            <span className="font-semibold">
-                              {a.rewardRow
-                                .replace("{points}", String(r.points))
-                                .replace("{percent}", String(r.percent))}
-                            </span>
-                          </span>
-                          {!unlocked && (
-                            <span className="text-[11px]">
-                              {a.ladderLocked.replace("{n}", String(r.points - balance))}
-                            </span>
-                          )}
-                        </label>
-                      );
-                    })}
-
-                    {/* Opt out explicitly. Without this row the only way to
-                        un-pick a radio is to reload the page. */}
-                    <label className="flex cursor-pointer items-center gap-2.5 px-4 py-1.5 text-[12px] text-ink/45">
-                      <input
-                        type="radio"
-                        name="reward"
-                        checked={redeemPoints === null}
-                        onChange={() => void pickReward(null)}
-                        className="accent-red"
-                      />
-                      {a.redeemNone}
-                    </label>
-                  </div>
-
-                  {redeemError && (
-                    <p role="alert" className="mt-1.5 text-[11px] text-red">
-                      {redeemError}
-                    </p>
-                  )}
-                </div>
               )}
 
               {/* Coffee and a cookie, offered once the services are chosen and

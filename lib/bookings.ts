@@ -554,6 +554,7 @@ export async function bookingSummaries(
       // person's name — she is a second customer with her own privacy, and the
       // one who booked already knows who she brought.
       groupSize: r.groupId ? rows.filter((x) => x.groupId === r.groupId).length : 1,
+      groupId: r.groupId,
       startsAt: r.startsAt.toISOString(),
       status: r.status,
       ticketNo: r.ticketNo,

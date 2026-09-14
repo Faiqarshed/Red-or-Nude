@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import PhoneField from "@/components/PhoneField";
-import BookingCard, { RefillDialog } from "@/components/booking/BookingCard";
+import BookingCard, { RefillDialog, partyOf } from "@/components/booking/BookingCard";
 import { Lock, Riyal } from "@/components/icons";
 import OtpInput from "@/components/OtpInput";
 import { useI18n } from "@/lib/i18n";
@@ -65,6 +65,9 @@ export default function AccountView({
 
 // ---------------------------------------------------------------- signed in --
 
+/** Bookings shown before "Show all". Three rows of two on a desktop. */
+const BOOKINGS_PREVIEW = 6;
+
 function SignedIn({
   customer,
   balance,
@@ -82,6 +85,7 @@ function SignedIn({
 
   const [verifying, setVerifying] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+  const [showAll, setShowAll] = useState(false);
 
   // Whether a booking can still be cancelled was decided when this page
   // rendered, so a tab left open all afternoon keeps offering a button whose
@@ -118,7 +122,7 @@ function SignedIn({
     <main className="min-h-screen bg-cream">
       <SiteHeader />
 
-      <div className="mx-auto max-w-[760px] px-6 pb-20 pt-[120px] md:px-12">
+      <div className="mx-auto max-w-page px-6 pb-20 pt-[120px] md:px-12 lg:px-16">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="text-start">
             <h1 className="font-display text-3xl font-extrabold text-ink">
@@ -138,37 +142,71 @@ function SignedIn({
           </button>
         </div>
 
-        {/* -- the wallet ------------------------------------------------- */}
-        <Wallet balance={balance} />
+        {/* Two columns from lg: the bookings, which grow without limit, get the
+            width; the wallet, memberships and details, which do not, sit beside
+            them. One 760px column left the sides of a desktop empty and stacked
+            every booking between the wallet and the form.
 
-        {/* -- her memberships -------------------------------------------- */}
-        <Memberships credits={credits} />
+            Three grid items rather than two columns, so a phone still reads
+            wallet → bookings → details: the side panels are split in two, and
+            the bookings span both of their rows. `self-start` on each, or a
+            short panel stretches to the height of the booking list. */}
+        <div className="mt-8 grid items-start gap-8 lg:grid-cols-[1fr_380px] lg:grid-rows-[auto_1fr]">
+          {/* -- the wallet and her memberships ------------------------------ */}
+          <div className="space-y-6 self-start lg:col-start-2 lg:row-start-1">
+            <Wallet balance={balance} />
+            <Memberships credits={credits} />
+          </div>
 
-        {/* -- the bookings ---------------------------------------------- */}
-        <h2 className="mt-10 text-start font-display text-lg font-extrabold text-ink">
-          {a.bookingsTitle}
-        </h2>
+          {/* -- the bookings ---------------------------------------------- */}
+          <section className="self-start lg:col-start-1 lg:row-span-2 lg:row-start-1">
+            <h2 className="text-start font-display text-lg font-extrabold text-ink">
+              {a.bookingsTitle}
+            </h2>
 
-        <div className="mt-4 space-y-4">
-          {history.length === 0 && <p className="text-start text-sm text-ink/55">{a.noBookings}</p>}
+            {history.length === 0 && (
+              <p className="mt-4 text-start text-sm text-ink/55">{a.noBookings}</p>
+            )}
 
-          {history.map((r) => (
-            <BookingCard
-              key={r.code}
-              row={r}
-              lang={lang}
-              onOpenRefill={() => setVerifying(r.code)}
-              // The page is a server component, so re-reading it *is* the
-              // refresh — a cancellation changes the status, the time and the
-              // chair at once, and the server is the only thing that knows all
-              // three. It also re-reads the balance, which a cancellation moves.
-              onChanged={() => router.refresh()}
-            />
-          ))}
+            {/* Side by side once there is room for two cards at a readable
+                width, which halves how far a long history scrolls. */}
+            <div className="mt-4 grid items-start gap-4 xl:grid-cols-2">
+              {(showAll ? history : history.slice(0, BOOKINGS_PREVIEW)).map((r) => (
+                <BookingCard
+                  key={r.code}
+                  row={r}
+                  // From the full history, not the visible slice: a party split
+                  // by "Show all" is still one party.
+                  party={partyOf(history, r)}
+                  lang={lang}
+                  onOpenRefill={() => setVerifying(r.code)}
+                  // The page is a server component, so re-reading it *is* the
+                  // refresh — a cancellation changes the status, the time and the
+                  // chair at once, and the server is the only thing that knows all
+                  // three. It also re-reads the balance, which a cancellation moves.
+                  onChanged={() => router.refresh()}
+                />
+              ))}
+            </div>
+
+            {/* The rest behind one tap. Newest first, so what is hidden is the
+                oldest — the visits she is least likely to be looking for. */}
+            {history.length > BOOKINGS_PREVIEW && (
+              <button
+                type="button"
+                onClick={() => setShowAll((v) => !v)}
+                className="mt-4 w-full rounded-[12px] border border-black/[0.08] bg-white py-3 text-center text-[13px] font-semibold text-ink transition-colors hover:border-red/40"
+              >
+                {showAll ? a.showFewer : a.showAll.replace("{n}", String(history.length))}
+              </button>
+            )}
+          </section>
+
+          {/* -- the details ----------------------------------------------- */}
+          <div className="self-start lg:col-start-2 lg:row-start-2">
+            <ProfileForm customer={customer} />
+          </div>
         </div>
-
-        {/* -- the details ----------------------------------------------- */}
-        <ProfileForm customer={customer} />
       </div>
 
       {verifying && <RefillDialog code={verifying} onClose={() => setVerifying(null)} />}
@@ -208,7 +246,7 @@ function Memberships({ credits }: { credits: Credit[] }) {
   }
 
   return (
-    <section className="mt-8 rounded-[20px] bg-white p-6 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
+    <section className="rounded-[20px] bg-white p-6 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-display text-lg font-extrabold text-ink">{k.yours}</h2>
         <Link
@@ -225,7 +263,7 @@ function Memberships({ credits }: { credits: Credit[] }) {
             <p className="font-display text-base font-extrabold text-red">
               {pick(lines[0].packName, lang)}
             </p>
-            <ul className="mt-2 space-y-3">
+            <ul className="mt-2 space-y-2.5">
               {lines.map((credit) => {
                 // What she has spent, from what she was sold. Never negative: a
                 // credit handed back on a cancellation can only bring `left`
@@ -242,32 +280,50 @@ function Memberships({ credits }: { credits: Credit[] }) {
                         {k.leftCount.replace("{n}", String(credit.left))}
                       </span>
                     </div>
-                    {/* How far through it she is. `insetInlineStart` rather than
-                        `left`, so it fills right-to-left in Arabic with no
-                        second code path — the wallet bar above does the same. */}
-                    <div className="relative mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/[0.06]">
-                      <div
-                        className="absolute top-0 h-full rounded-full bg-red/70"
-                        style={{ insetInlineStart: 0, width: `${pct}%` }}
-                      />
+                    {/* How far through it she is, with the count on the bar's
+                        own line — two lines a service rather than three, so a
+                        membership of many services stays short.
+                        `insetInlineStart` rather than `left`, so it fills
+                        right-to-left in Arabic with no second code path — the
+                        wallet bar above does the same. */}
+                    <div className="mt-1 flex items-center gap-3">
+                      <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-black/[0.06]">
+                        <div
+                          className="absolute top-0 h-full rounded-full bg-red/70"
+                          style={{ insetInlineStart: 0, width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="shrink-0 text-[11px] text-ink/45">
+                        {k.usedOf
+                          .replace("{used}", String(used))
+                          .replace("{n}", String(credit.granted))}
+                      </span>
                     </div>
-                    <p className="mt-1 text-[11px] text-ink/45">
-                      {k.usedOf
-                        .replace("{used}", String(used))
-                        .replace("{n}", String(credit.granted))}
-                    </p>
                   </li>
                 );
               })}
             </ul>
             {/* The deadline, because a credit is dead the moment it passes and
-                nothing sweeps it — she is owed the date, not a surprise. */}
-            <p className="mt-3 text-[12px] text-ink/50">
-              {k.expiresOn.replace("{date}", formatDateLabel(lines[0].expiresAt.slice(0, 10), lang))}
-            </p>
+                nothing sweeps it — she is owed the date, not a surprise. In
+                red with a countdown for the last two weeks, which is when the
+                date alone stops being enough to act on. */}
+            {(() => {
+              const days = Math.ceil((Date.parse(lines[0].expiresAt) - Date.now()) / 86_400_000);
+              return (
+                <p className={`mt-3 text-[12px] ${days <= 14 ? "font-semibold text-red" : "text-ink/50"}`}>
+                  {k.expiresOn.replace("{date}", formatDateLabel(lines[0].expiresAt.slice(0, 10), lang))}
+                  {days <= 14 && ` · ${c.history.daysLeft.replace("{n}", String(days))}`}
+                </p>
+              );
+            })()}
           </div>
         ))}
       </div>
+
+      {/* A purchase that runs out vanishes from this list — packCredits keeps
+          only what can still be spent. Said once, so a membership that is gone
+          reads as finished rather than lost. */}
+      <p className="mt-4 text-[11px] text-ink/40">{k.dropOff}</p>
     </section>
   );
 }
@@ -299,7 +355,7 @@ function Wallet({ balance }: { balance: number }) {
   useEffect(() => setGrown(true), []);
 
   return (
-    <section className="mt-8 overflow-hidden rounded-[20px] bg-white text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
+    <section className="overflow-hidden rounded-[20px] bg-white text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
       <div className="bg-gradient-to-b from-[#fbeaea] to-transparent p-6 pb-7">
         <h2 className="font-display text-lg font-extrabold text-ink">{a.walletTitle}</h2>
 
@@ -480,7 +536,7 @@ function ProfileForm({ customer }: { customer: Customer }) {
   };
 
   return (
-    <section className="mt-10 rounded-[20px] bg-white p-6 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
+    <section className="rounded-[20px] bg-white p-6 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
       <h2 className="font-display text-lg font-extrabold text-ink">{a.myDetails}</h2>
 
       <form
@@ -789,7 +845,7 @@ function SignedOut() {
 
       // Signed in. A full document navigation so the layout re-renders with the
       // Profile pill — see the note in signOut above.
-      window.location.assign("/account");
+      window.location.assign(nextPath());
     } catch {
       setError(a.errors.failed);
     } finally {
@@ -824,7 +880,7 @@ function SignedOut() {
         }
         return;
       }
-      window.location.assign("/account");
+      window.location.assign(nextPath());
     } catch {
       setError(a.errors.failed);
     } finally {
@@ -997,6 +1053,21 @@ function Submit({ disabled, label }: { disabled: boolean; label: string }) {
       {label}
     </button>
   );
+}
+
+/**
+ * Where to go once signed in: `?next=` when a page sent her here to sign in
+ * (the membership checkout does), else the account itself.
+ *
+ * Resolved against this origin and refused if it lands anywhere else, so a
+ * crafted link cannot use the sign-in form to bounce a customer off-site —
+ * `//evil.example` and `/\evil.example` both parse to another host.
+ */
+function nextPath(): string {
+  const next = new URLSearchParams(window.location.search).get("next");
+  if (!next) return "/account";
+  const url = new URL(next, window.location.origin);
+  return url.origin === window.location.origin ? url.pathname + url.search : "/account";
 }
 
 /** `too-many` → `tooMany`, so an API error code indexes the strings directly. */

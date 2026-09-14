@@ -10,6 +10,7 @@ import {
   ChevronRight,
   List,
   Plus,
+  RefreshCw,
   Users,
 } from "lucide-react";
 import {
@@ -30,6 +31,7 @@ import { pick } from "@/lib/localized";
 import type { Localized } from "@/lib/db/schema";
 import BookingDrawer from "./BookingDrawer";
 import WalkInDrawer from "./WalkInDrawer";
+import type { PartnerElsewhere } from "./partners";
 
 export type BookingStatus =
   | "pending"
@@ -334,7 +336,19 @@ function BookingTable({
                           {b.customerPhone}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-start text-ink/70">{pick(b.serviceName, lang)}</td>
+                      <td className="px-4 py-3 text-start text-ink/70">
+                        <span className="flex items-center gap-2">
+                          {pick(b.serviceName, lang)}
+                          {/* Beside the service it repeats, the same amber as the
+                              grid and the drawer. */}
+                          {b.refillOfCode ? (
+                            <Badge tone="warning" className="shrink-0 gap-1 font-semibold">
+                              <RefreshCw className="h-3 w-3" strokeWidth={2.25} />
+                              {t.bookings.refillShort}
+                            </Badge>
+                          ) : null}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 text-start">
                         <Badge tone={STATUS_TONE[b.status]}>{t.bookings.statuses[b.status]}</Badge>
                       </td>
@@ -363,9 +377,15 @@ export default function BookingsView({
   canReschedule,
   canDelete,
   checkinEarlyMin,
+  partnersElsewhere = [],
+  branchName = null,
 }: {
   date: string;
   branchId: string;
+  /** Guests of this day's parties booked at another branch. See ./partners.ts. */
+  partnersElsewhere?: PartnerElsewhere[];
+  /** The branch being viewed, for the drawer's party list. */
+  branchName?: Localized | null;
   branches: { id: string; name: Localized }[];
   stations: { id: string; label: string }[];
   bookings: BookingRow[];
@@ -499,6 +519,7 @@ export default function BookingsView({
               .join("، ") || "—"
           }`
         : null,
+      b.refillOfCode ? `${t.bookings.refillOf} ${b.refillOfCode}` : null,
       b.status === "pending" ? t.bookings.pendingHint : null,
       `${t.bookings.total}: ${b.totalSar.toLocaleString("en-US")} ${t.common.riyal}`,
       b.review?.submittedAt && b.review.serviceRating !== null
@@ -744,10 +765,28 @@ export default function BookingsView({
                                 should not have to decode a border colour. Hidden
                                 on a block too short to hold it — a 30-minute
                                 removal is 22px, and the name matters more. */}
-                            {b.groupId ? (
-                              <span className="mb-0.5 flex items-center gap-1 rounded bg-[#2c6a88] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
-                                <Users className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
-                                {t.bookings.groupLetter(partyLetter.get(b.groupId) ?? "")}
+                            {/* A refill gets the same treatment, in amber: it
+                                repeats an earlier visit at a flat price, and the
+                                desk should know before opening it why a BIAB is
+                                on the grid at a refill price. One row for both chips, so a
+                                refill booked as part of a group costs one line
+                                of a short block rather than two. */}
+                            {b.groupId || b.refillOfCode ? (
+                              <span className="mb-0.5 flex items-center gap-1 overflow-hidden">
+                                {b.groupId ? (
+                                  <span className="flex min-w-0 items-center gap-1 rounded bg-[#2c6a88] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+                                    <Users className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
+                                    <span className="truncate">
+                                      {t.bookings.groupLetter(partyLetter.get(b.groupId) ?? "")}
+                                    </span>
+                                  </span>
+                                ) : null}
+                                {b.refillOfCode ? (
+                                  <span className="flex min-w-0 items-center gap-1 rounded bg-[#b7791f] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+                                    <RefreshCw className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
+                                    <span className="truncate">{t.bookings.refillShort}</span>
+                                  </span>
+                                ) : null}
                               </span>
                             ) : null}
                             {/* The score sits on the name's line rather than in a
@@ -790,6 +829,10 @@ export default function BookingsView({
             ? bookings.filter((b) => b.groupId === selected.groupId && b.id !== selected.id)
             : []
         }
+        partnersElsewhere={
+          selected?.groupId ? partnersElsewhere.filter((p) => p.groupId === selected.groupId) : []
+        }
+        branchName={branchName}
         canSetStatus={canSetStatus}
         canReschedule={canReschedule}
         canDelete={canDelete}

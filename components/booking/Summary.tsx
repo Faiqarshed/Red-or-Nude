@@ -27,6 +27,7 @@ export default function Summary({
   grossTotal,
   total,
   credit,
+  creditNote,
   agree,
   onAgree,
   ready,
@@ -75,6 +76,12 @@ export default function Summary({
     applied: boolean;
     onToggle: (applied: boolean) => void;
   } | null;
+  /**
+   * Said in the credit row's place when she holds credits but none for this
+   * service. A member who picks a service and sees no credit row otherwise
+   * cannot tell "not covered" from "something broke".
+   */
+  creditNote?: string | null;
   agree: boolean;
   onAgree: (v: boolean) => void;
   ready: boolean;
@@ -232,6 +239,9 @@ export default function Summary({
             −{credit.amount}
           </span>
         </label>
+      )}
+      {!credit && creditNote && (
+        <p className="mt-4 text-start text-[12px] text-ink/50">{creditNote}</p>
       )}
 
       <div className="mt-4 flex items-center justify-between rounded-[14px] bg-[#fbeaea] p-4">

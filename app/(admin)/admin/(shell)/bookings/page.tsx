@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   addons,
@@ -22,6 +22,7 @@ import { halalasToSar } from "@/lib/money";
 import { localToUtc, utcToLocalDate } from "@/lib/availability";
 import { riyadhDayRange } from "@/lib/time";
 import BookingsView, { type BookingRow } from "./BookingsView";
+import { partnersElsewhere } from "./partners";
 
 export const dynamic = "force-dynamic";
 
@@ -81,8 +82,10 @@ export default async function BookingsPage({
         notes: bookings.notes,
         customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
         customerPhone: customers.phone,
-        // Why this booking is cheaper than the price list says.
-        refillOfBookingId: bookings.refillOfBookingId,
+        // Why this booking is cheaper than the price list says: the code of the
+        // booking it refills. A subquery rather than a self-join, because
+        // aliasing a self-referencing table defeats Drizzle's type inference.
+        refillOfCode: sql<string | null>`(select p.code from bookings p where p.id = bookings.refill_of_booking_id)`,
         noShowNote: bookings.noShowNote,
         // How the appointment actually went. `reviews_booking_unique` means this
         // join can never fan a booking out into two rows, so it costs one join
@@ -136,20 +139,9 @@ export default async function BookingsPage({
     db.select().from(removalTypes).where(eq(removalTypes.active, true)).orderBy(asc(removalTypes.sort)),
   ]);
 
-  // Resolve the parent reference of any refills on this day. A self-join would
-  // do it in one query, but aliasing a self-referencing table defeats Drizzle's
-  // type inference — and one extra lookup over a single day's bookings is free.
-  const parentIds = rows.map((r) => r.refillOfBookingId).filter(Boolean) as string[];
-  const parentCodes = new Map(
-    parentIds.length
-      ? (
-          await db
-            .select({ id: bookings.id, code: bookings.code })
-            .from(bookings)
-            .where(inArray(bookings.id, parentIds))
-        ).map((p) => [p.id, p.code])
-      : [],
-  );
+  // Guests of this day's parties who chose another branch. Not in `rows`, which
+  // is this branch only, and the drawer has to name them anyway.
+  const elsewhere = await partnersElsewhere(branchId, rows);
 
   const addonsByBooking = new Map<string, { ar: string; en: string }[]>();
   for (const link of addonLinks) {
@@ -200,6 +192,8 @@ export default async function BookingsPage({
         })),
       }}
       noShowCount={noShowCount?.n ?? 0}
+      partnersElsewhere={elsewhere}
+      branchName={branchRows.find((b) => b.id === branchId)?.name ?? null}
       bookings={rows.map(
         (r): BookingRow => ({
           id: r.id,
@@ -217,7 +211,7 @@ export default async function BookingsPage({
           notes: r.notes,
           customerName: r.customerName,
           customerPhone: r.customerPhone,
-          refillOfCode: r.refillOfBookingId ? (parentCodes.get(r.refillOfBookingId) ?? null) : null,
+          refillOfCode: r.refillOfCode,
           noShowNote: r.noShowNote,
           imageUrl: mediaUrl(r.designImage ?? r.serviceImage),
           technicianName: r.technicianName,

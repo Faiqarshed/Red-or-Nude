@@ -273,13 +273,22 @@ export default function BookingView({
             href="/booking/group"
             className="flex items-center justify-between rounded-[20px] bg-white p-5 text-start ring-1 ring-black/[0.04] transition-all hover:ring-red/40"
           >
-            <span className="font-display text-base font-extrabold text-red">{b.bookForTwo}</span>
-            <span className="text-sm text-ink/40 rtl:rotate-180">→</span>
+            <span>
+              <span className="block font-display text-base font-extrabold text-red">{b.bookForTwo}</span>
+              {/* Said before she leaves, to a member only. The group page has no
+                  credit row at all, and finding that out after building a party
+                  of four is too late to be told. */}
+              {credits.length > 0 && (
+                <span className="block text-[12px] text-ink/55">{c.packs.noCreditGroup}</span>
+              )}
+            </span>
+            <span className="shrink-0 text-sm text-ink/40 rtl:rotate-180">→</span>
           </Link>
           )}
 
-          {/* The way to the pack shelf, and the only one on the customer site.
-              It lives here rather than in the header because a pack is a way of
+          {/* The way to the pack shelf from booking. The home page's hero card
+              and the account's memberships section are the other two. It lives
+              here rather than in the header because a pack is a way of
               paying for these services, not a fourth thing to do — and because
               the row above it is the same offer in a different shape.
 
@@ -321,6 +330,11 @@ export default function BookingView({
                   onToggle: (on) => setDeclinedCredit(!on),
                 }
               : null
+          }
+          creditNote={
+            // Only to someone holding credits, and only once a service is picked
+            // — to anyone else the absence of a credit row is not a question.
+            !offer && service && credits.length > 0 ? c.packs.noCreditHere : null
           }
           agree={agree}
           onAgree={setAgree}

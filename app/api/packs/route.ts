@@ -74,23 +74,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "payment-declined" }, { status: 402 });
   }
 
-  const bought = await buyPack(customer.id, pack.id);
-  if (!bought.ok) {
-    // Paid for, and she has nothing. Loud, because someone is owed a refund.
-    console.error(`[packs] charged ${ref} but could not grant; refund owed`, bought.reason);
-    return NextResponse.json({ error: "failed" }, { status: 500 });
+  // From here on the money has moved. Every failure below gets its own code
+  // rather than `failed`, because `failed` tells the screen a retry is safe, and
+  // a retry now is a second charge. A throw counts too: an unhandled 500 reached
+  // the screen as `failed` just the same.
+  try {
+    const bought = await buyPack(customer.id, pack.id);
+    if (!bought.ok) {
+      // Paid for, and she has nothing. Loud, because someone is owed a refund.
+      console.error(`[packs] charged ${ref} but could not grant; refund owed`, bought.reason);
+      return NextResponse.json({ error: "paid-not-granted" }, { status: 500 });
+    }
+
+    // The sale, recorded where every other sale is recorded.
+    await db.insert(payments).values({
+      customerPackId: bought.customerPackId,
+      provider: driver.name,
+      providerRef: charge.providerRef,
+      method: d.method,
+      amountHalalas: pack.priceHalalas,
+      status: "paid",
+      raw: charge.raw,
+    });
+
+    return NextResponse.json({ ok: true, customerPackId: bought.customerPackId });
+  } catch (err) {
+    console.error(`[packs] charged ${ref} but the grant or the sale row threw; check both`, err);
+    return NextResponse.json({ error: "paid-not-granted" }, { status: 500 });
   }
-
-  // The sale, recorded where every other sale is recorded.
-  await db.insert(payments).values({
-    customerPackId: bought.customerPackId,
-    provider: driver.name,
-    providerRef: charge.providerRef,
-    method: d.method,
-    amountHalalas: pack.priceHalalas,
-    status: "paid",
-    raw: charge.raw,
-  });
-
-  return NextResponse.json({ ok: true, customerPackId: bought.customerPackId });
 }

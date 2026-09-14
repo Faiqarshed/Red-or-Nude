@@ -269,6 +269,15 @@ export type BookingSummary = {
    * to be handed.
    */
   groupSize: number;
+  /**
+   * Which party this belongs to, so a screen can put the members of one group
+   * booking side by side. Null for a solo booking.
+   *
+   * An opaque id, not a credential — nothing accepts it — and it adds no one to
+   * the list: the members already come back together, on the same reference or
+   * the same account. It only says which of them belong to each other.
+   */
+  groupId: string | null;
   startsAt: string;
   status: (typeof bookingStatus.enumValues)[number];
   ticketNo: string | null;

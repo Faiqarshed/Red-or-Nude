@@ -125,8 +125,19 @@ export type PublicPack = {
   priceSar: number;
   validDays: number;
   img: string | null;
-  /** What is in it, in catalogue order. */
-  lines: { serviceId: string; name: Localized; quantity: number }[];
+  /**
+   * What is in it, in catalogue order. With the service's own picture, blurb
+   * and length, so she can see what a line is before paying for six of it —
+   * the same fields the booking grid already shows for that service.
+   */
+  lines: {
+    serviceId: string;
+    name: Localized;
+    quantity: number;
+    description: Localized | null;
+    img: string | null;
+    durationMin: number;
+  }[];
   /** What the same services cost bought one at a time. The reason to buy one. */
   listPriceSar: number;
 };
@@ -151,7 +162,14 @@ export async function getPublicPacks(): Promise<PublicPack[]> {
       .map((s) => {
         const quantity = lineRows.find((l) => l.packId === p.id && l.serviceId === s.id)!.quantity;
         listPriceSar += halalasToSar(s.priceHalalas) * quantity;
-        return { serviceId: s.id, name: s.name, quantity };
+        return {
+          serviceId: s.id,
+          name: s.name,
+          quantity,
+          description: s.description,
+          img: mediaUrl(s.image),
+          durationMin: s.durationMin,
+        };
       });
 
     // Off the shelf entirely rather than quietly short. Selling it at the full
