@@ -159,7 +159,7 @@ export default function ChatWidget() {
   return (
     <div
       dir={dir}
-      className="fixed bottom-5 end-5 z-40 flex h-[min(560px,calc(100vh-2.5rem))] w-[min(380px,calc(100vw-2.5rem))] flex-col overflow-hidden rounded-[20px] bg-white text-start shadow-[0_30px_80px_rgba(0,0,0,0.28)]"
+      className="fixed bottom-5 end-5 z-[55] flex h-[min(560px,calc(100vh-2.5rem))] w-[min(380px,calc(100vw-2.5rem))] flex-col overflow-hidden rounded-[20px] bg-white text-start shadow-[0_30px_80px_rgba(0,0,0,0.28)]"
     >
       <div className="flex items-center justify-between border-b border-black/[0.06] px-5 py-4">
         <h2 className="font-display text-base font-extrabold text-ink">{t.title}</h2>
