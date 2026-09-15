@@ -9,11 +9,24 @@ import { auditLog } from "@/lib/db/schema";
 
 export type AuditDiff = Record<string, { from: unknown; to: unknown }>;
 
+/**
+ * Where an entry's `label` is kept inside `diff`. The log reads it as the item's
+ * name and never lists it as a change. It lives in `diff` rather than its own
+ * column so recording it needed no migration.
+ */
+export const AUDIT_LABEL_KEY = "__label";
+
 export type AuditEntry = {
   action: string; // create | update | delete | refund | cancel | …
   entity: string; // table name
   entityId?: string | null;
   diff?: AuditDiff;
+  /**
+   * What the item was called when this happened: "5", "Chrome", "RON-4F2K".
+   * Worth passing on every delete: afterwards the row is gone and the log has
+   * nothing else to say which one it was.
+   */
+  label?: string | { ar: string; en: string } | null;
 };
 
 /**
@@ -33,7 +46,10 @@ export async function recordAudit(actor: AuditActor, entry: AuditEntry): Promise
       action: entry.action,
       entity: entry.entity,
       entityId: entry.entityId ?? null,
-      diff: entry.diff ?? null,
+      diff:
+        entry.label != null
+          ? { ...entry.diff, [AUDIT_LABEL_KEY]: { from: null, to: entry.label } }
+          : (entry.diff ?? null),
     });
   } catch (err) {
     // A failed audit write must never roll back the business change the user

@@ -13,18 +13,27 @@
 // record or a government ID so it cannot be shared.
 
 import "server-only";
-import { and, eq, gte, inArray, lt } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { promoCodes, staff } from "@/lib/db/schema";
+import { recordAudit } from "@/lib/audit";
 import { normalizePromoCode } from "@/lib/promo";
+import { UTC_OFFSET_HOURS } from "@/lib/time";
 
 /** The client's number. One place, so raising it is one edit. */
 export const STAFF_CODE_PERCENT = 90;
 
-/** First day of the month `date` falls in, and the first day of the next one. */
+const OFFSET_MS = UTC_OFFSET_HOURS * 60 * 60 * 1000;
+
+/**
+ * The Riyadh calendar month `date` falls in: local midnight on the 1st, to
+ * local midnight on the 1st of the next month. A UTC month opened the code at
+ * 03:00 on the 1st and left the last three hours of the month on the old one.
+ */
 export function monthWindow(date: Date): { start: Date; end: Date } {
-  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
-  const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
+  const local = new Date(date.getTime() + OFFSET_MS);
+  const start = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1) - OFFSET_MS);
+  const end = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() + 1, 1) - OFFSET_MS);
   return { start, end };
 }
 
@@ -33,7 +42,8 @@ export function monthWindow(date: Date): { start: Date; end: Date } {
  *
  * Names collide in a salon and the code is a unique key, so a second Sara has
  * to get something. Bounded rather than looping forever: after ten tries the
- * name is the problem and a human should pick.
+ * name is the problem and a human should pick. Only reached for someone's first
+ * code; every month after renews that same one.
  */
 async function freeCode(base: string): Promise<string | null> {
   const root = normalizePromoCode(base.replace(/[^a-zA-Z0-9]/g, "")) || "STAFF";
@@ -52,39 +62,61 @@ async function freeCode(base: string): Promise<string | null> {
 }
 
 export type IssueOutcome =
-  | { ok: true; code: string }
+  | { ok: true; code: string; renewed: boolean }
   | { ok: false; reason: "already-issued" | "no-free-code" | "not-found" };
+
+/** Who renewal is recorded as in the audit log. */
+export const RENEWAL_ACTOR = { id: null, name: "Automatic renewal" } as const;
 
 /**
  * Give one staff member their code for the month `date` falls in.
  *
- * Idempotent by design: a member who already has a code inside that window gets
- * nothing new. Both callers depend on that — the button on the staff screen can
- * be pressed twice, and the monthly job can be retried or run twice by a cron
- * that fired late.
+ * The same code every month: her existing one has its window moved to the new
+ * month and its use reset, so "SARA" stays SARA. Last month's bookings keep
+ * pointing at it, which is where the record of what was used lives.
+ *
+ * Idempotent by design: a code whose window is already this month is left
+ * alone. Both callers depend on that — the monthly job can be retried, run
+ * daily, or fired late, and hiring issues one for the month straight away.
  */
-export async function issueMonthlyCode(
-  staffId: string,
-  date: Date = new Date(),
-): Promise<IssueOutcome> {
+export async function issueMonthlyCode(staffId: string, date: Date = new Date()): Promise<IssueOutcome> {
   const { start, end } = monthWindow(date);
 
   const [member] = await db.select().from(staff).where(eq(staff.id, staffId)).limit(1);
   if (!member) return { ok: false, reason: "not-found" };
 
-  const [existing] = await db
-    .select({ code: promoCodes.code })
+  // Newest first: older rows can exist from before codes were renewed in place.
+  const [current] = await db
+    .select()
     .from(promoCodes)
-    .where(
-      and(
-        eq(promoCodes.staffId, staffId),
-        gte(promoCodes.startsAt, start),
-        lt(promoCodes.startsAt, end),
-      ),
-    )
+    .where(eq(promoCodes.staffId, staffId))
+    .orderBy(desc(promoCodes.createdAt))
     .limit(1);
 
-  if (existing) return { ok: false, reason: "already-issued" };
+  if (current) {
+    if (current.startsAt && current.startsAt.getTime() >= start.getTime()) {
+      return { ok: false, reason: "already-issued" };
+    }
+    // Only a person ever switches a code off (an ended month doesn't touch the
+    // flag), so an off code stays off: renewal doesn't overrule them.
+    const keepOff = !current.active;
+    await db
+      .update(promoCodes)
+      .set({ startsAt: start, endsAt: end, uses: 0, active: !keepOff, updatedAt: new Date() })
+      .where(eq(promoCodes.id, current.id));
+    await recordAudit(RENEWAL_ACTOR, {
+      action: "renew",
+      entity: "promo_codes",
+      entityId: current.id,
+      label: current.code,
+      diff: {
+        startsAt: { from: current.startsAt?.toISOString() ?? null, to: start.toISOString() },
+        uses: { from: current.uses, to: 0 },
+        ...(keepOff ? {} : { active: { from: current.active, to: true } }),
+      },
+    });
+    return { ok: true, code: current.code, renewed: true };
+  }
 
   // First name only — the brief's example is "Sara", not "Sara Al-Otaibi".
   const code = await freeCode(member.name.trim().split(/\s+/)[0] ?? "");
@@ -103,28 +135,29 @@ export async function issueMonthlyCode(
     active: true,
   });
 
-  return { ok: true, code };
+  return { ok: true, code, renewed: false };
 }
 
 /**
  * The monthly renewal. Every active staff member, one code each.
  *
- * Nothing deletes last month's — an unused code simply lapses when its window
- * closes, which is exactly what "expires if unused" means, and the row stays as
- * a record of what was offered.
+ * Someone switched off as staff keeps her code as it was: it lapses at the end
+ * of its month and is not renewed until she is active again.
  */
 export async function issueMonthlyCodesForEveryone(
   date: Date = new Date(),
-): Promise<{ issued: number; skipped: number }> {
+): Promise<{ issued: number; renewed: number; skipped: number }> {
   const members = await db.select({ id: staff.id }).from(staff).where(eq(staff.active, true));
 
   let issued = 0;
+  let renewed = 0;
   let skipped = 0;
   for (const member of members) {
     const result = await issueMonthlyCode(member.id, date);
-    if (result.ok) issued++;
-    else skipped++;
+    if (!result.ok) skipped++;
+    else if (result.renewed) renewed++;
+    else issued++;
   }
 
-  return { issued, skipped };
+  return { issued, renewed, skipped };
 }

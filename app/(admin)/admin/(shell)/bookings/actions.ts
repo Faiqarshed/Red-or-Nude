@@ -13,6 +13,9 @@ import { createBooking, rescheduleBooking as moveBooking } from "@/lib/bookings"
 import { inviteReview } from "@/lib/reviews/invite";
 import { assignIfToday, notifyTechnician, pickTechnician } from "@/lib/assign";
 import { getSettings } from "@/lib/settings";
+import { adminStrings } from "@/lib/admin/strings";
+import { CANCEL_REASON_MAX, checkNote, checkPersonName, NO_SHOW_NOTE_MAX } from "@/lib/admin/validate";
+import { validateSaudiMobile } from "@/lib/phone";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
@@ -37,6 +40,13 @@ export async function setBookingStatus(
   reason?: string,
 ): Promise<Result> {
   const actor = await requireCan("bookings.manage");
+
+  // Optional, but a real one when given, and never an unbounded string written
+  // straight into the row.
+  const why = reason?.trim() || undefined;
+  if (why && checkNote(adminStrings.en.validation, "Reason", why, { required: false, max: CANCEL_REASON_MAX })) {
+    return { ok: false, error: "invalid" };
+  }
 
   // The desk's two moves are the desk's: check-in is what the no-show rule
   // measures, and closing a ticket is what sends the rating invitation. Every
@@ -94,7 +104,7 @@ export async function setBookingStatus(
       // Stamping it here is what stops the reminder job sending a second one.
       techNotifiedAt: entering("checked_in") ? now : before.techNotifiedAt,
       startedAt: entering("in_progress") ? now : before.startedAt,
-      cancelReason: status === "cancelled" ? (reason ?? null) : before.cancelReason,
+      cancelReason: status === "cancelled" ? (why ?? null) : before.cancelReason,
       updatedAt: now,
     })
     .where(eq(bookings.id, id));
@@ -239,6 +249,9 @@ export async function resolveNoShow(input: {
   if (!parsed.success) return { ok: false, error: "invalid" };
 
   const note = parsed.data.note?.trim() || null;
+  if (note && checkNote(adminStrings.en.validation, "Note", note, { max: NO_SHOW_NOTE_MAX })) {
+    return { ok: false, error: "invalid" };
+  }
 
   const [before] = await db
     .select({ status: bookings.status })
@@ -306,6 +319,13 @@ export async function createWalkIn(input: WalkInInput): Promise<Result & { code?
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.path.join(".") ?? "invalid" };
 
   const data = parsed.data;
+  // The same name and mobile rules as the drawer: a person's name if one is
+  // given, and a Saudi mobile, which is what a returning customer is matched on.
+  if (data.name && checkPersonName(adminStrings.en.validation, "Name", data.name, { required: false })) {
+    return { ok: false, error: "name" };
+  }
+  if (validateSaudiMobile(data.phone)) return { ok: false, error: "phone" };
+
   const result = await createBooking({
     branchId: data.branchId,
     serviceId: data.serviceId,

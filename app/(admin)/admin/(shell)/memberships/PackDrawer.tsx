@@ -9,12 +9,14 @@
 
 import { useState, useTransition } from "react";
 import { AlertTriangle, Minus, Plus, Trash2 } from "lucide-react";
-import { Button, Field, FormErrors, Input, invalidRing } from "@/components/admin/ui";
-import { Drawer } from "@/components/admin/overlays";
+import { Button, FormErrors, invalidRing } from "@/components/admin/ui";
+import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
 import MediaPicker from "@/components/admin/MediaPicker";
+import { NumberField, TextPair } from "@/components/admin/TextField";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
-import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
+import { TIMEZONE } from "@/lib/time";
+import { arScript, collect, DESC_MAX, focusFirstInvalid, hasErrors, NAME_MAX, rules } from "@/lib/admin/validate";
 import type { PackLine, PackRow, ServiceOption } from "./PacksView";
 import { deletePack, savePack } from "./actions";
 
@@ -86,20 +88,44 @@ export default function PackDrawer({
 
   const r = rules(t.validation);
   const priceLabel = `${t.catalog.price} (${t.common.riyal})`;
+  const validDaysError = r.number(t.packs.validDays, form.validDays, { int: true, min: 1, max: 730 });
   const check = () =>
     collect({
-      nameAr: r.text(t.catalog.nameAr, form.nameAr, { max: 120 }),
-      nameEn: r.text(t.catalog.nameEn, form.nameEn, { max: 120 }),
-      descAr: r.text(t.catalog.descAr, form.descAr, { required: false, max: 400 }),
-      descEn: r.text(t.catalog.descEn, form.descEn, { required: false, max: 400 }),
+      nameAr: r.text(t.catalog.nameAr, form.nameAr, { min: 2, max: NAME_MAX, script: arScript(form.nameAr, form.nameEn) }),
+      nameEn: r.text(t.catalog.nameEn, form.nameEn, { min: 2, max: NAME_MAX, script: "en" }),
+      descAr: r.text(t.catalog.descAr, form.descAr, { required: false, max: DESC_MAX, script: arScript(form.descAr, form.descEn) }),
+      descEn: r.text(t.catalog.descEn, form.descEn, { required: false, max: DESC_MAX, script: "en" }),
       lines:
         lines.length === 0
           ? t.packs.needsServices
           : lines.length > 30 && t.validation.max(t.packs.contents, 30),
-      priceSar: r.number(priceLabel, form.priceSar, { min: 0, max: 100_000 }),
-      validDays: r.number(t.packs.validDays, form.validDays, { int: true, min: 1, max: 730 }),
+      priceSar: r.number(priceLabel, form.priceSar, { positive: true, max: 100_000, decimals: 2 }),
+      validDays: validDaysError,
     });
   const errors = tried ? check() : {};
+
+  // The validity hint follows what is typed: "That's 3 months. Bought today, it
+  // runs until 14 Dec 2026". The static line until the number is a valid one.
+  const validHint = (() => {
+    if (validDaysError) return t.packs.validDaysHint;
+    const n = Number(form.validDays);
+    const locale = lang === "ar" ? "ar-u-nu-latn" : "en-GB";
+    const unit = (u: "week" | "month" | "year", v: number) =>
+      new Intl.NumberFormat(locale, { style: "unit", unit: u, unitDisplay: "long", maximumFractionDigits: 1 }).format(v);
+    // Whole years, months or weeks when it divides evenly; otherwise roughly
+    // months from 30 days up. Under that, the days in the box say it already.
+    const [span, approx] =
+      n % 365 === 0 ? [unit("year", n / 365), false]
+      : n % 30 === 0 ? [unit("month", n / 30), false]
+      : n % 7 === 0 ? [unit("week", n / 7), false]
+      : n > 30 ? [unit("month", Math.round((n / 30) * 10) / 10), true]
+      : [null, false];
+    // Same arithmetic as buyPack in lib/packs.ts, so the date shown is the one she'd get.
+    const until = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: TIMEZONE }).format(
+      new Date(Date.now() + n * 86_400_000),
+    );
+    return t.packs.validDaysLive(span, approx, until);
+  })();
 
   const save = () =>
     startTransition(async () => {
@@ -128,12 +154,16 @@ export default function PackDrawer({
         );
     });
 
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const remove = () =>
     startTransition(async () => {
       if (!row) return;
+      setDeleteError(null);
       const res = await deletePack(row.id);
-      if (res.ok) onSaved();
-      else setError(t.common.error);
+      if (res.ok) return onSaved();
+      setDeleteError(t.common.error);
     });
 
   return (
@@ -145,7 +175,10 @@ export default function PackDrawer({
         <>
           {row ? (
             <button
-              onClick={remove}
+              onClick={() => {
+                setDeleteError(null);
+                setConfirmDelete(true);
+              }}
               disabled={pending}
               className="me-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-red transition-colors hover:bg-red/[0.06] disabled:opacity-50"
             >
@@ -163,25 +196,13 @@ export default function PackDrawer({
       }
     >
       <div className="space-y-5">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t.catalog.nameAr} error={errors.nameAr}>
-            <Input
-              dir="rtl"
-              aria-invalid={!!errors.nameAr}
-              value={form.nameAr}
-              onChange={(e) => set("nameAr", e.target.value)}
-            />
-          </Field>
-          <Field label={t.catalog.nameEn} error={errors.nameEn}>
-            <Input
-              dir="ltr"
-              className="text-left"
-              aria-invalid={!!errors.nameEn}
-              value={form.nameEn}
-              onChange={(e) => set("nameEn", e.target.value)}
-            />
-          </Field>
-        </div>
+        <TextPair
+          labels={[t.catalog.nameAr, t.catalog.nameEn]}
+          max={NAME_MAX}
+          errors={[errors.nameAr, errors.nameEn]}
+          values={[form.nameAr, form.nameEn]}
+          onChange={[(v) => set("nameAr", v), (v) => set("nameEn", v)]}
+        />
 
         {missingAr ? (
           <p className="flex items-start gap-1.5 text-xs text-amber-700">
@@ -190,25 +211,14 @@ export default function PackDrawer({
           </p>
         ) : null}
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t.catalog.descAr} error={errors.descAr}>
-            <Input
-              dir="rtl"
-              aria-invalid={!!errors.descAr}
-              value={form.descAr}
-              onChange={(e) => set("descAr", e.target.value)}
-            />
-          </Field>
-          <Field label={t.catalog.descEn} error={errors.descEn}>
-            <Input
-              dir="ltr"
-              className="text-left"
-              aria-invalid={!!errors.descEn}
-              value={form.descEn}
-              onChange={(e) => set("descEn", e.target.value)}
-            />
-          </Field>
-        </div>
+        <TextPair
+          labels={[t.catalog.descAr, t.catalog.descEn]}
+          long
+          max={DESC_MAX}
+          errors={[errors.descAr, errors.descEn]}
+          values={[form.descAr, form.descEn]}
+          onChange={[(v) => set("descAr", v), (v) => set("descEn", v)]}
+        />
 
         {/* ---- what is in it -------------------------------------------- */}
         <div className="rounded-xl border border-black/[0.06] bg-white p-4">
@@ -275,30 +285,22 @@ export default function PackDrawer({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={priceLabel} error={errors.priceSar}>
-            <Input
-              type="number"
-              min={0}
-              step="1"
-              dir="ltr"
-              className="text-left tabular-nums"
-              aria-invalid={!!errors.priceSar}
-              value={form.priceSar}
-              onChange={(e) => set("priceSar", e.target.value)}
-            />
-          </Field>
-          <Field label={t.packs.validDays} hint={t.packs.validDaysHint} error={errors.validDays}>
-            <Input
-              type="number"
-              min={1}
-              step="1"
-              dir="ltr"
-              className="text-left tabular-nums"
-              aria-invalid={!!errors.validDays}
-              value={form.validDays}
-              onChange={(e) => set("validDays", e.target.value)}
-            />
-          </Field>
+          <NumberField
+            label={priceLabel}
+            error={errors.priceSar}
+            maxDigits={6}
+            decimals={2}
+            value={form.priceSar}
+            onChange={(v) => set("priceSar", v)}
+          />
+          <NumberField
+            label={t.packs.validDays}
+            hint={validHint}
+            error={errors.validDays}
+            maxDigits={3}
+            value={form.validDays}
+            onChange={(v) => set("validDays", v)}
+          />
         </div>
 
         {/* The whole point of a pack, in one line: what it would cost one at a
@@ -337,6 +339,16 @@ export default function PackDrawer({
         </label>
 
         <FormErrors errors={errors} summary={t.validation.summary} server={error} />
+
+        <ConfirmDialog
+          open={confirmDelete}
+          title={t.common.deleteNamed(row ? row.name[lang] : "")}
+          body={t.common.packDeleteBody}
+          pending={pending}
+          error={deleteError}
+          onClose={() => setConfirmDelete(false)}
+          onConfirm={remove}
+        />
       </div>
     </Drawer>
   );

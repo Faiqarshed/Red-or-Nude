@@ -1,12 +1,12 @@
 // Monthly renewal of the per-staff discount codes (brief §3.3).
 //
-// Schedule this for the 1st of the month in vercel.json:
-//   { "crons": [{ "path": "/api/cron/staff-codes", "schedule": "0 1 1 * *" }] }
+// Scheduled in vercel.json for 21:00 UTC every day, which is midnight in
+// Riyadh. Daily rather than "on the 1st" because a cron can't say "the last day
+// of the month" and the Hobby plan fires somewhere inside the hour anyway: on
+// every other night this finds every code already current and does nothing.
 //
-// Safe to run more than once: issueMonthlyCode skips anyone who already has a
-// code inside the window, so a retried or double-fired cron issues nothing
-// twice. It is also safe to run late — the code is dated to the month it is
-// issued in, not to the moment the job ran.
+// Safe to run more than once: issueMonthlyCode leaves a code whose window is
+// already this month alone, so a missed night is caught by the next one.
 
 import { NextResponse } from "next/server";
 import { issueMonthlyCodesForEveryone } from "@/lib/staff-codes";

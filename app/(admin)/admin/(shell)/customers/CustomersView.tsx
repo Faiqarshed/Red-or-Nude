@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Ban, Search, Users } from "lucide-react";
+import { AlertTriangle, Ban, Search, Users } from "lucide-react";
 import {
   Badge,
   Button,
@@ -16,7 +16,19 @@ import {
 } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
-import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
+import TextField from "@/components/admin/TextField";
+import {
+  checkCustomer,
+  EMAIL_MAX,
+  EMAIL_TEXT,
+  typedPhone,
+  focusFirstInvalid,
+  hasErrors,
+  NOTES_MAX,
+  NOTES_TEXT,
+  PERSON_NAME_MAX,
+  PERSON_TEXT,
+} from "@/lib/admin/validate";
 import { cn } from "@/lib/cn";
 import { pick } from "@/lib/localized";
 import type { Localized } from "@/lib/db/schema";
@@ -37,6 +49,8 @@ export type CustomerRow = {
   name: string | null;
   phone: string;
   email: string | null;
+  /** Verified email: she signs in with it. */
+  hasAccount: boolean;
   notes: string | null;
   blocked: boolean;
   bookingsCount: number;
@@ -165,6 +179,7 @@ function CustomerDrawer({
   const [pending, startTransition] = useTransition();
   const [loadedId, setLoadedId] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
   const [blocked, setBlocked] = useState(false);
@@ -174,6 +189,7 @@ function CustomerDrawer({
   if (customer && loadedId !== customer.id) {
     setLoadedId(customer.id);
     setName(customer.name ?? "");
+    setPhone(customer.phone);
     setEmail(customer.email ?? "");
     setNotes(customer.notes ?? "");
     setBlocked(customer.blocked);
@@ -183,13 +199,8 @@ function CustomerDrawer({
 
   if (!customer) return null;
 
-  const r = rules(t.validation);
-  const check = () =>
-    collect({
-      name: r.text(t.customers.name, name, { required: false, max: 120 }),
-      email: r.email(t.customers.email, email),
-      notes: notes.length > 2000 && t.validation.tooLong(t.customers.notes, 2000),
-    });
+  const check = () => checkCustomer(t, { name, phone, email, notes });
+  const emailChanged = email.trim().toLowerCase() !== (customer.email ?? "").toLowerCase();
   const errors = tried ? check() : {};
 
   const save = () =>
@@ -199,9 +210,23 @@ function CustomerDrawer({
       if (hasErrors(check())) return focusFirstInvalid();
       // It used to close whatever came back, so a refused save looked like a
       // successful one.
-      const res = await updateCustomer({ id: customer.id, name, email: email.trim(), notes, blocked });
+      const res = await updateCustomer({
+        id: customer.id,
+        name: name.trim(),
+        phone,
+        email: email.trim(),
+        notes: notes.trim(),
+        blocked,
+      });
       if (res.ok) onSaved();
-      else setError(res.error === "not-found" ? t.validation.notFound : t.common.error);
+      else
+        setError(
+          res.error === "phone-taken"
+            ? t.customers.phoneTaken
+            : res.error === "not-found"
+              ? t.validation.notFound
+              : t.common.error,
+        );
     });
 
   return (
@@ -236,39 +261,56 @@ function CustomerDrawer({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t.customers.name} error={errors.name}>
-            <Input aria-invalid={!!errors.name} value={name} onChange={(e) => setName(e.target.value)} />
-          </Field>
-          <Field label={t.customers.phone}>
-            {/* The phone is the customer's identity key — changing it here would
-                silently split their history. */}
-            <Input value={customer.phone} dir="ltr" className="text-left" disabled />
+          <TextField
+            label={t.customers.name}
+            {...PERSON_TEXT}
+            max={PERSON_NAME_MAX}
+            error={errors.name}
+            value={name}
+            onChange={setName}
+          />
+          <Field label={t.customers.phone} error={errors.phone}>
+            {/* Checkout finds a returning customer by this number, so it is
+                saved as 05XXXXXXXX whatever shape is typed, and the server
+                refuses one that already belongs to someone else. */}
+            <Input
+              inputMode="tel"
+              dir="ltr"
+              className="text-left tabular-nums"
+              aria-invalid={!!errors.phone}
+              value={phone}
+              onChange={(e) => setPhone(typedPhone(e.target.value))}
+            />
           </Field>
         </div>
 
-        <Field label={t.customers.email} error={errors.email}>
-          <Input
-            type="email"
-            dir="ltr"
-            className="text-left"
-            aria-invalid={!!errors.email}
+        <div>
+          <TextField
+            label={t.customers.email}
+            {...EMAIL_TEXT}
+            max={EMAIL_MAX}
+            error={errors.email}
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={setEmail}
           />
-        </Field>
+          {/* Said before Save, not after: changing a sign-in address signs her out. */}
+          {customer.hasAccount && emailChanged ? (
+            <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-[#b7791f]/12 px-3 py-2 text-start text-xs text-[#8a5a06]">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+              {t.customers.accountEmailNote}
+            </p>
+          ) : null}
+        </div>
 
-        <Field label={t.customers.notes} error={errors.notes}>
-          <textarea
-            rows={3}
-            aria-invalid={!!errors.notes}
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            className={cn(
-              "w-full resize-none rounded-xl border border-black/10 bg-white px-3 py-2 text-start text-sm text-ink outline-none focus:border-sky focus:ring-2 focus:ring-sky/20",
-              invalidRing,
-            )}
-          />
-        </Field>
+        <TextField
+          label={t.customers.notes}
+          {...NOTES_TEXT}
+          rows={3}
+          max={NOTES_MAX}
+          error={errors.notes}
+          value={notes}
+          onChange={setNotes}
+        />
 
         <FormErrors errors={errors} summary={t.validation.summary} server={error} />
 

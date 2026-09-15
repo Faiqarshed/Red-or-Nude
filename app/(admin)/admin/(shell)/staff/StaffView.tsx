@@ -14,9 +14,23 @@ import {
   invalidRing,
   PageHeader,
 } from "@/components/admin/ui";
-import { Drawer } from "@/components/admin/overlays";
+import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
-import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
+import TextField from "@/components/admin/TextField";
+import { dayRange, formatDateKey, riyadhDateKey } from "@/lib/time";
+import {
+  checkStaff,
+  checkTimeOff,
+  collect,
+  EMAIL_MAX,
+  EMAIL_TEXT,
+  focusFirstInvalid,
+  hasErrors,
+  PASSWORD_MAX,
+  PERSON_NAME_MAX,
+  PERSON_TEXT,
+  typedPhone,
+} from "@/lib/admin/validate";
 import { mustHaveBranch, ROLE_LABELS } from "@/lib/auth/rbac";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
@@ -62,6 +76,7 @@ export default function StaffView({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
+  const [doomed, setDoomed] = useState<StaffRow | null>(null);
 
   const messageFor = (code: string) =>
     code === "cannot-escalate"
@@ -74,6 +89,8 @@ export default function StaffView({
             ? t.staff.passwordRequired
             : code === "bad-range"
               ? t.staff.badRange
+              : code === "past-date"
+                ? t.staff.dayOffPast(t.staff.from, riyadhDateKey())
               : code === "branch-required"
                 ? t.staff.branchRequired
                 : t.common.error;
@@ -166,9 +183,7 @@ export default function StaffView({
 
                   <button
                     disabled={locked || s.id === currentUserId}
-                    onClick={() => {
-                      if (window.confirm(t.staff.deleteConfirm)) run(() => deleteStaff(s.id));
-                    }}
+                    onClick={() => setDoomed(s)}
                     className="grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red disabled:opacity-25 disabled:hover:bg-transparent"
                     aria-label={t.catalog.delete}
                   >
@@ -180,6 +195,18 @@ export default function StaffView({
           </ul>
         )}
       </Card>
+
+      <ConfirmDialog
+        open={!!doomed}
+        title={t.staff.deleteConfirm}
+        body={doomed ? `${doomed.name}, ${doomed.email}. ${t.common.cannotUndo}` : undefined}
+        cancelLabel={t.common.cancel}
+        onConfirm={() => {
+          if (doomed) run(() => deleteStaff(doomed.id));
+          setDoomed(null);
+        }}
+        onClose={() => setDoomed(null)}
+      />
 
       <StaffDrawer
         member={editing}
@@ -258,18 +285,10 @@ function StaffDrawer({
   // Same rule the server refuses on — see mustHaveBranch.
   const needsBranch = mustHaveBranch(role);
 
-  const r = rules(t.validation);
-  const check = () =>
-    collect({
-      name: r.text(t.staff.name, name, { max: 120 }),
-      email: r.email(t.staff.email, email, { required: true, max: 200 }),
-      phone: r.text(t.staff.phone, phone, { required: false, max: 20 }),
-      branchId: needsBranch && !branchId && t.staff.branchRequired,
-      // Blank keeps the current password on an edit; a new account needs one.
-      password: password
-        ? r.text(t.staff.password, password, { min: 8, max: 200 })
-        : !member && t.staff.passwordRequired,
-    });
+  const check = () => ({
+    ...checkStaff(t, { name, email, phone, password, isNew: !member }),
+    ...collect({ branchId: needsBranch && !branchId && t.staff.branchRequired }),
+  });
   const errors = tried ? check() : {};
 
   const submit = () =>
@@ -279,8 +298,8 @@ function StaffDrawer({
       if (hasErrors(check())) return focusFirstInvalid();
       const res = await saveStaff({
         id: member?.id,
-        name,
-        email,
+        name: name.trim(),
+        email: email.trim(),
         phone,
         role,
         branchId: branchId || null,
@@ -308,28 +327,33 @@ function StaffDrawer({
       }
     >
       <div className="space-y-5">
-        <Field label={t.staff.name} error={errors.name}>
-          <Input aria-invalid={!!errors.name} value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
+        <TextField
+          label={t.staff.name}
+          {...PERSON_TEXT}
+          max={PERSON_NAME_MAX}
+          error={errors.name}
+          value={name}
+          onChange={setName}
+        />
 
-        <Field label={t.staff.email} error={errors.email}>
-          <Input
-            type="email"
-            dir="ltr"
-            className="text-left"
-            aria-invalid={!!errors.email}
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </Field>
+        <TextField
+          label={t.staff.email}
+          {...EMAIL_TEXT}
+          max={EMAIL_MAX}
+          error={errors.email}
+          value={email}
+          onChange={setEmail}
+        />
 
         <Field label={t.staff.phone} error={errors.phone}>
           <Input
+            inputMode="tel"
             dir="ltr"
-            className="text-left"
+            className="text-left tabular-nums"
+            placeholder="05XXXXXXXX"
             aria-invalid={!!errors.phone}
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={(e) => setPhone(typedPhone(e.target.value))}
           />
         </Field>
 
@@ -372,13 +396,14 @@ function StaffDrawer({
 
         <Field
           label={t.staff.password}
-          hint={member ? t.staff.passwordHint : t.staff.passwordRequired}
+          hint={member ? t.staff.passwordHint : t.staff.passwordRule}
           error={errors.password}
         >
           <Input
             type="password"
             dir="ltr"
             className="text-left"
+            maxLength={PASSWORD_MAX}
             aria-invalid={!!errors.password}
             autoComplete="new-password"
             value={password}
@@ -420,18 +445,15 @@ function StaffDrawer({
  * would be the confusing behaviour.
  */
 function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string) => void }) {
-  const { t } = useAdminI18n();
+  const { t, lang } = useAdminI18n();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [tried, setTried] = useState(false);
 
-  const check = () =>
-    collect({
-      from: !from && t.validation.required(t.staff.from),
-      to: from && to && to < from && t.staff.badRange,
-    });
+  const today = riyadhDateKey();
+  const check = () => checkTimeOff(t, { from, to }, today, (k) => formatDateKey(k, lang));
   const errors = tried ? check() : {};
 
   const add = () =>
@@ -448,15 +470,26 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
       router.refresh();
     });
 
-  const drop = (id: string) =>
+  const [doomed, setDoomed] = useState<TimeOffRow | null>(null);
+  const drop = () =>
     startTransition(async () => {
-      const res = await removeTimeOff(id);
+      if (!doomed) return;
+      const res = await removeTimeOff(doomed.id);
+      setDoomed(null);
       if (!res.ok) return onError(res.error);
       router.refresh();
     });
 
   return (
     <div className="border-t border-black/[0.06] pt-5">
+      <ConfirmDialog
+        open={!!doomed}
+        title={t.common.deleteNamed(doomed ? dayRange(doomed.startsOn, doomed.endsOn) : "")}
+        body={t.common.dayOffDeleteBody}
+        pending={pending}
+        onClose={() => setDoomed(null)}
+        onConfirm={drop}
+      />
       <p className="text-sm font-semibold text-ink">{t.staff.daysOff}</p>
       <p className="mt-1 text-xs text-ink/50">{t.staff.daysOffHint}</p>
 
@@ -474,7 +507,7 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
               </span>
               <button
                 type="button"
-                onClick={() => drop(r.id)}
+                onClick={() => setDoomed(r)}
                 disabled={pending}
                 className="text-ink/40 transition-colors hover:text-red disabled:opacity-40"
                 aria-label={t.staff.removeDayOff}
@@ -491,6 +524,7 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
           <Input
             type="date"
             dir="ltr"
+            min={today}
             aria-invalid={!!errors.from}
             value={from}
             onChange={(e) => setFrom(e.target.value)}
@@ -501,7 +535,7 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
             type="date"
             dir="ltr"
             aria-invalid={!!errors.to}
-            min={from}
+            min={from || today}
             value={to}
             onChange={(e) => setTo(e.target.value)}
           />

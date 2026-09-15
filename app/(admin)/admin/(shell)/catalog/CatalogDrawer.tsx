@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { AlertTriangle, Trash2 } from "lucide-react";
-import { Button, Field, FormErrors, Input } from "@/components/admin/ui";
-import { Drawer } from "@/components/admin/overlays";
+import { Button, FormErrors } from "@/components/admin/ui";
+import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
 import MediaPicker from "@/components/admin/MediaPicker";
+import { pick } from "@/lib/localized";
 import { useAdminI18n } from "@/lib/admin/i18n";
-import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
+import { NumberField, TextPair } from "@/components/admin/TextField";
+import { arScript, collect, DESC_MAX, focusFirstInvalid, hasErrors, NAME_MAX, rules } from "@/lib/admin/validate";
 import type { CatalogRow, DesignRow } from "./CatalogView";
 import { deleteCatalogItem, saveCatalogItem, type CatalogKind } from "./actions";
 
@@ -28,8 +30,10 @@ const empty: FormState = {
   nameEn: "",
   descAr: "",
   descEn: "",
-  priceSar: "0",
-  durationMin: "60",
+  // Blank, not "0" and "60": a pre-filled box is never empty, so Save would
+  // accept a free, hour-long service nobody actually priced or timed.
+  priceSar: "",
+  durationMin: "",
   refillDays: "0",
   image: null,
   isSeasonal: false,
@@ -51,7 +55,7 @@ export default function CatalogDrawer({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { t } = useAdminI18n();
+  const { t, lang } = useAdminI18n();
   const [form, setForm] = useState<FormState>(empty);
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
@@ -79,7 +83,7 @@ export default function CatalogDrawer({
             isSeasonal: row.isSeasonal ?? false,
             active: row.active,
           }
-        : { ...empty, durationMin: kind === "service" ? "60" : "15" },
+        : empty,
     );
     setDesigns(row?.designs ?? []);
   }, [open, row, kind]);
@@ -125,14 +129,24 @@ export default function CatalogDrawer({
   const offersDesigns = kind === "addon" && form.isSeasonal;
   const check = () =>
     collect({
-      nameAr: r.text(t.catalog.nameAr, form.nameAr, { max: 120 }),
-      nameEn: r.text(t.catalog.nameEn, form.nameEn, { max: 120 }),
-      descAr: kind === "service" && r.text(t.catalog.descAr, form.descAr, { required: false, max: 400 }),
-      descEn: kind === "service" && r.text(t.catalog.descEn, form.descEn, { required: false, max: 400 }),
-      priceSar: r.number(priceLabel, form.priceSar, { min: 0, max: 100_000 }),
+      nameAr: r.text(t.catalog.nameAr, form.nameAr, { min: 2, max: NAME_MAX, script: arScript(form.nameAr, form.nameEn) }),
+      nameEn: r.text(t.catalog.nameEn, form.nameEn, { min: 2, max: NAME_MAX, script: "en" }),
+      descAr:
+        kind === "service" &&
+        r.text(t.catalog.descAr, form.descAr, { required: false, max: DESC_MAX, script: arScript(form.descAr, form.descEn) }),
+      descEn:
+        kind === "service" &&
+        r.text(t.catalog.descEn, form.descEn, { required: false, max: DESC_MAX, script: "en" }),
+      priceSar: r.number(priceLabel, form.priceSar, { min: 0, max: 100_000, decimals: 2 }),
+      // A service of 0 minutes would book a slot that ends as it starts. Add-ons
+      // and removals may genuinely add no time.
       durationMin:
         kind !== "upsell" &&
-        r.number(t.catalog.duration, form.durationMin, { int: true, min: 0, max: 600 }),
+        r.number(t.catalog.duration, form.durationMin, {
+          int: true,
+          min: kind === "service" ? 5 : 0,
+          max: 600,
+        }),
       refillDays:
         kind === "service" &&
         hasRefill &&
@@ -145,8 +159,8 @@ export default function CatalogDrawer({
               if (!d.name.ar.trim() && !d.name.en.trim() && !d.image) return [];
               const prefix = `${t.catalog.designs} ${i + 1} · `;
               return [
-                [`design${i}ar`, r.text(prefix + t.catalog.nameAr, d.name.ar, { max: 120 })],
-                [`design${i}en`, r.text(prefix + t.catalog.nameEn, d.name.en, { max: 120 })],
+                [`design${i}ar`, r.text(prefix + t.catalog.nameAr, d.name.ar, { max: NAME_MAX, script: arScript(d.name.ar, d.name.en) })],
+                [`design${i}en`, r.text(prefix + t.catalog.nameEn, d.name.en, { max: NAME_MAX, script: "en" })],
               ];
             }),
           )
@@ -185,14 +199,18 @@ export default function CatalogDrawer({
       else setError(res.error === "not-found" ? t.validation.notFound : t.common.error);
     });
 
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const remove = () =>
     startTransition(async () => {
       if (!row) return;
+      setDeleteError(null);
       const res = await deleteCatalogItem(kind, row.id);
-      if (res.ok) onSaved();
+      if (res.ok) return onSaved();
       // A service with booking history can't be deleted (FK restrict) — that
       // would erase what a customer actually bought. Deactivating is the answer.
-      else setError(res.error === "in-use" ? t.catalog.inUseCannotDelete : t.common.error);
+      setDeleteError(res.error === "in-use" ? t.catalog.inUseCannotDelete : t.common.error);
     });
 
   return (
@@ -204,7 +222,10 @@ export default function CatalogDrawer({
         <>
           {row ? (
             <button
-              onClick={remove}
+              onClick={() => {
+                setDeleteError(null);
+                setConfirmDelete(true);
+              }}
               disabled={pending}
               className="me-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-red transition-colors hover:bg-red/[0.06] disabled:opacity-50"
             >
@@ -222,27 +243,13 @@ export default function CatalogDrawer({
       }
     >
       <div className="space-y-5">
-        {/* Side-by-side AR/EN, so a missing translation is visible rather than
-            buried behind a language switch. */}
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t.catalog.nameAr} error={errors.nameAr}>
-            <Input
-              dir="rtl"
-              aria-invalid={!!errors.nameAr}
-              value={form.nameAr}
-              onChange={(e) => set("nameAr", e.target.value)}
-            />
-          </Field>
-          <Field label={t.catalog.nameEn} error={errors.nameEn}>
-            <Input
-              dir="ltr"
-              className="text-left"
-              aria-invalid={!!errors.nameEn}
-              value={form.nameEn}
-              onChange={(e) => set("nameEn", e.target.value)}
-            />
-          </Field>
-        </div>
+        <TextPair
+          labels={[t.catalog.nameAr, t.catalog.nameEn]}
+          max={NAME_MAX}
+          errors={[errors.nameAr, errors.nameEn]}
+          values={[form.nameAr, form.nameEn]}
+          onChange={[(v) => set("nameAr", v), (v) => set("nameEn", v)]}
+        />
 
         {/* Flags rows where the seed copied English into the Arabic column
             because no Arabic name existed in lib/booking.ts. Some of these are
@@ -255,55 +262,36 @@ export default function CatalogDrawer({
         ) : null}
 
         {kind === "service" ? (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label={t.catalog.descAr} error={errors.descAr}>
-              <Input
-                dir="rtl"
-                aria-invalid={!!errors.descAr}
-                value={form.descAr}
-                onChange={(e) => set("descAr", e.target.value)}
-              />
-            </Field>
-            <Field label={t.catalog.descEn} error={errors.descEn}>
-              <Input
-                dir="ltr"
-                className="text-left"
-                aria-invalid={!!errors.descEn}
-                value={form.descEn}
-                onChange={(e) => set("descEn", e.target.value)}
-              />
-            </Field>
-          </div>
+          <TextPair
+            labels={[t.catalog.descAr, t.catalog.descEn]}
+            long
+            max={DESC_MAX}
+            errors={[errors.descAr, errors.descEn]}
+            values={[form.descAr, form.descEn]}
+            onChange={[(v) => set("descAr", v), (v) => set("descEn", v)]}
+          />
         ) : null}
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={priceLabel} error={errors.priceSar}>
-            <Input
-              type="number"
-              min={0}
-              step="1"
-              dir="ltr"
-              className="text-left tabular-nums"
-              aria-invalid={!!errors.priceSar}
-              value={form.priceSar}
-              onChange={(e) => set("priceSar", e.target.value)}
-            />
-          </Field>
+          <NumberField
+            label={priceLabel}
+            error={errors.priceSar}
+            maxDigits={6}
+            decimals={2}
+            value={form.priceSar}
+            onChange={(v) => set("priceSar", v)}
+          />
           {/* Not asked of an upsell: it is chosen after the chair has been
               quoted, so it takes no time on it. The action forces 0. */}
           {kind === "upsell" ? null : (
-            <Field label={t.catalog.duration} hint={t.catalog.durationHint} error={errors.durationMin}>
-              <Input
-                type="number"
-                min={0}
-                step="5"
-                dir="ltr"
-                className="text-left tabular-nums"
-                aria-invalid={!!errors.durationMin}
-                value={form.durationMin}
-                onChange={(e) => set("durationMin", e.target.value)}
-              />
-            </Field>
+            <NumberField
+              label={t.catalog.duration}
+              hint={t.catalog.durationHint}
+              error={errors.durationMin}
+              maxDigits={3}
+              value={form.durationMin}
+              onChange={(v) => set("durationMin", v)}
+            />
           )}
         </div>
 
@@ -332,19 +320,14 @@ export default function CatalogDrawer({
 
             {hasRefill ? (
               <div className="mt-3">
-                <Field label={t.catalog.refillDays} hint={t.catalog.refillDaysHint} error={errors.refillDays}>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={365}
-                    step="1"
-                    dir="ltr"
-                    className="text-left tabular-nums"
-                    aria-invalid={!!errors.refillDays}
-                    value={form.refillDays}
-                    onChange={(e) => set("refillDays", e.target.value)}
-                  />
-                </Field>
+                <NumberField
+                  label={t.catalog.refillDays}
+                  hint={t.catalog.refillDaysHint}
+                  error={errors.refillDays}
+                  maxDigits={3}
+                  value={form.refillDays}
+                  onChange={(v) => set("refillDays", v)}
+                />
               </div>
             ) : null}
           </div>
@@ -383,24 +366,17 @@ export default function CatalogDrawer({
               <div className="space-y-3">
                 {designs.map((d, i) => (
                   <div key={i} className="flex flex-wrap items-end gap-3 border-t border-black/[0.05] pt-3 first:border-0 first:pt-0">
-                    <div className="grid min-w-[180px] flex-1 gap-2 sm:grid-cols-2">
-                      <Field label={t.catalog.nameAr} error={errors[`design${i}ar`]}>
-                        <Input
-                          aria-invalid={!!errors[`design${i}ar`]}
-                          value={d.name.ar}
-                          onChange={(e) => setDesign(i, { name: { ...d.name, ar: e.target.value } })}
-                        />
-                      </Field>
-                      <Field label={t.catalog.nameEn} error={errors[`design${i}en`]}>
-                        <Input
-                          dir="ltr"
-                          className="text-left"
-                          aria-invalid={!!errors[`design${i}en`]}
-                          value={d.name.en}
-                          onChange={(e) => setDesign(i, { name: { ...d.name, en: e.target.value } })}
-                        />
-                      </Field>
-                    </div>
+                    <TextPair
+                      className="grid min-w-[180px] flex-1 gap-2 sm:grid-cols-2"
+                      labels={[t.catalog.nameAr, t.catalog.nameEn]}
+                      max={NAME_MAX}
+                      errors={[errors[`design${i}ar`], errors[`design${i}en`]]}
+                      values={[d.name.ar, d.name.en]}
+                      onChange={[
+                        (ar) => setDesign(i, { name: { ...d.name, ar } }),
+                        (en) => setDesign(i, { name: { ...d.name, en } }),
+                      ]}
+                    />
                     <div className="min-w-[160px]">
                       <MediaPicker
                         label={t.catalog.image}
@@ -440,6 +416,16 @@ export default function CatalogDrawer({
         </div>
 
         <FormErrors errors={errors} summary={t.validation.summary} server={error} />
+
+        <ConfirmDialog
+          open={confirmDelete}
+          title={t.common.deleteNamed(row ? pick(row.name, lang) : "")}
+          body={t.common.cannotUndo}
+          pending={pending}
+          error={deleteError}
+          onClose={() => setConfirmDelete(false)}
+          onConfirm={remove}
+        />
       </div>
     </Drawer>
   );

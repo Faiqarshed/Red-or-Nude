@@ -22,19 +22,21 @@ import { requireCan } from "@/lib/auth/guard";
 import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
 import { reorderBySort } from "@/lib/admin/reorder";
+import { DESC_MAX, NAME_MAX } from "@/lib/admin/validate";
 
 const localizedText = z.object({
-  ar: z.string().trim().min(1).max(120),
-  en: z.string().trim().min(1).max(120),
+  ar: z.string().trim().min(1).max(NAME_MAX),
+  en: z.string().trim().min(1).max(NAME_MAX),
 });
 
 const packSchema = z.object({
   id: z.string().uuid().optional(),
   name: localizedText,
   description: z
-    .object({ ar: z.string().trim().max(400), en: z.string().trim().max(400) })
+    .object({ ar: z.string().trim().max(DESC_MAX), en: z.string().trim().max(DESC_MAX) })
     .optional(),
-  priceSar: z.coerce.number().min(0).max(100_000),
+  // Above zero: a free pack would hand out service credits through checkout.
+  priceSar: z.coerce.number().positive().max(100_000),
   /** Three months is the client's answer; a pack may still differ. */
   validDays: z.coerce.number().int().min(1).max(730),
   image: z.string().max(400).nullable().optional(),
@@ -159,8 +161,8 @@ export async function setPackActive(id: string, active: boolean): Promise<Action
 export async function deletePack(id: string): Promise<ActionResult> {
   const actor = await requireCan("catalog.manage");
 
-  await db.delete(packs).where(eq(packs.id, id));
-  await recordAudit(actor, { action: "delete", entity: "packs", entityId: id });
+  const [gone] = await db.delete(packs).where(eq(packs.id, id)).returning({ name: packs.name });
+  await recordAudit(actor, { action: "delete", entity: "packs", entityId: id, label: gone?.name });
   revalidateAll();
   return { ok: true, id };
 }

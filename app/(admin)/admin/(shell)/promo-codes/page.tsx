@@ -15,6 +15,7 @@ export default async function PromoCodesPage() {
   await requirePage("marketing.manage");
 
   const rows = await db.select().from(promoCodes).orderBy(desc(promoCodes.createdAt));
+  const now = new Date();
 
   return (
     <PromoCodesView
@@ -30,7 +31,9 @@ export default async function PromoCodesPage() {
         endsAt: r.endsAt?.toISOString() ?? null,
         maxUses: r.maxUses,
         uses: r.uses,
-        active: r.active,
+        // A code past its end is off, whatever the flag says: checkout already
+        // refuses it (lib/promo.ts), and the edit drawer won't save it as on.
+        active: r.active && !(r.endsAt && r.endsAt <= now),
       }))}
     />
   );

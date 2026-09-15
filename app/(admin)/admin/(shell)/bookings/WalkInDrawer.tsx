@@ -4,7 +4,16 @@ import { useEffect, useState, useTransition } from "react";
 import { Button, Field, FormErrors, Input, invalidRing } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
-import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
+import TextField from "@/components/admin/TextField";
+import {
+  checkPersonName,
+  collect,
+  focusFirstInvalid,
+  hasErrors,
+  PERSON_NAME_MAX,
+  PERSON_TEXT,
+  typedPhone,
+} from "@/lib/admin/validate";
 import { toStoredPhone, validateSaudiMobile } from "@/lib/phone";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
@@ -78,7 +87,7 @@ export default function WalkInDrawer({
   const check = () => {
     const phoneError = validateSaudiMobile(phone);
     return collect({
-      name: rules(v).text(t.bookings.customer, name, { required: false, max: 120 }),
+      name: checkPersonName(v, t.bookings.customer, name, { required: false }),
       phone: phoneError === "required" ? v.required(phoneLabel) : phoneError && v.mobile(phoneLabel),
       serviceId: !serviceId && v.required(t.bookings.service),
       startsAt: !startsAt && v.required(t.bookings.time),
@@ -102,7 +111,14 @@ export default function WalkInDrawer({
         phone: toStoredPhone(phone),
       });
       if (res.ok) onCreated();
-      else setError(res.error === "slot-taken" ? t.bookings.slotTaken : t.common.error);
+      else
+        setError(
+          res.error === "slot-taken"
+            ? t.bookings.slotTaken
+            : res.error === "phone"
+              ? v.mobile(phoneLabel)
+              : t.common.error,
+        );
     });
 
   const total =
@@ -131,20 +147,20 @@ export default function WalkInDrawer({
       }
     >
       <div className="space-y-5">
-        <Field label={t.bookings.customer} error={errors.name}>
-          <Input
-            aria-invalid={!!errors.name}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={t.bookings.optional}
-          />
-        </Field>
+        <TextField
+          label={`${t.bookings.customer} (${t.bookings.optional})`}
+          {...PERSON_TEXT}
+          max={PERSON_NAME_MAX}
+          error={errors.name}
+          value={name}
+          onChange={setName}
+        />
 
         <Field label={`${t.bookings.phone} *`} error={errors.phone}>
           <Input
             aria-invalid={!!errors.phone}
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={(e) => setPhone(typedPhone(e.target.value))}
             dir="ltr"
             inputMode="tel"
             placeholder="05XXXXXXXX"

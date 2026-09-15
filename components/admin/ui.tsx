@@ -179,16 +179,32 @@ export function Field({
   label,
   hint,
   error,
+  counter,
   children,
 }: {
   label: string;
   hint?: string;
   error?: string;
+  /** Shows "12/30" beside the label; amber once the limit is reached. */
+  counter?: { value: number; max: number };
   children: React.ReactNode;
 }) {
   return (
     <label className="block text-start">
-      <span className="mb-1.5 block text-xs font-medium text-ink/70">{label}</span>
+      <span className="mb-1.5 flex items-baseline justify-between gap-2 text-xs font-medium text-ink/70">
+        {label}
+        {counter ? (
+          <span
+            dir="ltr"
+            className={cn(
+              "text-[11px] font-normal tabular-nums",
+              counter.value >= counter.max ? "text-[#8a5a06]" : "text-ink/35",
+            )}
+          >
+            {counter.value}/{counter.max}
+          </span>
+        ) : null}
+      </span>
       {children}
       {error ? (
         <span className="mt-1 block text-xs text-red">{error}</span>

@@ -11,11 +11,12 @@ import { revalidatePath } from "next/cache";
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { addons, designs, removalTypes, services } from "@/lib/db/schema";
+import { addons, designs, removalTypes, services, type Localized } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
 import { reorderBySort } from "@/lib/admin/reorder";
+import { DESC_MAX, NAME_MAX } from "@/lib/admin/validate";
 
 /**
  * `upsell` is the coffee-and-cookie kind. Same `addons` table as `addon` — which
@@ -40,8 +41,8 @@ const ENTITY: Record<CatalogKind, string> = {
 };
 
 const localizedText = z.object({
-  ar: z.string().trim().min(1).max(120),
-  en: z.string().trim().min(1).max(120),
+  ar: z.string().trim().min(1).max(NAME_MAX),
+  en: z.string().trim().min(1).max(NAME_MAX),
 });
 
 const itemSchema = z.object({
@@ -49,7 +50,7 @@ const itemSchema = z.object({
   id: z.string().uuid().optional(),
   name: localizedText,
   description: z
-    .object({ ar: z.string().trim().max(400), en: z.string().trim().max(400) })
+    .object({ ar: z.string().trim().max(DESC_MAX), en: z.string().trim().max(DESC_MAX) })
     .optional(),
   // Entered in riyals; stored in halalas.
   priceSar: z.coerce.number().min(0).max(100_000),
@@ -74,7 +75,12 @@ const itemSchema = z.object({
     .optional(),
   active: z.boolean(),
   sort: z.coerce.number().int().min(0).max(9999),
-});
+})
+  // A zero-minute service books a slot that ends as it starts.
+  .refine((d) => d.kind !== "service" || d.durationMin >= 5, {
+    message: "service-duration",
+    path: ["durationMin"],
+  });
 
 export type CatalogInput = z.input<typeof itemSchema>;
 export type ActionResult = { ok: true; id: string } | { ok: false; error: string };
@@ -220,9 +226,9 @@ export async function setCatalogActive(
 export async function deleteCatalogItem(kind: CatalogKind, id: string): Promise<ActionResult> {
   const actor = await requireCan("catalog.manage");
   const table = TABLES[kind];
-
+  let gone: { name: Localized } | undefined;
   try {
-    await db.delete(table).where(eq(table.id, id));
+    [gone] = await db.delete(table).where(eq(table.id, id)).returning({ name: table.name });
   } catch (err) {
     // services/removal_types are referenced by bookings with onDelete: restrict —
     // deleting one that has history would erase what a customer actually bought.
@@ -231,7 +237,7 @@ export async function deleteCatalogItem(kind: CatalogKind, id: string): Promise<
     return { ok: false, error: "in-use" };
   }
 
-  await recordAudit(actor, { action: "delete", entity: ENTITY[kind], entityId: id });
+  await recordAudit(actor, { action: "delete", entity: ENTITY[kind], entityId: id, label: gone?.name });
   revalidateAll();
   return { ok: true, id };
 }

@@ -68,7 +68,7 @@ export async function uploadMedia(formData: FormData): Promise<UploadResponse> {
     })
     .returning();
 
-  await recordAudit(actor, { action: "create", entity: "media", entityId: row.id });
+  await recordAudit(actor, { action: "create", entity: "media", entityId: row.id, label: row.path });
   revalidatePath("/admin/media");
 
   return {
@@ -112,7 +112,7 @@ export async function deleteMedia(id: string): Promise<{ ok: boolean; error?: st
   }
 
   await db.delete(media).where(eq(media.id, id));
-  await recordAudit(actor, { action: "delete", entity: "media", entityId: id });
+  await recordAudit(actor, { action: "delete", entity: "media", entityId: id, label: row.path });
   revalidatePath("/admin/media");
   return { ok: true };
 }

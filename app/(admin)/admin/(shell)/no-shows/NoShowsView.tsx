@@ -6,6 +6,8 @@ import { useState, useTransition } from "react";
 import { ChevronLeft, ChevronRight, UserX } from "lucide-react";
 import { Badge, BranchFilter, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
 import { Dialog } from "@/components/admin/overlays";
+import TextField from "@/components/admin/TextField";
+import { checkNote, NO_SHOW_NOTE_MAX, NOTES_TEXT } from "@/lib/admin/validate";
 import RescheduleDialog from "../bookings/RescheduleDialog";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
@@ -81,16 +83,29 @@ export default function NoShowsView({
     setChosen(null);
     setMode("choose");
     setReason("");
+    setReasonTried(false);
+    setResolveError(null);
   };
 
+  const [reasonTried, setReasonTried] = useState(false);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+  const reasonError = reasonTried
+    ? checkNote(t.validation, b.noShowReasonLabel, reason, { max: NO_SHOW_NOTE_MAX })
+    : undefined;
+
   const cancelIt = () => {
-    if (!chosen || !reason.trim()) return;
+    if (!chosen) return;
+    setReasonTried(true);
+    if (checkNote(t.validation, b.noShowReasonLabel, reason, { max: NO_SHOW_NOTE_MAX })) return;
     setBusy(chosen.id);
+    setResolveError(null);
     startTransition(async () => {
-      const res = await resolveNoShow({ id: chosen.id, note: reason });
+      const res = await resolveNoShow({ id: chosen.id, note: reason.trim() });
       setBusy(null);
+      // A refusal used to close the dialog as if it had worked.
+      if (!res.ok) return setResolveError(t.common.error);
       closeResolve();
-      if (res.ok) router.refresh();
+      router.refresh();
     });
   };
 
@@ -297,25 +312,27 @@ export default function NoShowsView({
             {/* Required, not optional: the reason is the whole of what this
                 button records, and an empty one closes the flag saying nothing
                 about why the salon lost the hour. */}
-            <Button onClick={cancelIt} disabled={!reason.trim() || busy === chosen?.id}>
+            <Button onClick={cancelIt} disabled={busy === chosen?.id}>
               {b.noShowResolve}
             </Button>
           </>
         }
       >
-        <label className="block text-start">
-          <span className="mb-1.5 block text-xs font-medium text-ink/70">
-            {b.noShowReasonLabel}
-          </span>
-          <textarea
-            autoFocus
-            rows={3}
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-ink/35 focus:border-sky focus:ring-2 focus:ring-sky/20"
-          />
-        </label>
+        <TextField
+          label={b.noShowReasonLabel}
+          {...NOTES_TEXT}
+          rows={3}
+          max={NO_SHOW_NOTE_MAX}
+          error={reasonError}
+          value={reason}
+          onChange={setReason}
+        />
         <p className="mt-2 text-start text-xs text-ink/45">{b.noShowCancelHint}</p>
+        {resolveError ? (
+          <p role="alert" className="mt-3 rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
+            {resolveError}
+          </p>
+        ) : null}
       </Dialog>
 
       {/* The salon's own picker, pointed at the action that un-misses the

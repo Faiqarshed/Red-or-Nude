@@ -5,7 +5,9 @@
 // their place in the list behind it.
 
 import { useEffect } from "react";
-import { X } from "lucide-react";
+import { Loader2, Trash2, X } from "lucide-react";
+import { Button } from "@/components/admin/ui";
+import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
 
 function useEscape(open: boolean, onClose: () => void) {
@@ -73,6 +75,91 @@ export function Drawer({
             {footer}
           </footer>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Are you sure?" in the panel's own look, in place of `window.confirm`. Cancel
+ * takes focus, so Enter on a stray press keeps the item; Escape and the
+ * backdrop also cancel. Stays open while `pending`, so a slow delete can't be
+ * clicked twice or dismissed halfway.
+ */
+export function ConfirmDialog({
+  open,
+  title,
+  body,
+  preview,
+  confirmLabel,
+  cancelLabel,
+  pending = false,
+  error,
+  onConfirm,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  body?: string;
+  /** Shown above the text: a thumbnail, a name — whatever is about to go. */
+  preview?: React.ReactNode;
+  /** Defaults to "Delete" ("Deleting…" while pending) and "Keep". */
+  confirmLabel?: string;
+  cancelLabel?: string;
+  pending?: boolean;
+  /** The server's refusal, kept inside the dialog rather than behind it. */
+  error?: string | null;
+  onConfirm: () => void;
+  onClose: () => void;
+  /** Anything asked before confirming, such as a reason. Sits under the text. */
+  children?: React.ReactNode;
+}) {
+  const { t } = useAdminI18n();
+  const close = () => {
+    if (!pending) onClose();
+  };
+  useEscape(open, close);
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center p-4">
+      <div className="absolute inset-0 bg-ink/30 backdrop-blur-[3px]" onClick={close} />
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-title"
+        aria-describedby={body ? "confirm-body" : undefined}
+        className="relative w-full max-w-sm overflow-hidden rounded-2xl bg-white p-6 text-center shadow-2xl"
+      >
+        {preview ?? (
+          <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-red/[0.08] text-red">
+            <Trash2 className="h-5 w-5" strokeWidth={1.75} />
+          </div>
+        )}
+        <h2 id="confirm-title" className="mt-4 text-base font-semibold text-ink">
+          {title}
+        </h2>
+        {body ? (
+          <p id="confirm-body" className="mt-1.5 text-[13px] leading-relaxed text-ink/55">
+            {body}
+          </p>
+        ) : null}
+        {children ? <div className="mt-4 text-start">{children}</div> : null}
+        {error ? (
+          <p role="alert" className="mt-4 rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
+            {error}
+          </p>
+        ) : null}
+        <div className="mt-6 grid grid-cols-2 gap-2">
+          <Button variant="secondary" onClick={close} disabled={pending} autoFocus={!children}>
+            {cancelLabel ?? t.common.keep}
+          </Button>
+          <Button variant="danger" onClick={onConfirm} disabled={pending}>
+            {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {confirmLabel ?? (pending ? t.common.deleting : t.common.delete)}
+          </Button>
+        </div>
       </div>
     </div>
   );

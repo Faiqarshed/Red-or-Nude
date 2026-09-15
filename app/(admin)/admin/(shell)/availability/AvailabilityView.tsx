@@ -6,10 +6,22 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, QrCode, Trash2 } from "lucide-react";
 import { Badge, Button, Card, CardHeader, Field, Input, invalidRing, PageHeader } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
-import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
+import { ConfirmDialog } from "@/components/admin/overlays";
+import TextField from "@/components/admin/TextField";
+import {
+  CHAIR_MAX,
+  CHAIR_TEXT,
+  checkChairLabel,
+  checkClosure,
+  CLOSURE_LIMITS,
+  CLOSURE_TEXT,
+  closureWindow,
+  focusFirstInvalid,
+  hasErrors,
+} from "@/lib/admin/validate";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
-import { closureDays } from "@/lib/time";
+import { closureDays, dayRange, formatDateKey, riyadhDateKey } from "@/lib/time";
 import type { Localized } from "@/lib/db/schema";
 import {
   addClosure,
@@ -48,6 +60,10 @@ export default function AvailabilityView({
   const params = useSearchParams();
   const [, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // A chair or closure waiting on "are you sure": both delete for good.
+  const [doomed, setDoomed] = useState<{ kind: "station" | "closure"; id: string; name: string } | null>(null);
+  const [deleting, startDelete] = useTransition();
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [draft, setDraft] = useState<Hours[]>(hours);
   const [newStation, setNewStation] = useState("");
@@ -57,7 +73,6 @@ export default function AvailabilityView({
 
   const a = t.availability;
   const v = t.validation;
-  const r = rules(v);
 
   // The server's refusals, as sentences. It used to print the code itself.
   const messageFor = (code?: string) =>
@@ -77,6 +92,20 @@ export default function AvailabilityView({
       router.refresh();
     });
 
+  const confirmDelete = () =>
+    startDelete(async () => {
+      if (!doomed) return;
+      setDeleteError(null);
+      const res = doomed.kind === "station" ? await deleteStation(doomed.id) : await deleteClosure(doomed.id);
+      if (!res.ok) return setDeleteError(messageFor(res.error));
+      setDoomed(null);
+      router.refresh();
+    });
+  const askDelete = (d: NonNullable<typeof doomed>) => {
+    setDeleteError(null);
+    setDoomed(d);
+  };
+
   // Checked as she types, not on a save press: hours save the moment a box
   // loses focus, so there is no later moment to tell her.
   const dayError = (day: Hours) =>
@@ -90,19 +119,16 @@ export default function AvailabilityView({
             ? v.after(a.closes, a.opens)
             : undefined;
 
-  const stationError = stationTried
-    ? r.text(a.stationLabel, newStation, { max: 40 })
-    : undefined;
+  const checkStation = () => checkChairLabel(t, newStation, stations.map((s) => s.label));
+  const stationError = stationTried ? checkStation() : undefined;
 
-  const checkClosure = () =>
-    collect({
-      from: !closure.from && v.required(a.from),
-      to: !closure.to
-        ? v.required(a.to)
-        : closure.from && closure.to < closure.from && v.notBefore(a.to, a.from),
-      reason: r.text(a.reason, closure.reasonAr, { required: false, max: 120 }),
-    });
-  const closureErrors = closureTried ? checkClosure() : {};
+  const today = riyadhDateKey();
+  const { earliest, latest } = closureWindow(today);
+  const checkClosureForm = () =>
+    checkClosure(t, { from: closure.from, to: closure.to, reason: closure.reasonAr }, today, (k) =>
+      formatDateKey(k, lang),
+    );
+  const closureErrors = closureTried ? checkClosureForm() : {};
 
   const setBranch = (id: string) => {
     const sp = new URLSearchParams(params.toString());
@@ -248,7 +274,7 @@ export default function AvailabilityView({
                   />
                 </button>
                 <button
-                  onClick={() => run(() => deleteStation(s.id))}
+                  onClick={() => askDelete({ kind: "station", id: s.id, name: s.label })}
                   className="grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red"
                   aria-label={t.catalog.delete}
                 >
@@ -258,20 +284,23 @@ export default function AvailabilityView({
             ))}
           </ul>
           <div className="flex items-start gap-2 border-t border-black/[0.06] p-4">
-            <Field label={a.stationLabel} error={stationError}>
-              <Input
-                aria-invalid={!!stationError}
+            <div className="flex-1">
+              <TextField
+                label={a.stationLabel}
+                {...CHAIR_TEXT}
+                max={CHAIR_MAX}
+                error={stationError}
                 value={newStation}
-                onChange={(e) => setNewStation(e.target.value)}
+                onChange={setNewStation}
               />
-            </Field>
+            </div>
             <Button
               size="md"
               className="mt-6"
               onClick={() => {
                 setStationTried(true);
-                if (r.text(a.stationLabel, newStation, { max: 40 })) return focusFirstInvalid();
-                run(() => addStation(branchId, newStation));
+                if (checkStation()) return focusFirstInvalid();
+                run(() => addStation(branchId, newStation.trim()));
                 setNewStation("");
                 setStationTried(false);
               }}
@@ -318,7 +347,7 @@ export default function AvailabilityView({
                   </div>
                   {c.global && <Badge tone="info">all</Badge>}
                   <button
-                    onClick={() => run(() => deleteClosure(c.id))}
+                    onClick={() => askDelete({ kind: "closure", id: c.id, name: dayRange(from, to) })}
                     className="grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red"
                     aria-label={t.catalog.delete}
                   >
@@ -334,6 +363,8 @@ export default function AvailabilityView({
               <Field label={a.from} error={closureErrors.from}>
                 <Input
                   type="date"
+                  min={earliest}
+                  max={latest}
                   aria-invalid={!!closureErrors.from}
                   value={closure.from}
                   onChange={(e) => setClosure((c) => ({ ...c, from: e.target.value }))}
@@ -342,26 +373,28 @@ export default function AvailabilityView({
               <Field label={a.to} error={closureErrors.to}>
                 <Input
                   type="date"
-                  min={closure.from || undefined}
+                  min={closure.from || earliest}
+                  max={latest}
                   aria-invalid={!!closureErrors.to}
                   value={closure.to}
                   onChange={(e) => setClosure((c) => ({ ...c, to: e.target.value }))}
                 />
               </Field>
             </div>
-            <Field label={a.reason} error={closureErrors.reason}>
-              <Input
-                aria-invalid={!!closureErrors.reason}
-                value={closure.reasonAr}
-                onChange={(e) => setClosure((c) => ({ ...c, reasonAr: e.target.value }))}
-              />
-            </Field>
+            <TextField
+              label={a.reason}
+              {...CLOSURE_TEXT}
+              max={CLOSURE_LIMITS.reasonMax}
+              error={closureErrors.reason}
+              value={closure.reasonAr}
+              onChange={(reasonAr) => setClosure((c) => ({ ...c, reasonAr }))}
+            />
             <Button
               size="sm"
               onClick={() => {
                 setClosureTried(true);
-                if (hasErrors(checkClosure())) return focusFirstInvalid();
-                run(() => addClosure({ branchId, ...closure }));
+                if (hasErrors(checkClosureForm())) return focusFirstInvalid();
+                run(() => addClosure({ branchId, ...closure, reasonAr: closure.reasonAr.trim() }));
                 setClosure({ from: "", to: "", reasonAr: "", reasonEn: "" });
                 setClosureTried(false);
               }}
@@ -372,6 +405,16 @@ export default function AvailabilityView({
           </div>
         </Card>
       </div>
+
+      <ConfirmDialog
+        open={!!doomed}
+        title={t.common.deleteNamed(doomed?.name ?? "")}
+        body={doomed?.kind === "station" ? t.common.stationDeleteBody : t.common.closureDeleteBody}
+        pending={deleting}
+        error={deleteError}
+        onClose={() => setDoomed(null)}
+        onConfirm={confirmDelete}
+      />
     </>
   );
 }

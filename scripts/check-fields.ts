@@ -10,6 +10,7 @@
 import "./_test-db";
 
 import assert from "node:assert";
+import { z } from "zod";
 import {
   brandOf,
   cvvLength,
@@ -30,7 +31,26 @@ import {
   validateSaudiMobile,
 } from "@/lib/phone";
 import { adminStrings } from "@/lib/admin/strings";
-import { collect, hasErrors, rules } from "@/lib/admin/validate";
+import {
+  allowedPunct,
+  blockedChar,
+  checkChairLabel,
+  checkClosure,
+  checkCustomer,
+  checkNote,
+  checkPersonName,
+  checkStaff,
+  checkTimeOff,
+  collect,
+  EMAIL_TEXT,
+  NOTES_TEXT,
+  typedPhone,
+  PERSON_TEXT,
+  hasErrors,
+  numeric,
+  rules,
+  typedText,
+} from "@/lib/admin/validate";
 
 // -- number ------------------------------------------------------------------
 
@@ -257,12 +277,222 @@ console.log("  closures: a stored range reads back as the days the admin typed �
     price: "Price must be at least 0",
     days: "Days must be a whole number",
     value: "Value must be more than 0",
-    email: "Email isn't a valid email address (e.g. name@example.com)",
+    email: "Email needs an @, like name@example.com",
   });
   assert.equal(hasErrors(errors), true);
   assert.equal(r.number("Price", "100000", { min: 0, max: 100_000 }), undefined, "the limit itself is allowed");
-  assert.equal(r.number("Price", "100001", { max: 100_000 }), "Price can't be more than 100000");
+  assert.equal(r.number("Price", "100001", { max: 100_000 }), "Price can't be more than 100,000");
   assert.equal(hasErrors(collect({ a: undefined, b: "" })), false, "passing fields are dropped");
+
+  // Catalogue names: script, letters, decimals.
+  assert.equal(r.text("Name (Arabic)", "wefr434", { script: "ar" }), "Name (Arabic) must be written in Arabic letters, or match the English name exactly for a brand term like BIAB");
+  assert.equal(r.text("Name (Arabic)", "مانيكير 2", { script: "ar" }), undefined);
+  assert.equal(r.text("Name (English)", "Gel جل", { script: "en" }), "Name (English) must be in English, but it contains Arabic letters");
+  assert.equal(r.text("Name (English)", "12345", { script: "en" }), "Name (English) must contain letters, not only numbers or symbols");
+  assert.equal(r.number("Price", "99.505", { decimals: 2 }), "Price can have at most 2 decimal places (e.g. 99.50)");
+  assert.equal(r.number("Price", "99.5", { decimals: 2 }), undefined);
+
+  // Number boxes filter what is typed.
+  assert.equal(numeric("023453245643565", { maxDigits: 6, decimals: 2 }), "234532");
+  assert.equal(numeric("12.345.6", { maxDigits: 6, decimals: 2 }), "12.34");
+  assert.equal(numeric(".5", { maxDigits: 6, decimals: 2 }), "0.5");
+  assert.equal(numeric("-1e5", { maxDigits: 3 }), "15");
+  assert.equal(numeric("٤٥", { maxDigits: 3 }), "45", "Arabic-Indic digits become Latin");
+  assert.equal(numeric("0", { maxDigits: 3 }), "0", "a lone zero stays");
+  assert.equal(numeric("", { maxDigits: 3 }), "");
+
+  // Keyboard mash.
+  assert.equal(
+    r.text("Name", "Gellll Polish", { script: "en" }),
+    'Name: "Gellll" has the same letter 3 times in a row. Please check the spelling.',
+    "the offending word is quoted",
+  );
+  assert.equal(
+    r.text("Name", "Cat wefrtrhgfr", { script: "en" }),
+    'Name: "wefrtrhgfr" doesn\'t look like a real word. Please check the spelling.',
+  );
+  for (const ok of ["Classic Manicure", "BIAB", "French Tip", "Lash Extensions", "Art 1", "Nail Art 1000"]) {
+    assert.equal(r.text("Name", ok, { script: "en" }), undefined, `${ok} is a real name`);
+  }
+
+  // Text boxes filter what is typed.
+  assert.equal(typedText("Cat 😺 Eye#", { script: "en" }), "Cat Eye");
+  assert.equal(typedText("  Gel   Polish", { script: "en" }), "Gel Polish");
+  assert.equal(typedText("جل Gel", { script: "en" }), "Gel", "English box drops Arabic");
+  assert.equal(typedText("BIAB بياب", { script: "ar" }), "BIAB بياب", "Arabic box keeps brand terms");
+  assert.equal(typedText("SHAPING | BUFFING, CARE!", { script: "en", long: true }), "SHAPING | BUFFING, CARE!");
+  assert.equal(typedText("SHAPING | BUFFING", { script: "en" }), "SHAPING BUFFING", "names don't take |");
+
+  // …and can name what they dropped.
+  assert.equal(blockedChar("Cat #Eye", { script: "en" }), "#");
+  assert.equal(blockedChar("Cat 😺", { script: "en" }), "😺", "an emoji is one character, not half of one");
+  assert.equal(blockedChar("French Tip (2)", { script: "en" }), undefined);
+  assert.equal(allowedPunct({ script: "en" }), "- & ' . ( ) /");
+  // Signed amounts (gift card adjustments): one leading minus, nothing else.
+  assert.equal(numeric("-50", { maxDigits: 5, decimals: 2, signed: true }), "-50");
+  assert.equal(numeric("5-0", { maxDigits: 5, decimals: 2, signed: true }), "50", "a minus in the middle is dropped");
+  assert.equal(numeric("--12.345e", { maxDigits: 5, decimals: 2, signed: true }), "-12.34");
+  assert.equal(numeric("-", { maxDigits: 5, signed: true }), "-", "a lone minus survives so she can keep typing");
+  assert.equal(numeric("-50", { maxDigits: 5 }), "50", "unsigned boxes never take a minus");
+
+  // Customers: a real name, a Saudi mobile, a real email if any, notes that keep their lines.
+  const customer = (name: string, notes = "", phone = "0555000111", email = "") =>
+    checkCustomer(adminStrings.en, { name, phone, email, notes });
+  assert.deepEqual(customer("Noura Al-Qahtani", "Prefers\nmornings", "+966 55 500 0111", "noura@example.com"), {});
+  assert.deepEqual(customer("نورة بنت عبدالله القحطاني"), {}, "a full Arabic name fits");
+  assert.equal(customer("Noura", "", "").phone, "Mobile is required");
+  assert.equal(customer("Noura", "", "0112345678").phone, "Mobile must be a Saudi mobile: 05 followed by 8 digits", "landline");
+  assert.equal(customer("Noura", "", "05550001").phone, "Mobile must be a Saudi mobile: 05 followed by 8 digits", "too short");
+  assert.equal(typedPhone("+966 55-500 0111"), "+966555000111");
+  assert.equal(typedPhone("٠٥٥٥abc٠٠٠١١١"), "0555000111", "Arabic-Indic digits become Latin");
+  assert.equal(typedPhone("05+55"), "0555", "a plus only counts in front");
+  assert.equal(customer("Noura", "", "0555000111", "noura@").email, "Email is missing the domain after the @, like example.com");
+
+  // Email shapes: each common mistake names itself; EMAIL_RE catches the rest.
+  const mail = (s: string) => r.email("Email", s, { max: 100 });
+  for (const ok of [
+    "noura@example.com",
+    "n.al-qahtani+vip@mail.redornude.sa",
+    "a@x.co",
+    "a_b@x.museum",
+    "a@sub.x-y.com",
+    "noura_@x.com",
+    // Real shapes the mash checks must leave alone.
+    "noura1995@gmail.com",
+    "ahmed.q8.1990@hotmail.com",
+    "0555123456@gmail.com",
+    "966555123456@icloud.com",
+    "sara.2024@outlook.sa",
+    "faiq.arshed@airbridgedevs.com",
+    "m.schmidt@web.de",
+    // Handles she picked on purpose.
+    "nouraaa@gmail.com",
+    "noura2k24@gmail.com",
+    "noura19951995@gmail.com",
+    "princess.n0ura@hotmail.com",
+    "xx.noura.xx@gmail.com",
+  ]) {
+    assert.equal(mail(ok), undefined, `${ok} is a real address`);
+    // Never looser than the public APIs' zod check, or a saved address couldn't sign in.
+    assert.ok(z.string().email().safeParse(ok).success, `${ok} must also pass zod`);
+  }
+  for (const [bad, why] of [
+    ["noura.example.com", "Email needs an @, like name@example.com"],
+    ["@example.com", "Email is missing the part before the @"],
+    ["noura@example", "Email is missing the domain after the @, like example.com"],
+    [".noura@x.com", "Email can't start or end with a dot before the @, or have two dots in a row"],
+    ["noura.@x.com", "Email can't start or end with a dot before the @, or have two dots in a row"],
+    ["no..ura@x.com", "Email can't start or end with a dot before the @, or have two dots in a row"],
+    ["noura@x.c", "Email must end in letters after the last dot, like .com or .sa"],
+    ["noura@x.c0m", "Email must end in letters after the last dot, like .com or .sa"],
+    ["noura@x.com.", "Email must end in letters after the last dot, like .com or .sa"],
+    ["noura@x-.com", "Email isn't a valid email address (e.g. name@example.com)"],
+    ["noura@-x.com", "Email isn't a valid email address (e.g. name@example.com)"],
+    ["noura@x..com", "Email isn't a valid email address (e.g. name@example.com)"],
+    ["noura@.x.com", "Email isn't a valid email address (e.g. name@example.com)"],
+    ["_noura@x.com", "Email isn't a valid email address (e.g. name@example.com)"],
+    ["no%ura@x.com", "Email isn't a valid email address (e.g. name@example.com)"],
+    // Well-formed, but mash.
+    ["uygt76t879708770979678687@gmail.com", 'Email: "uygt76t879708770979678687" doesn\'t look like a real email. Please check it.'],
+    ["a1b2c3@gmail.com", 'Email: "a1b2c3" doesn\'t look like a real email. Please check it.'],
+    ["sdfghjk@gmail.com", 'Email: "sdfghjk" doesn\'t look like a real email. Please check it.'],
+    ["8237492384923@gmail.com", 'Email: "8237492384923" doesn\'t look like a real email. Please check it.'],
+    ["noura@sdfghj.com", 'Email: "sdfghj.com" doesn\'t look like a real email. Please check it.'],
+    [`${"a".repeat(65)}@x.com`, "Email can't be longer than 64 characters"],
+  ] as const) {
+    assert.equal(mail(bad), why, bad);
+  }
+  assert.equal(customer("Noura", "", "0555000111", "noura@x@y.com").email, "An email address has only one @");
+  assert.equal(typedText("نورة#noura@@ex@ample.com ", EMAIL_TEXT), "noura@example.com");
+  assert.equal(blockedChar(" noura@x.com ", EMAIL_TEXT), undefined, "spaces go quietly");
+  assert.equal(customer("").name, "Name is required");
+  assert.equal(customer("Noura2").name, `"2" can't be used in a name. Allowed: letters, spaces and - ' .`);
+  assert.equal(customer("Sdfghjk").name, 'Name: "Sdfghjk" doesn\'t look like a real word. Please check the spelling.');
+  assert.equal(customer("Noura", "VIP 😀").notes, `"😀" can't be used here. Allowed: letters, numbers and - & ' . ( ) / , | : + ! % ، ؟`);
+  assert.equal(typedText("a\r\n\n\n\nb", NOTES_TEXT), "a\n\nb", "runs of blank lines collapse to one");
+
+  assert.equal(typedText("Noura 2", PERSON_TEXT), "Noura ", "digits never land in a name");
+
+  // Staff: a person, a required sign-in email, an optional mobile, a real password.
+  const member = (o: Partial<{ name: string; email: string; phone: string; password: string; isNew: boolean }> = {}) =>
+    checkStaff(adminStrings.en, { name: "Lama Al-Harbi", email: "lama@redornude.com", phone: "", password: "Salon2026", isNew: true, ...o });
+  assert.deepEqual(member(), {});
+  assert.deepEqual(member({ phone: "0555000111" }), {});
+  assert.deepEqual(member({ password: "", isNew: false }), {}, "blank keeps the current password on an edit");
+  assert.equal(member({ password: "" }).password, "A password is required for a new account");
+  assert.equal(member({ email: "" }).email, "Email is required");
+  assert.equal(member({ phone: "12345" }).phone, "Mobile must be a Saudi mobile: 05 followed by 8 digits");
+  assert.equal(member({ password: "short1" }).password, "Password needs at least 8 characters");
+  assert.equal(member({ password: "onlyletters" }).password, "Password needs at least one letter and one number");
+  assert.equal(member({ password: "12345678" }).password, "Password needs at least one letter and one number");
+  assert.equal(member({ password: " Salon2026" }).password, "Password can't start or end with a space");
+  assert.equal(member({ password: "a1".repeat(37) }).password, "Password can't be longer than 72 characters", "bcrypt's 72-byte ceiling");
+  assert.equal(member({ password: "كلمةسر2026" }).password, undefined, "Arabic letters count as letters");
+  assert.equal(member({ name: "Lama (seed)" }).name, `"(" can't be used in a name. Allowed: letters, spaces and - ' .`);
+
+  // Days off: from today onwards; today itself is fine.
+  const dayOff = (from: string, to = "") => checkTimeOff(adminStrings.en, { from, to }, "2026-09-15");
+  assert.deepEqual(dayOff("2026-09-15"), {}, "today, for a morning sick call");
+  assert.deepEqual(dayOff("2026-09-20", "2026-09-22"), {});
+  assert.equal(
+    dayOff("2026-09-14").from,
+    "From can't be before today (2026-09-15). Days off can only be added from today onwards.",
+  );
+  assert.equal(dayOff("").from, "From is required");
+  assert.equal(dayOff("2026-09-22", "2026-09-20").to, "The end date is before the start date");
+
+  // Reasons and notes: optional when asked to be, real when given, bounded.
+  const v = adminStrings.en.validation;
+  assert.equal(checkNote(v, "Reason", "", { required: false, max: 200 }), undefined, "an optional reason may be blank");
+  assert.equal(checkNote(v, "Reason", "", { max: 500 }), "Reason is required");
+  assert.equal(checkNote(v, "Reason", "Customer called\nto cancel", { max: 200 }), undefined);
+  assert.equal(checkNote(v, "Reason", "Customer asked ".repeat(14), { max: 200 }), "Reason can't be longer than 200 characters");
+  assert.equal(checkNote(v, "Reason", "sick 🤒", { max: 200 }), `"🤒" can't be used here. Allowed: letters, numbers and - & ' . ( ) / , | : + ! % ، ؟`);
+  assert.equal(checkPersonName(v, "Name", "", { required: false }), undefined);
+  assert.equal(checkPersonName(v, "Name", "Sara Al-Otaibi"), undefined);
+  assert.equal(checkPersonName(v, "Name", "Sara 2"), `"2" can't be used in a name. Allowed: letters, spaces and - ' .`);
+
+  // Blank mandatory boxes block the save, whatever their type.
+  assert.equal(r.number("Price (SAR)", "", { min: 0, max: 100_000, decimals: 2 }), "Price (SAR) is required");
+  assert.equal(r.number("Duration (minutes)", "   ", { int: true, min: 5, max: 600 }), "Duration (minutes) is required");
+  assert.equal(r.text("Name (English)", "", { min: 2, max: 30, script: "en" }), "Name (English) is required");
+  assert.equal(r.number("Price (SAR)", "0", { positive: true }), "Price (SAR) must be more than 0");
+
+  // Chairs: a number 1–99 or a real short name, never blank, never twice.
+  const chair = (label: string, taken: string[] = ["1", "2", "VIP"]) =>
+    checkChairLabel(adminStrings.en, label, taken);
+  assert.equal(chair("3"), undefined);
+  assert.equal(chair("Special"), undefined);
+  assert.equal(chair("Special 2"), undefined);
+  assert.equal(chair("   "), "Label is required");
+  assert.equal(chair("0"), "A chair number must be from 1 to 99");
+  assert.equal(chair("124567890"), "A chair number must be from 1 to 99");
+  assert.equal(chair("124567890-=';LK>Jhmgnfb"), `"=" can't be used here. Allowed: letters, numbers and - & ' . ( ) /`);
+  assert.equal(chair("Jhmgnfb"), 'Label: "Jhmgnfb" doesn\'t look like a real word. Please check the spelling.');
+  assert.equal(chair("vip"), `There's already a chair called "vip" in this branch. Please pick another name.`);
+  assert.equal(chair(" 2 "), `There's already a chair called "2" in this branch. Please pick another name.`);
+  assert.equal(chair("كرسي خاص"), undefined, "Arabic chair names are fine");
+
+  // Closures: a year back, two years ahead, 90 days long, a real reason.
+  const day = "2026-09-15";
+  const closure = (from: string, to: string, reason = "Eid holiday") =>
+    checkClosure(adminStrings.en, { from, to, reason }, day);
+  assert.deepEqual(closure("2026-09-20", "2026-09-22"), {});
+  assert.deepEqual(closure("2025-09-15", "2025-09-15"), {}, "exactly a year back is allowed, for the record");
+  assert.deepEqual(closure("2025-09-14", "2025-09-14"), {
+    from: "From can't be before 2025-09-15. Past closures can be recorded up to one year back.",
+  });
+  assert.deepEqual(closure("2028-09-15", "2028-09-15"), {}, "exactly two years ahead is allowed");
+  assert.equal(closure("2028-09-10", "2028-09-16").to, "To can't be after 2028-09-15. Closures can be planned up to two years ahead.");
+  assert.equal(closure("2026-10-01", "2026-12-29").to, undefined, "90 days is the limit itself");
+  assert.equal(closure("2026-10-01", "2026-12-30").to, "A closure can last 90 days at most. This one is 91 days.");
+  assert.equal(closure("2026-09-22", "2026-09-20").to, "To can't be before From");
+  assert.equal(closure("", "").from, "From is required");
+  assert.equal(closure("2026-09-20", "2026-09-22", "").reason, "Reason is required");
+  assert.equal(closure("2026-09-20", "2026-09-22", "sdfghjkl").reason, 'Reason: "sdfghjkl" doesn\'t look like a real word. Please check the spelling.');
+  assert.deepEqual(closure("2026-09-20", "2026-09-22", "صيانة المحل"), {}, "an Arabic reason is fine");
+
+  assert.equal(adminStrings.en.validation.blocked("#", allowedPunct({ script: "en" })), `"#" can't be used here. Allowed: letters, numbers and - & ' . ( ) /`);
 }
 console.log("  admin forms: each failing field gets its own message, passing ones none ✓");
 

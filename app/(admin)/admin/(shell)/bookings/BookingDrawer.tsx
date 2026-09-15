@@ -3,12 +3,14 @@
 import { useEffect, useState, useTransition } from "react";
 import { CalendarClock, ChevronRight, Phone, RefreshCw, Trash2, Users } from "lucide-react";
 import { Badge, Button, scoreTone } from "@/components/admin/ui";
-import { Drawer } from "@/components/admin/overlays";
+import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
+import TextField from "@/components/admin/TextField";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { CANCEL_REASON_MAX, checkNote, NOTES_TEXT } from "@/lib/admin/validate";
 import { serviceClock } from "@/lib/booking-clock";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
-import { formatCountdown, formatDuration, localTime } from "@/lib/time";
+import { formatCountdown, formatDateTime, formatDuration, localTime } from "@/lib/time";
 import { deleteBooking, setBookingStatus } from "./actions";
 import RescheduleDialog from "./RescheduleDialog";
 import type { PartnerElsewhere } from "./partners";
@@ -305,6 +307,11 @@ export default function BookingDrawer({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+  // The three moves that can't be walked back ask first, in the panel's own
+  // dialog. A cancel also takes its (optional) reason there.
+  const [asking, setAsking] = useState<"cancelled" | "no_show" | "delete" | null>(null);
+  const [reason, setReason] = useState("");
+  const [askError, setAskError] = useState<string | null>(null);
 
   // The countdown has to move or it is worse than no countdown: a drawer left
   // open would keep promising a wait that has already elapsed. Thirty seconds
@@ -322,26 +329,26 @@ export default function BookingDrawer({
   const opensAt = new Date(booking.startsAt).getTime() - checkinEarlyMin * 60_000;
   const tooEarly = now < opensAt;
 
+  const ask = (what: "cancelled" | "no_show" | "delete") => {
+    setAsking(what);
+    setReason("");
+    setAskError(null);
+  };
+
   /**
-   * Erase it, after saying so out loud.
-   *
-   * `window.confirm`, like the cancellation reason and the no-show note: the
-   * house way of making staff pause, and the one dialog a browser will not let a
-   * mis-tap dismiss. The message names the group size when there is one, because
-   * deleting one member takes the party with it.
+   * Erase it, after saying so out loud. The message names the group size when
+   * there is one, because deleting one member takes the party with it.
    *
    * The refusals come back named, so a booking that cannot be deleted says why
    * — "cancel it instead" is a useful sentence; "failed" is not.
    */
   const remove = () => {
     if (!booking) return;
-    if (!window.confirm(t.bookings.delConfirm)) return;
-
-    setError(null);
+    setAskError(null);
     startTransition(async () => {
       const res = await deleteBooking(booking.id);
       if (res.ok) return onChanged();
-      setError(
+      setAskError(
         res.error === "has-payment"
           ? t.bookings.delHasPayment
           : res.error === "has-review"
@@ -355,24 +362,34 @@ export default function BookingDrawer({
     });
   };
 
-  const move = (status: BookingStatus) =>
+  // The cancel reason is optional, but a typed one is held to the same rules as
+  // every other note: letters, no mash, and a length the server keeps.
+  const reasonError =
+    asking === "cancelled" && reason
+      ? checkNote(t.validation, t.bookings.cancelReason, reason, { required: false, max: CANCEL_REASON_MAX })
+      : undefined;
+
+  const move = (status: BookingStatus, why?: string) =>
     startTransition(async () => {
       setError(null);
-      const reason = status === "cancelled" ? window.prompt(t.bookings.cancelReason) ?? undefined : undefined;
-      const res = await setBookingStatus(booking.id, status, reason);
-      if (res.ok) onChanged();
-      // Check-in has one refusal a person can act on — she isn't due yet — so it
-      // says when, and how long that is, rather than "something went wrong".
-      else
-        setError(
-          res.error === "too-early"
-            ? // The unlock moment, not her slot — they differ whenever
-              // checkin_early_min is non-zero, and saying the wrong one is worse
-              // than saying nothing.
-              `${t.frontDesk.tooEarly} ${localTime(new Date(opensAt).toISOString())} · ${formatCountdown(opensAt - Date.now(), lang)}`
-            : t.common.error,
-        );
+      setAskError(null);
+      const res = await setBookingStatus(booking.id, status, why);
+      if (res.ok) return onChanged();
+      const message =
+        // Check-in has one refusal a person can act on — she isn't due yet — so
+        // it says when, and how long that is, rather than "something went wrong".
+        res.error === "too-early"
+          ? // The unlock moment, not her slot — they differ whenever
+            // checkin_early_min is non-zero, and saying the wrong one is worse
+            // than saying nothing.
+            `${t.frontDesk.tooEarly} ${localTime(new Date(opensAt).toISOString())} · ${formatCountdown(opensAt - Date.now(), lang)}`
+          : t.common.error;
+      if (asking) setAskError(message);
+      else setError(message);
     });
+
+  const when = formatDateTime(new Date(booking.startsAt), lang);
+  const partySize = booking.groupId ? partners.length + partnersElsewhere.length + 1 : 1;
 
   return (
     <Drawer
@@ -388,7 +405,7 @@ export default function BookingDrawer({
             <Button
               variant="secondary"
               size="sm"
-              onClick={remove}
+              onClick={() => ask("delete")}
               disabled={pending}
               className="me-auto border-red/30 text-red hover:bg-red/[0.06]"
             >
@@ -420,7 +437,7 @@ export default function BookingDrawer({
                 <button
                   key={status}
                   disabled={pending}
-                  onClick={() => move(status)}
+                  onClick={() => (status === "cancelled" || status === "no_show" ? ask(status) : move(status))}
                   className={cn(
                     "rounded-xl border px-3 py-2 text-xs font-medium transition-colors disabled:opacity-50",
                     status === "cancelled" || status === "no_show"
@@ -466,6 +483,55 @@ export default function BookingDrawer({
             {error}
           </p>
         ) : null}
+
+        <ConfirmDialog
+          open={asking === "cancelled"}
+          title={t.bookings.cancelAskTitle}
+          body={t.bookings.cancelAskBody(booking.code, when)}
+          confirmLabel={t.bookings.cancelConfirm}
+          cancelLabel={t.bookings.keepBooking}
+          pending={pending}
+          error={askError}
+          onClose={() => setAsking(null)}
+          onConfirm={() => {
+            if (reasonError) return;
+            move("cancelled", reason.trim() || undefined);
+          }}
+        >
+          <TextField
+            label={t.bookings.cancelReason}
+            {...NOTES_TEXT}
+            rows={2}
+            max={CANCEL_REASON_MAX}
+            error={reasonError}
+            value={reason}
+            onChange={setReason}
+          />
+        </ConfirmDialog>
+
+        <ConfirmDialog
+          open={asking === "no_show"}
+          title={t.bookings.noShowAskTitle}
+          body={t.bookings.noShowAskBody(booking.code, when)}
+          confirmLabel={t.bookings.statuses.no_show}
+          cancelLabel={t.bookings.keepBooking}
+          pending={pending}
+          error={askError}
+          onClose={() => setAsking(null)}
+          onConfirm={() => move("no_show")}
+        />
+
+        <ConfirmDialog
+          open={asking === "delete"}
+          title={t.bookings.delAskTitle}
+          body={partySize > 1 ? t.bookings.delConfirmGroup(partySize) : t.bookings.delConfirm}
+          confirmLabel={t.bookings.del}
+          cancelLabel={t.bookings.keepBooking}
+          pending={pending}
+          error={askError}
+          onClose={() => setAsking(null)}
+          onConfirm={remove}
+        />
 
         {/* The rest of the party, last: this booking's own facts and controls
             are what the drawer was opened for, and the party is where she goes

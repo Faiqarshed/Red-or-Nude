@@ -40,6 +40,15 @@ export function closureDays(startsAt: Date, endsAt: Date): { from: string; to: s
   };
 }
 
+/** "2026-09-20", or "2026-09-20 → 2026-09-22" for more than one day. */
+export const dayRange = (from: string, to: string) => (from === to ? from : `${from} → ${to}`);
+
+/** A YYYY-MM-DD key as she reads it: "15 Sept 2026", with Latin digits in Arabic too. */
+export const formatDateKey = (key: string, lang: "ar" | "en") =>
+  new Intl.DateTimeFormat(lang === "ar" ? "ar-u-nu-latn" : "en-GB", { dateStyle: "medium", timeZone: "UTC" }).format(
+    new Date(key),
+  );
+
 /** Riyadh wall clock, HH:MM, from an ISO string. */
 export function localTime(iso: string): string {
   return new Date(new Date(iso).getTime() + UTC_OFFSET_HOURS * HOUR_MS)
