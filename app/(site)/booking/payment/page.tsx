@@ -445,7 +445,12 @@ export default function PaymentPage() {
           const data = await res.json().catch(() => ({}));
           // 409 means the thing they were looking at is gone: either someone
           // took the chair while they typed, or the refill window just lapsed.
-          if (data.error === "refill-expired") setError(p.refillExpired);
+          // `refill-not-yours` reads the same to her: the offer is not one this
+          // checkout can use. It is a different reason on the server, and the
+          // difference is not hers to learn — it would say whose booking it is.
+          if (data.error === "refill-expired" || data.error === "refill-not-yours") {
+            setError(p.refillExpired);
+          }
           else if (data.error === "refill-window") setError(p.refillWindow);
           // The code was fine when it was previewed and is not any more, or the
           // preview was lying. Either way the hold was refused rather than

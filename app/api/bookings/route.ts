@@ -159,7 +159,10 @@ export async function POST(request: Request) {
       // not any more, so what she is looking at is stale rather than wrong.
       result.error === "pack-credit-gone"
         ? 409
-        : result.error === "blocked"
+        : // Refused, not mispriced: the offer is real and belongs to someone
+          // else. 403 like `blocked` — the request was well formed and the
+          // answer is still no.
+          result.error === "blocked" || result.error === "refill-not-yours"
           ? 403
           : 400;
     return NextResponse.json(

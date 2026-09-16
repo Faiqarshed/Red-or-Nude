@@ -28,7 +28,7 @@
 
 import "server-only";
 import { createHash, randomInt, timingSafeEqual } from "node:crypto";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { otps } from "@/lib/db/schema";
 
@@ -120,6 +120,11 @@ export type VerifyOtpResult =
  * neither tells an attacker anything they couldn't learn by requesting a code
  * themselves. What is *not* leaked is whether the subject exists at all; that
  * decision belongs to the caller.
+ *
+ * **The attempt is claimed in SQL, before the code is compared.** Read one, add
+ * one, write it back is five guesses only while they arrive one at a time — a
+ * thousand at the same instant all read the same number first and the budget
+ * never runs out. The conditional update below is what makes every guess cost.
  */
 export async function verifyOtp(subject: string, code: string): Promise<VerifyOtpResult> {
   const [row] = await db
@@ -136,23 +141,41 @@ export async function verifyOtp(subject: string, code: string): Promise<VerifyOt
     .limit(1);
 
   if (!row) return { ok: false, reason: "no-code" };
-  if (row.attempts >= OTP_MAX_ATTEMPTS) return { ok: false, reason: "too-many-attempts" };
+
+  // Claim one of the five. Nothing comes back when the budget is spent, or when
+  // another request consumed the row between the read above and this write.
+  const [claimed] = await db
+    .update(otps)
+    .set({ attempts: sql`${otps.attempts} + 1` })
+    .where(
+      and(
+        eq(otps.id, row.id),
+        isNull(otps.consumedAt),
+        lt(otps.attempts, OTP_MAX_ATTEMPTS),
+      ),
+    )
+    .returning({ attempts: otps.attempts });
+
+  if (!claimed) return { ok: false, reason: "too-many-attempts" };
 
   if (!sameHash(row.codeHash, hash(code.trim()))) {
-    const attempts = row.attempts + 1;
-    await db
-      .update(otps)
-      .set({
-        attempts,
-        // Out of attempts: burn it so a fresh request is the only way forward.
-        consumedAt: attempts >= OTP_MAX_ATTEMPTS ? new Date() : null,
-      })
-      .where(eq(otps.id, row.id));
-    return { ok: false, reason: attempts >= OTP_MAX_ATTEMPTS ? "too-many-attempts" : "wrong" };
+    // Out of attempts: burn it so a fresh request is the only way forward.
+    if (claimed.attempts >= OTP_MAX_ATTEMPTS) {
+      await db.update(otps).set({ consumedAt: new Date() }).where(eq(otps.id, row.id));
+      return { ok: false, reason: "too-many-attempts" };
+    }
+    return { ok: false, reason: "wrong" };
   }
 
-  await db.update(otps).set({ consumedAt: new Date() }).where(eq(otps.id, row.id));
-  return { ok: true };
+  // Single use, decided by the database rather than by the read above: two
+  // correct guesses racing must not both be told yes.
+  const [consumed] = await db
+    .update(otps)
+    .set({ consumedAt: new Date() })
+    .where(and(eq(otps.id, row.id), isNull(otps.consumedAt)))
+    .returning({ id: otps.id });
+
+  return consumed ? { ok: true } : { ok: false, reason: "no-code" };
 }
 
 /** `f•••@gmail.com` — enough for "check that inbox", not enough to harvest. */

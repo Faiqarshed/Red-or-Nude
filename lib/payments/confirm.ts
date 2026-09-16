@@ -226,8 +226,12 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     byQueue.set(key, [...(byQueue.get(key) ?? []), i]);
   });
 
+  // Only the transaction may answer `expired`. This `try` used to cover the reads
+  // below it too, so a blip on a station label told a customer whose booking was
+  // confirmed, paid and ticketed to go and book it again.
+  let tickets: string[];
   try {
-    const tickets = await db.transaction(async (tx) => {
+    tickets = await db.transaction(async (tx) => {
       await tx
         .update(payments)
         .set({
@@ -268,7 +272,20 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
 
       return numbers;
     });
+  } catch (err) {
+    // The charge went through but we couldn't confirm. Money was taken for a
+    // booking that no longer exists, so this must be loud — a refund is owed.
+    console.error(`[payments] charged ${ref} but could not confirm; refund owed`, err);
+    return { ok: false, error: "expired" };
+  }
 
+  // Past here the booking is real whatever happens. Each of these already
+  // swallows its own errors; the wrapper is for the plain reads between them,
+  // which had none and do not deserve to be able to unsay a confirmation.
+  const labelOf = new Map<string, string>();
+  const techOf = new Map<string, string | null>();
+
+  try {
     // Real work on today's floor now, so it gets a technician now. Next week is
     // dawn's job, on the day.
     //
@@ -289,7 +306,7 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
           members.map((m) => m.stationId).filter(Boolean) as string[],
         ),
       );
-    const labelOf = new Map(chairs.map((c) => [c.id, c.label]));
+    for (const c of chairs) labelOf.set(c.id, c.label);
 
     // Read back rather than taken off `members`: those rows were loaded before
     // assignIfToday ran just above, so a booking taken for today has a
@@ -297,20 +314,17 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     // the ticket the browser shows and the confirmation message. The invoice
     // looks the same thing up inside buildBookingInvoice, which has callers of
     // its own and should not need one handed in.
-    const techOf = new Map(
-      (
-        await db
-          .select({ id: bookings.id, name: staff.name })
-          .from(bookings)
-          .leftJoin(staff, eq(staff.id, bookings.technicianId))
-          .where(
-            inArray(
-              bookings.id,
-              members.map((m) => m.id),
-            ),
-          )
-      ).map((r) => [r.id, r.name]),
-    );
+    const assigned = await db
+      .select({ id: bookings.id, name: staff.name })
+      .from(bookings)
+      .leftJoin(staff, eq(staff.id, bookings.technicianId))
+      .where(
+        inArray(
+          bookings.id,
+          members.map((m) => m.id),
+        ),
+      );
+    for (const r of assigned) techOf.set(r.id, r.name);
 
     // Two separate messages, on purpose. sendConfirmations is the customer's
     // "you're booked" note and goes through the notify() seam, which is still
@@ -343,26 +357,26 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
 
     await sendConfirmations(members, tickets, labelOf, techOf);
     await sendBookingInvoice(members.map((m) => m.id));
-
-    return {
-      ok: true,
-      totalHalalas: billTotal,
-      tickets: members.map((m, i) => ({
-        code: m.code,
-        ticketNo: tickets[i],
-        stationLabel: m.stationId ? (labelOf.get(m.stationId) ?? null) : null,
-        technicianName: techOf.get(m.id) ?? null,
-        serviceName: m.serviceName,
-        startsAt: m.startsAt.toISOString(),
-        totalHalalas: m.totalHalalas,
-      })),
-    };
   } catch (err) {
-    // The charge went through but we couldn't confirm. Money was taken for a
-    // booking that no longer exists, so this must be loud — a refund is owed.
-    console.error(`[payments] charged ${ref} but could not confirm; refund owed`, err);
-    return { ok: false, error: "expired" };
+    // She is booked and her ticket is in `tickets`. What failed is a chair label
+    // or a receipt, so it is logged and the confirmation still goes back — with
+    // whatever the maps above managed to fill in.
+    console.error(`[payments] ${ref} confirmed; a step after the commit failed`, err);
   }
+
+  return {
+    ok: true,
+    totalHalalas: billTotal,
+    tickets: members.map((m, i) => ({
+      code: m.code,
+      ticketNo: tickets[i],
+      stationLabel: m.stationId ? (labelOf.get(m.stationId) ?? null) : null,
+      technicianName: techOf.get(m.id) ?? null,
+      serviceName: m.serviceName,
+      startsAt: m.startsAt.toISOString(),
+      totalHalalas: m.totalHalalas,
+    })),
+  };
 }
 
 /**

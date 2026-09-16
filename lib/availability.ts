@@ -114,8 +114,16 @@ async function loadContext(branchId: string, from: Date, to: Date): Promise<Cont
       .where(
         and(
           eq(bookings.branchId, branchId),
-          gte(bookings.startsAt, from),
+          // Overlapping the window, not starting inside it.
+          //
+          // `startsAt >= from` dropped an appointment that began before the
+          // window and was still running inside it — so a chair the reservation
+          // lock knows is busy read as free here, and reserveStations' comment
+          // that the two predicates must match "character for character" was
+          // quietly untrue at every day boundary. The customer was shown a slot
+          // and then refused it as `slot-taken`.
           lt(bookings.startsAt, to),
+          gt(bookings.endsAt, from),
           // Cancelled and no-show slots are free again.
           ne(bookings.status, "cancelled"),
           ne(bookings.status, "no_show"),

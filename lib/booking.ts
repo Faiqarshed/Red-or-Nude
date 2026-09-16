@@ -210,6 +210,7 @@ export function clearBooking() {
   if (typeof window === "undefined") return;
   sessionStorage.removeItem(KEY);
   sessionStorage.removeItem(CHECKOUT_KEY);
+  saveHeld(null);
 }
 
 /**
@@ -229,15 +230,48 @@ export type CheckoutChoices = {
 
 const CHECKOUT_KEY = "ron-checkout";
 
+/**
+ * The hold lives in localStorage while everything else here stays per-tab.
+ *
+ * sessionStorage is per-tab, so two tabs each made a hold and neither could
+ * release the other's — paying in both charged her twice, and nothing catches it
+ * server-side (`payments_booking_live_unique` is keyed on a booking, and these
+ * are two). One hold per browser; the rest of the choices stay per-tab.
+ */
+const HELD_KEY = "ron-held";
+
+function saveHeld(held: CheckoutChoices["held"]) {
+  try {
+    if (held) localStorage.setItem(HELD_KEY, JSON.stringify(held));
+    else localStorage.removeItem(HELD_KEY);
+  } catch {
+    /* private mode, or storage refused: the hold expires on its own */
+  }
+}
+
+function loadHeld(): CheckoutChoices["held"] {
+  try {
+    return JSON.parse(localStorage.getItem(HELD_KEY) ?? "null");
+  } catch {
+    return null;
+  }
+}
+
 export function saveCheckout(choices: CheckoutChoices) {
   if (typeof window === "undefined") return;
-  sessionStorage.setItem(CHECKOUT_KEY, JSON.stringify(choices));
+  const { held, ...perTab } = choices;
+  sessionStorage.setItem(CHECKOUT_KEY, JSON.stringify(perTab));
+  saveHeld(held);
 }
 
 export function loadCheckout(): CheckoutChoices | null {
   if (typeof window === "undefined") return null;
   try {
-    return JSON.parse(sessionStorage.getItem(CHECKOUT_KEY) ?? "null");
+    const perTab = JSON.parse(sessionStorage.getItem(CHECKOUT_KEY) ?? "null");
+    // A hold with no choices beside it is the second tab's case, and releaseHold
+    // still has to see it.
+    const held = loadHeld();
+    return perTab || held ? { treats: [], promo: null, redeemPoints: null, ...perTab, held } : null;
   } catch {
     return null;
   }

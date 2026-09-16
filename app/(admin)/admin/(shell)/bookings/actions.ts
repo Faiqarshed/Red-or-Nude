@@ -6,6 +6,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { bookings, customers, loyaltyTxns, packTxns, payments, reviews } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
+import { inBranchScope } from "@/lib/admin/branch-scope";
 import { can } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
 import { returnPackCredits } from "@/lib/packs";
@@ -63,6 +64,9 @@ export async function setBookingStatus(
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  // A pinned role acts on their own front desk only. The lists are already
+  // filtered; this is the half that an id in a request could otherwise walk past.
+  if (!inBranchScope(actor, before.branchId)) return { ok: false, error: "wrong-branch" };
 
   // Entering a status stamps its moment (brief §3.2). Guarded on the transition
   // so re-saving the same status doesn't reset a clock the commission figures
@@ -188,6 +192,7 @@ export async function rescheduleBooking(input: {
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, parsed.data.id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  if (!inBranchScope(actor, before.branchId)) return { ok: false, error: "wrong-branch" };
 
   // Only an appointment that has not started yet.
   //
@@ -254,11 +259,12 @@ export async function resolveNoShow(input: {
   }
 
   const [before] = await db
-    .select({ status: bookings.status })
+    .select({ status: bookings.status, branchId: bookings.branchId })
     .from(bookings)
     .where(eq(bookings.id, parsed.data.id))
     .limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  if (!inBranchScope(actor, before.branchId)) return { ok: false, error: "wrong-branch" };
 
   // Closing the flag with a reason *is* the cancellation: she did not come, the
   // chair was given back hours ago, and leaving the row reading `no_show`
@@ -320,6 +326,10 @@ export async function createWalkIn(input: WalkInInput): Promise<Result & { code?
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.path.join(".") ?? "invalid" };
 
   const data = parsed.data;
+
+  // The branch to seat her at came out of the request. A pinned receptionist
+  // may only seat someone at her own front desk.
+  if (!inBranchScope(actor, data.branchId)) return { ok: false, error: "wrong-branch" };
   // The same name and mobile rules as the drawer: a person's name if one is
   // given, and a Saudi mobile, which is what a returning customer is matched on.
   if (data.name && checkPersonName(adminStrings.en.validation, "Name", data.name, { required: false })) {
@@ -390,6 +400,7 @@ export async function rescheduleNoShow(input: {
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, parsed.data.id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  if (!inBranchScope(actor, before.branchId)) return { ok: false, error: "wrong-branch" };
   if (!before.noShowAt || before.noShowResolvedAt) {
     return { ok: false, error: "already-resolved" };
   }
@@ -465,6 +476,7 @@ export async function deleteBooking(id: string): Promise<Result> {
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  if (!inBranchScope(actor, before.branchId)) return { ok: false, error: "wrong-branch" };
 
   // The whole party, so a group is never half-deleted.
   const members = before.groupId

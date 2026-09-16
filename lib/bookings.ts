@@ -160,6 +160,8 @@ export type CreateBookingError =
   | "blocked"
   /** The offer itself has lapsed, or was never on this booking. */
   | "refill-expired"
+  /** A real, open offer — on somebody else's booking. */
+  | "refill-not-yours"
   /** The offer is open, but the appointment chosen falls outside its window. */
   | "refill-window"
   /** A group was posted with guests on two different days. */
@@ -320,17 +322,36 @@ async function priceMember(
     .limit(1);
   if (!service) return null;
 
-  const addonRows = m.addonIds.length
-    ? await db.select().from(addons).where(inArray(addons.id, m.addonIds))
+  // The same `active` test the service above gets, and the same refusal when it
+  // fails — a retired add-on was billable and still held the chair for it. The
+  // count is checked as well as the rows: `inArray` drops ids that do not exist
+  // without a word, and `Set` because a repeat collapses in SQL either way.
+  const wantedAddons = [...new Set(m.addonIds)];
+  const addonRows = wantedAddons.length
+    ? await db
+        .select()
+        .from(addons)
+        .where(and(inArray(addons.id, wantedAddons), eq(addons.active, true)))
     : [];
+  if (addonRows.length !== wantedAddons.length) return null;
 
   const [removal] = m.removalTypeId
-    ? await db.select().from(removalTypes).where(eq(removalTypes.id, m.removalTypeId)).limit(1)
+    ? await db
+        .select()
+        .from(removalTypes)
+        .where(and(eq(removalTypes.id, m.removalTypeId), eq(removalTypes.active, true)))
+        .limit(1)
     : [];
+  if (m.removalTypeId && !removal) return null;
 
   const [design] = m.designId
-    ? await db.select().from(designs).where(eq(designs.id, m.designId)).limit(1)
+    ? await db
+        .select()
+        .from(designs)
+        .where(and(eq(designs.id, m.designId), eq(designs.active, true)))
+        .limit(1)
     : [];
+  if (m.designId && !design) return null;
 
   // A credit pays for the service line and nothing else. Quoted against her own
   // ledger rather than trusted: the browser knowing about a credit is not the
@@ -387,9 +408,12 @@ async function loadRefillParent(code: string) {
       refillOfBookingId: bookings.refillOfBookingId,
       removalTypeId: bookings.removalTypeId,
       refillDays: services.refillDays,
+      /** Who the offer was emailed to — see the ownership check in createBookings. */
+      customerEmail: customers.email,
     })
     .from(bookings)
     .leftJoin(services, eq(services.id, bookings.serviceId))
+    .leftJoin(customers, eq(customers.id, bookings.customerId))
     .where(eq(bookings.code, code.trim().toUpperCase()))
     .limit(1);
 
@@ -790,6 +814,25 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   if (input.refillOfCode) {
     refillParent = await loadRefillParent(input.refillOfCode);
     if (!refillParent) return { ok: false, error: "refill-expired" };
+
+    // And it has to be *hers*.
+    //
+    // The window and the service were re-decided here from the start, which
+    // stops a hand-crafted request buying a full set at half price — but not one
+    // buying *somebody else's* half-price set. POST /api/my-bookings/refill
+    // makes a guest prove the booking is hers before it will even quote the
+    // offer; nothing asked the same question on the way in, so the code alone
+    // bought the discount and that gate guarded a number rather than a price.
+    //
+    // The address, not the session: a guest legitimately holding this offer read
+    // it in that inbox, and has no account to sign into. Same credential shape
+    // as releaseWebHold. A signed-in customer passes on her account address,
+    // which is what the checkout prefills. A parent with no address on file —
+    // a walk-in — can't be refilled from the web at all, which is correct: she
+    // never had anywhere to receive the offer.
+    const owner = refillParent.customerEmail?.trim().toLowerCase();
+    if (!owner || owner !== email) return { ok: false, error: "refill-not-yours" };
+
     if (!refillDaysLeft(refillParent)) return { ok: false, error: "refill-expired" };
 
     // The *appointment* must fall inside the window, not merely the moment of
