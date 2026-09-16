@@ -85,9 +85,11 @@ const buttonVariants = {
   danger: "bg-red text-white hover:bg-red-dark",
 } as const;
 
+// Taller below `sm`, where these are thumb targets rather than mouse targets.
+// The desktop heights are the ones after the prefix, unchanged.
 const buttonSizes = {
-  sm: "h-8 px-3 text-xs",
-  md: "h-10 px-4 text-sm",
+  sm: "h-10 px-3 text-xs sm:h-8",
+  md: "h-12 px-4 text-sm sm:h-10",
 } as const;
 
 export function Button({
@@ -121,7 +123,10 @@ export function Input({
   return (
     <input
       className={cn(
-        "h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink",
+        // 16px below `sm` is not a type choice: iOS Safari zooms the whole page
+        // in on focus for anything smaller, which throws the layout sideways
+        // every time someone taps a field. Desktop keeps text-sm.
+        "h-12 w-full rounded-xl border border-black/10 bg-white px-3 text-base text-ink sm:h-10 sm:text-sm",
         "text-start outline-none transition-colors placeholder:text-ink/35",
         "focus:border-sky focus:ring-2 focus:ring-sky/20",
         invalidRing,
@@ -140,6 +145,35 @@ export function Input({
  */
 export const invalidRing =
   "aria-[invalid=true]:border-red aria-[invalid=true]:focus:border-red aria-[invalid=true]:focus:ring-red/15";
+
+/**
+ * Grows a control's *touch* area to 48px without moving a pixel of it.
+ *
+ * The panel's small round buttons are 32px because that is the right size for a
+ * cursor; a thumb needs half as much again. A transparent ::after does it
+ * without resizing anything visible, and drops away at `sm` where there is a
+ * pointer. The element needs to be a positioning context — every user here is
+ * already `relative`.
+ *
+ * Controls that are not 32px squares set their own inset; this is the common
+ * case, not the only one.
+ */
+export const touchTarget = "after:absolute after:-inset-2 after:content-[''] sm:after:hidden";
+
+/**
+ * The segmented tab strips — catalogue, gift cards, no-shows, bookings, my day,
+ * performance. Seven of them, each previously carrying its own copy of these
+ * classes, which is how the touch target came to be added seven times by hand.
+ *
+ * Shape only. The strips differ in container, element (button or Link) and text
+ * size, so those stay at the call site rather than becoming four props here.
+ */
+export const tabItem =
+  "min-h-[48px] rounded-lg px-3 py-1.5 text-xs font-medium transition-colors sm:min-h-0";
+
+/** Selected or not, in the one place that decides what selected looks like. */
+export const tabTone = (active: boolean) =>
+  active ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]";
 
 /**
  * Everything a refused save is waiting on, in one box beside the Save button:
@@ -331,11 +365,18 @@ export function StatCard({
     </>
   );
 
-  if (!href) return <Card className={cn(w.card, "text-start")}>{body}</Card>;
+  // `max-sm:h-full` on both, because the grid stretches only its own item — the
+  // Link — and the Card inside it would otherwise stop at its content. Two
+  // tiles side by side on a phone, one label wrapping to a second line, and the
+  // pair comes out at two different heights. Scoped below `sm`: the labels fit
+  // on one line at desktop widths, so nothing there moves.
+  if (!href) return <Card className={cn(w.card, "text-start max-sm:h-full")}>{body}</Card>;
 
   return (
-    <Link href={href} className="group block text-start">
-      <Card className={cn(w.card, "transition-colors group-hover:border-red/25")}>{body}</Card>
+    <Link href={href} className="group block text-start max-sm:h-full">
+      <Card className={cn(w.card, "transition-colors group-hover:border-red/25 max-sm:h-full")}>
+        {body}
+      </Card>
     </Link>
   );
 }
@@ -606,7 +647,11 @@ export function EmptyState({
   icon?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 px-6 py-14 text-center">
+    // Shallower on a phone. Fourteen units of padding above and below is a
+    // quarter of a small screen spent saying "None", and an empty card that
+    // large reads as something that failed to load rather than something with
+    // nothing in it yet.
+    <div className="flex flex-col items-center justify-center gap-2 px-6 py-10 text-center sm:py-14">
       {icon ? <span className="text-ink/20">{icon}</span> : null}
       <p className="text-sm font-medium text-ink">{title}</p>
       {body ? <p className="max-w-sm text-xs text-ink/50">{body}</p> : null}
@@ -646,10 +691,15 @@ export function DateStepper({
   };
 
   return (
-    <div className="flex items-center gap-1 rounded-xl border border-black/[0.06] bg-white p-1">
+    // Full width on a phone so the date sits between its two arrows instead of
+    // being squeezed by whatever else shares the toolbar row.
+    <div className="flex items-center gap-1 rounded-xl border border-black/[0.06] bg-white p-1 max-sm:w-full">
       <button
         onClick={() => step(-1)}
-        className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]"
+        className={cn(
+          "relative grid h-8 w-8 shrink-0 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]",
+          touchTarget,
+        )}
         aria-label={labels.prev}
       >
         <ChevronLeft className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
@@ -667,12 +717,15 @@ export function DateStepper({
           }
         }}
         aria-label={labels.date}
-        className="min-w-[130px] cursor-pointer rounded-lg bg-transparent px-2 text-center text-sm font-medium tabular-nums text-ink outline-none focus:bg-black/[0.03]"
+        className="min-w-0 flex-1 cursor-pointer rounded-lg bg-transparent px-2 text-center text-base font-medium tabular-nums text-ink outline-none focus:bg-black/[0.03] sm:min-w-[130px] sm:flex-none sm:text-sm"
         dir="ltr"
       />
       <button
         onClick={() => step(1)}
-        className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]"
+        className={cn(
+          "relative grid h-8 w-8 shrink-0 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]",
+          touchTarget,
+        )}
         aria-label={labels.next}
       >
         <ChevronRight className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
@@ -714,7 +767,7 @@ export function BranchFilter({
       value={branchId ?? ""}
       onChange={(e) => onChange(e.target.value || null)}
       aria-label={allLabel}
-      className="h-10 rounded-xl border border-black/[0.06] bg-white px-3 text-sm text-ink outline-none"
+      className="h-12 rounded-xl border border-black/[0.06] bg-white px-3 text-base text-ink outline-none sm:h-10 sm:text-sm"
     >
       {allowAll ? <option value="">{allLabel}</option> : null}
       {options.map((b) => (

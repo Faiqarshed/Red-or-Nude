@@ -342,7 +342,7 @@ export default function FrontDeskView({
 
       <Card className="mb-6 p-5">
         <form onSubmit={search} className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[200px] flex-1 text-start">
+          <div className="w-full flex-1 text-start sm:w-auto sm:min-w-[200px]">
             <label htmlFor="ticket" className="mb-1.5 block text-xs font-medium text-ink/60">
               {f.ticketLabel}
             </label>
@@ -354,10 +354,16 @@ export default function FrontDeskView({
               value={ticket}
               onChange={(e) => setTicket(e.target.value)}
               placeholder={f.ticketPlaceholder}
-              className="h-16 w-full rounded-2xl border border-black/10 bg-white px-4 text-center font-display text-3xl font-extrabold uppercase tracking-wider text-ink outline-none focus:border-sky focus:ring-2 focus:ring-sky/20"
+              // One step down on a phone: "A12 OR RON-4F2" at 30px with wide
+              // tracking runs the full width of a 375px screen and the
+              // placeholder clips at both ends.
+              className="h-16 w-full rounded-2xl border border-black/10 bg-white px-4 text-center font-display text-2xl font-extrabold uppercase tracking-wider text-ink outline-none focus:border-sky focus:ring-2 focus:ring-sky/20 sm:text-3xl"
             />
           </div>
-          <Button type="submit" disabled={busy} className="h-16 px-8 text-base">
+          {/* Under the field on a phone rather than beside it: the ticket box is
+              deliberately huge, and squeezing a button next to it leaves both
+              too narrow to hit while someone waits at the counter. */}
+          <Button type="submit" disabled={busy} className="h-16 px-8 text-base max-sm:w-full">
             {f.search}
           </Button>
         </form>
@@ -443,7 +449,7 @@ export default function FrontDeskView({
 
             {matchRow.status === "confirmed" ? (
               <div className="mt-3 flex flex-wrap items-end gap-3">
-                <div className="min-w-[180px] flex-1">
+                <div className="w-full flex-1 sm:w-auto sm:min-w-[180px]">
                   <label htmlFor="tech" className="mb-1.5 block text-xs font-medium text-ink/60">
                     {f.changeTech}
                   </label>
@@ -535,18 +541,21 @@ export default function FrontDeskView({
                   <button
                     type="button"
                     onClick={() => setOpenId(r.id)}
-                    className="flex min-w-0 flex-1 items-center gap-3 text-start"
+                    className="flex min-w-0 flex-1 flex-wrap items-center gap-3 text-start"
                   >
                     <span className="w-14 shrink-0 font-display text-lg font-extrabold text-red">
                       {r.ticketNo ?? "—"}
                     </span>
-                    <span className="w-12 shrink-0 text-xs tabular-nums text-ink/50">
+                    <span className="shrink-0 text-xs tabular-nums text-ink/50 sm:w-12">
                       {localTime(r.startsAt)}
                     </span>
 
                     <Thumb src={r.imageUrl} size="sm" />
 
-                    <span className="min-w-0 flex-1">
+                    {/* Its own line below `sm`. Sharing the row with the ticket,
+                        the time and the thumbnail left it about eighty pixels,
+                        and the name ran back over the picture. */}
+                    <span className="min-w-0 flex-1 max-sm:w-full max-sm:flex-none">
                       <span className="block truncate text-sm font-medium text-ink">
                         {r.customerName ?? "—"}
                       </span>

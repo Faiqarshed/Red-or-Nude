@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronUp, ImageIcon, Plus, Sparkles } from "lucide-react";
-import { Badge, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import { Badge, Button, Card, EmptyState, PageHeader, tabItem, tabTone} from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
 import type { Localized } from "@/lib/db/schema";
@@ -96,14 +96,18 @@ export default function CatalogView({
         }
       />
 
-      <div className="mb-4 flex gap-1 rounded-xl border border-black/[0.06] bg-white p-1">
+      {/* Two-by-two on a phone. Four across leaves about sixty pixels of text
+          per tab, which breaks "At checkout" over two lines and drags the whole
+          strip out of square with it. */}
+      <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-black/[0.06] bg-white p-1 sm:flex">
         {TABS.map(({ kind, labelKey }) => (
           <button
             key={kind}
             onClick={() => setTab(kind)}
             className={cn(
-              "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-              tab === kind ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]",
+              tabItem,
+              "flex-1 py-2 text-sm",
+              tabTone(tab === kind),
             )}
           >
             {t.catalog[labelKey]}
@@ -120,7 +124,12 @@ export default function CatalogView({
               <li
                 key={row.id}
                 className={cn(
-                  "flex items-center gap-4 px-4 py-3 transition-colors hover:bg-black/[0.015]",
+                  // Five things on one row leave the name about fifty pixels on
+                  // a phone — enough to cut "Classic manicure" down to
+                  // "Classic" and to stand the "same as English" warning on its
+                  // end, one word per line. Below `sm` the price and the
+                  // controls drop to a second line and give the name the row.
+                  "flex flex-wrap items-center gap-4 px-4 py-3 transition-colors hover:bg-black/[0.015]",
                   !row.active && "opacity-55",
                 )}
               >
@@ -152,53 +161,57 @@ export default function CatalogView({
                   </span>
                 </button>
 
-                <span className="shrink-0 text-sm font-semibold tabular-nums text-ink">
-                  {row.priceSar.toLocaleString("en-US")}
-                  <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
-                </span>
+                {/* Price, reorder and the switch travel together: on a phone
+                    they are the second line, spread across it. */}
+                <div className="flex shrink-0 items-center gap-4 max-sm:w-full max-sm:justify-between">
+                  <span className="shrink-0 text-sm font-semibold tabular-nums text-ink">
+                    {row.priceSar.toLocaleString("en-US")}
+                    <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
+                  </span>
 
-                <div className="flex shrink-0 items-center gap-0.5">
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <button
+                      onClick={() => run(() => moveCatalogItem(tab, row.id, "up"))}
+                      disabled={i === 0}
+                      title={t.common.moveUp}
+                      className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
+                    >
+                      <ChevronUp className="h-4 w-4" strokeWidth={2} />
+                    </button>
+                    <button
+                      onClick={() => run(() => moveCatalogItem(tab, row.id, "down"))}
+                      disabled={i === rows.length - 1}
+                      title={t.common.moveDown}
+                      className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
+                    >
+                      <ChevronDown className="h-4 w-4" strokeWidth={2} />
+                    </button>
+                  </div>
+
+                  {/* Plain stateful button rather than a peer-styled checkbox:
+                      `peer-checked:` only matches siblings, so it can't drive a
+                      knob nested inside the track. */}
                   <button
-                    onClick={() => run(() => moveCatalogItem(tab, row.id, "up"))}
-                    disabled={i === 0}
-                    title={t.common.moveUp}
-                    className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
+                    role="switch"
+                    aria-checked={row.active}
+                    aria-label={t.catalog.active}
+                    title={t.catalog.activeHint}
+                    onClick={() => run(() => setCatalogActive(tab, row.id, !row.active))}
+                    className={cn(
+                      "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky",
+                      row.active ? "bg-[#1f7a4d]" : "bg-black/15",
+                    )}
                   >
-                    <ChevronUp className="h-4 w-4" strokeWidth={2} />
-                  </button>
-                  <button
-                    onClick={() => run(() => moveCatalogItem(tab, row.id, "down"))}
-                    disabled={i === rows.length - 1}
-                    title={t.common.moveDown}
-                    className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
-                  >
-                    <ChevronDown className="h-4 w-4" strokeWidth={2} />
+                    <span
+                      className={cn(
+                        "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all",
+                        // Logical positioning so the knob slides the right way in RTL.
+                        row.active ? "end-0.5" : "start-0.5",
+                      )}
+                    />
                   </button>
                 </div>
-
-                {/* Plain stateful button rather than a peer-styled checkbox:
-                    `peer-checked:` only matches siblings, so it can't drive a
-                    knob nested inside the track. */}
-                <button
-                  role="switch"
-                  aria-checked={row.active}
-                  aria-label={t.catalog.active}
-                  title={t.catalog.activeHint}
-                  onClick={() => run(() => setCatalogActive(tab, row.id, !row.active))}
-                  className={cn(
-                    "relative h-5 w-9 shrink-0 rounded-full transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky",
-                    row.active ? "bg-[#1f7a4d]" : "bg-black/15",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all",
-                      // Logical positioning so the knob slides the right way in RTL.
-                      row.active ? "end-0.5" : "start-0.5",
-                    )}
-                  />
-                </button>
               </li>
             ))}
           </ul>

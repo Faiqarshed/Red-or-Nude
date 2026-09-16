@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { ChevronLeft, ChevronRight, UserX } from "lucide-react";
-import { Badge, BranchFilter, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import { Badge, BranchFilter, Button, Card, EmptyState, PageHeader, tabItem, tabTone} from "@/components/admin/ui";
 import { Dialog } from "@/components/admin/overlays";
+import { AdminTable } from "@/components/admin/Table";
 import TextField from "@/components/admin/TextField";
 import { checkNote, NO_SHOW_NOTE_MAX, NOTES_TEXT } from "@/lib/admin/validate";
 import RescheduleDialog from "../bookings/RescheduleDialog";
@@ -149,8 +150,9 @@ export default function NoShowsView({
               key={k}
               href={noShowHref(k, branchId)}
               className={cn(
-                "flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                tab === k ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]",
+                tabItem,
+                "flex items-center gap-2",
+                tabTone(tab === k),
               )}
             >
               {k === "open" ? b.noShowTabOpen : b.noShowTabResolved}
@@ -178,73 +180,79 @@ export default function NoShowsView({
             icon={<UserX className="h-8 w-8" strokeWidth={1.25} />}
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] text-sm">
-              <thead>
-                <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                  {[b.date, b.customer, b.service, b.status].map((h) => (
-                    <th
-                      key={h}
-                      className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45"
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id} className="border-b border-black/[0.04] last:border-0">
-                    <td
-                      className="whitespace-nowrap px-4 py-3 align-top text-start tabular-nums text-ink"
-                      dir="ltr"
-                    >
-                      {riyadhDateKey(new Date(r.startsAt))}{" "}
-                      <span className="text-ink/50">{localTime(r.startsAt)}</span>
-                    </td>
-                    <td className="px-4 py-3 align-top text-start">
-                      <span className="block text-ink">{r.customerName || "—"}</span>
-                      <span className="block text-[11px] text-ink/45" dir="ltr">
-                        {r.customerPhone}
+          <AdminTable
+            rows={rows}
+            rowKey={(r) => r.id}
+            minWidth="min-w-[720px]"
+            rowClassName="border-b border-black/[0.04] last:border-0"
+            columns={[
+              {
+                key: "date",
+                header: b.date,
+                className: "whitespace-nowrap align-top tabular-nums text-ink",
+                dir: "ltr",
+                cell: (r) => (
+                  <>
+                    {riyadhDateKey(new Date(r.startsAt))}{" "}
+                    <span className="text-ink/50">{localTime(r.startsAt)}</span>
+                  </>
+                ),
+              },
+              {
+                key: "customer",
+                header: b.customer,
+                primary: true,
+                className: "align-top",
+                cell: (r) => (
+                  <>
+                    <span className="block text-ink">{r.customerName || "—"}</span>
+                    <span className="block text-[11px] text-ink/45" dir="ltr">
+                      {r.customerPhone}
+                    </span>
+                  </>
+                ),
+              },
+              {
+                key: "service",
+                header: b.service,
+                className: "align-top text-ink/70",
+                cell: (r) => pick(r.serviceName, lang),
+              },
+              {
+                key: "status",
+                header: b.status,
+                className: "align-top",
+                cell: (r) =>
+                  r.resolvedAt ? (
+                    <>
+                      <Badge tone="success">{b.noShowTabResolved}</Badge>
+                      {/* The reason is the point of the resolved tab: a list
+                          of green badges says nothing a count could not. */}
+                      {r.note ? (
+                        <span className="mt-1.5 block max-w-sm text-xs leading-relaxed text-ink/70">
+                          {r.note}
+                        </span>
+                      ) : null}
+                      <span className="mt-1 block text-[11px] tabular-nums text-ink/40" dir="ltr">
+                        {b.noShowResolvedOn} {riyadhDateKey(new Date(r.resolvedAt))}
                       </span>
-                    </td>
-                    <td className="px-4 py-3 align-top text-start text-ink/70">
-                      {pick(r.serviceName, lang)}
-                    </td>
-                    <td className="px-4 py-3 align-top text-start">
-                      {r.resolvedAt ? (
-                        <>
-                          <Badge tone="success">{b.noShowTabResolved}</Badge>
-                          {/* The reason is the point of the resolved tab: a list
-                              of green badges says nothing a count could not. */}
-                          {r.note ? (
-                            <span className="mt-1.5 block max-w-sm text-xs leading-relaxed text-ink/70">
-                              {r.note}
-                            </span>
-                          ) : null}
-                          <span className="mt-1 block text-[11px] tabular-nums text-ink/40" dir="ltr">
-                            {b.noShowResolvedOn} {riyadhDateKey(new Date(r.resolvedAt))}
-                          </span>
-                        </>
-                      ) : (
-                        <div className="flex items-center gap-3">
-                          <Badge tone="warning">{b.noShowTabOpen}</Badge>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => openResolve(r)}
-                            disabled={busy === r.id}
-                          >
-                            {b.noShowResolve}
-                          </Button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Badge tone="warning">{b.noShowTabOpen}</Badge>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => openResolve(r)}
+                        disabled={busy === r.id}
+                      >
+                        {b.noShowResolve}
+                      </Button>
+                    </div>
+                  ),
+              },
+            ]}
+          />
         )}
 
         {total > perPage ? (

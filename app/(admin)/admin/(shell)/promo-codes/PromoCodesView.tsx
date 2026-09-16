@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { Ticket } from "lucide-react";
 import { Badge, Button, Card, EmptyState, Field, FormErrors, Input, PageHeader } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
+import { AdminTable } from "@/components/admin/Table";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { NumberField } from "@/components/admin/TextField";
 import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
@@ -169,81 +170,95 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
             icon={<Ticket className="h-8 w-8" strokeWidth={1.25} />}
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                  {[p.code, p.discount, p.minTotal, p.window, p.used, ""].map((h, i) => (
-                    <th
-                      key={i}
-                      className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45"
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={row.id}
-                    className="border-b border-black/[0.04] last:border-0 hover:bg-black/[0.015]"
-                  >
-                    <td className="px-4 py-3 text-start">
-                      <span className="font-semibold text-ink" dir="ltr">
-                        {row.code}
+          <AdminTable
+            rows={rows}
+            rowKey={(row) => row.id}
+            minWidth="min-w-[820px]"
+            columns={[
+              {
+                key: "code",
+                header: p.code,
+                primary: true,
+                cell: (row) => (
+                  <>
+                    <span className="font-semibold text-ink" dir="ltr">
+                      {row.code}
+                    </span>
+                    {past(row.endsAt) ? (
+                      <Badge tone="warning" className="ms-2">
+                        {p.expiredBadge}
+                      </Badge>
+                    ) : !row.active ? (
+                      <Badge tone="neutral" className="ms-2">
+                        {p.inactive}
+                      </Badge>
+                    ) : null}
+                  </>
+                ),
+              },
+              {
+                key: "discount",
+                header: p.discount,
+                className: "tabular-nums text-ink",
+                cell: (row) => (row.type === "percent" ? `${row.value}%` : `${row.value} ${p.sar}`),
+              },
+              {
+                key: "minTotal",
+                header: p.minTotal,
+                className: "tabular-nums text-ink/60",
+                cell: (row) => (row.minTotalSar > 0 ? `${row.minTotalSar} ${p.sar}` : "—"),
+              },
+              {
+                key: "window",
+                header: p.window,
+                className: "whitespace-nowrap text-xs text-ink/60",
+                cell: (row) =>
+                  row.startsAt || row.endsAt ? (
+                    <>
+                      {row.startsAt ? formatDateTime(new Date(row.startsAt), lang) : "—"}
+                      <span className="block text-ink/35">
+                        → {row.endsAt ? formatDateTime(new Date(row.endsAt), lang) : "—"}
                       </span>
-                      {past(row.endsAt) ? (
-                        <Badge tone="warning" className="ms-2">
-                          {p.expiredBadge}
-                        </Badge>
-                      ) : !row.active ? (
-                        <Badge tone="neutral" className="ms-2">
-                          {p.inactive}
-                        </Badge>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3 text-start tabular-nums text-ink">
-                      {row.type === "percent" ? `${row.value}%` : `${row.value} ${p.sar}`}
-                    </td>
-                    <td className="px-4 py-3 text-start tabular-nums text-ink/60">
-                      {row.minTotalSar > 0 ? `${row.minTotalSar} ${p.sar}` : "—"}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-start text-xs text-ink/60">
-                      {row.startsAt || row.endsAt ? (
-                        <>
-                          {row.startsAt ? formatDateTime(new Date(row.startsAt), lang) : "—"}
-                          <span className="block text-ink/35">
-                            → {row.endsAt ? formatDateTime(new Date(row.endsAt), lang) : "—"}
-                          </span>
-                        </>
-                      ) : (
-                        <span className="text-ink/30">{p.always}</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-start tabular-nums text-ink/60" dir="ltr">
-                      {row.uses}
-                      {row.maxUses !== null && ` / ${row.maxUses}`}
-                    </td>
-                    <td className="px-4 py-3 text-end">
-                      <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="secondary" onClick={() => open(toDraft(row))}>
-                          {t.common.edit}
-                        </Button>
-                        {/* An ended code is brought back by giving it a new end
-                            date in Edit, not by a switch that can't hold. */}
-                        {past(row.endsAt) ? null : (
-                          <Button size="sm" variant="ghost" disabled={pending} onClick={() => toggle(row)}>
-                            {row.active ? p.deactivate : p.activate}
-                          </Button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </>
+                  ) : (
+                    <span className="text-ink/30">{p.always}</span>
+                  ),
+              },
+              {
+                key: "used",
+                header: p.used,
+                className: "tabular-nums text-ink/60",
+                dir: "ltr",
+                cell: (row) => (
+                  <>
+                    {row.uses}
+                    {row.maxUses !== null && ` / ${row.maxUses}`}
+                  </>
+                ),
+              },
+              {
+                key: "actions",
+                header: "",
+                className: "text-end",
+                cell: (row) => (
+                  // Wraps on a phone card, where the row is a column and these
+                  // two sit under the fields rather than beside them.
+                  <div className="flex flex-wrap justify-end gap-2 max-sm:justify-start">
+                    <Button size="sm" variant="secondary" onClick={() => open(toDraft(row))}>
+                      {t.common.edit}
+                    </Button>
+                    {/* An ended code is brought back by giving it a new end
+                        date in Edit, not by a switch that can't hold. */}
+                    {past(row.endsAt) ? null : (
+                      <Button size="sm" variant="ghost" disabled={pending} onClick={() => toggle(row)}>
+                        {row.active ? p.deactivate : p.activate}
+                      </Button>
+                    )}
+                  </div>
+                ),
+              },
+            ]}
+          />
         )}
       </Card>
 
@@ -314,7 +329,9 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
               onChange={(minTotalSar) => setEditing({ ...editing, minTotalSar })}
             />
 
-            <div className="grid grid-cols-2 gap-3">
+            {/* Two `datetime-local` inputs will not share a 375px row: the
+                control has a fixed intrinsic width and simply clips. */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label={p.startsAt} error={errors.startsAt}>
                 <Input
                   aria-invalid={!!errors.startsAt}

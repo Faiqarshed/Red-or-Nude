@@ -59,6 +59,10 @@ const ar = {
     signOut: "تسجيل الخروج",
     search: "بحث",
     account: "الحساب",
+    menu: "القائمة",
+    closeMenu: "إغلاق القائمة",
+    collapseNav: "طي القائمة",
+    expandNav: "توسيع القائمة",
   },
 
   dashboard: {
@@ -822,6 +826,10 @@ const en: AdminStrings = {
     signOut: "Sign out",
     search: "Search",
     account: "Account",
+    menu: "Menu",
+    closeMenu: "Close menu",
+    collapseNav: "Collapse menu",
+    expandNav: "Expand menu",
   },
 
   dashboard: {

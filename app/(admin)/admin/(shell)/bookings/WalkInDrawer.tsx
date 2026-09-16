@@ -257,7 +257,7 @@ export default function WalkInDrawer({
           ) : slots.length === 0 ? (
             <p className="py-4 text-center text-xs text-ink/45">{t.bookings.noSlots}</p>
           ) : (
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
               {slots.map((s) => (
                 <button
                   key={s.time}
@@ -266,7 +266,7 @@ export default function WalkInDrawer({
                   disabled={!s.available}
                   onClick={() => setStartsAt(s.startsAt)}
                   className={cn(
-                    "rounded-lg py-2 text-xs tabular-nums transition-colors",
+                    "min-h-[48px] rounded-lg py-2 text-xs tabular-nums transition-colors sm:min-h-0",
                     startsAt === s.startsAt
                       ? "bg-red font-semibold text-white"
                       : s.available

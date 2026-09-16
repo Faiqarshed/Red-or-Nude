@@ -108,7 +108,10 @@ export function DayCounts({ rows }: { rows: FloorBooking[] }) {
   ];
 
   return (
-    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums">
+    // Always its own line on a phone. Sharing the row, it fitted beside a short
+    // name and wrapped beside a long one, so a column of otherwise identical
+    // cards came out at two different heights.
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums max-sm:w-full">
       {chips
         .filter(([, , , show]) => show)
         .map(([label, n, tone]) => (

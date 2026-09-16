@@ -2,6 +2,7 @@
 
 import { ScrollText } from "lucide-react";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import { AdminTable } from "@/components/admin/Table";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import type { AdminLang, AdminStrings } from "@/lib/admin/strings";
 import { ROLE_LABELS } from "@/lib/auth/rbac";
@@ -56,67 +57,83 @@ export default function AuditView({ rows, people }: { rows: Row[]; people: Recor
         {rows.length === 0 ? (
           <EmptyState title={a.empty} body={a.subtitle} icon={<ScrollText className="h-8 w-8" strokeWidth={1.25} />} />
         ) : (
-          // Tables can exceed the viewport in either direction — scroll the
-          // container, never the page body.
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                  {[a.when, a.actor, a.action, a.entity, a.changes].map((h) => (
-                    <th
-                      key={h}
-                      className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45"
+          <AdminTable
+            rows={rows}
+            rowKey={(row) => row.id}
+            minWidth="min-w-[820px]"
+            rowClassName="border-b border-black/[0.04] align-top last:border-0 hover:bg-black/[0.015]"
+            columns={[
+              {
+                key: "when",
+                header: a.when,
+                className: "whitespace-nowrap text-xs tabular-nums text-ink/60",
+                cell: (row) => formatDateTime(new Date(row.createdAt), lang),
+              },
+              {
+                key: "actor",
+                header: a.actor,
+                className: "text-ink",
+                cell: (row) => a.actors[row.actorName] ?? row.actorName,
+              },
+              {
+                key: "action",
+                header: a.action,
+                className: "whitespace-nowrap",
+                cell: (row) => (
+                  <Badge tone={TONES[row.action] ?? "neutral"}>
+                    {a.actions[row.action] ?? humanize(row.action)}
+                  </Badge>
+                ),
+              },
+              {
+                key: "entity",
+                header: a.entity,
+                primary: true,
+                cell: (row) => (
+                  <>
+                    <span className="block text-[11px] text-ink/45">
+                      {a.entities[row.entity] ?? humanize(row.entity)}
+                    </span>
+                    <span
+                      className="block max-w-[220px] truncate font-medium text-ink"
+                      title={row.entityId ?? undefined}
                     >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => {
+                      {row.name ? (
+                        shortName(
+                          row.entity,
+                          typeof row.name === "string" ? row.name : pick(row.name, lang),
+                        )
+                      ) : (
+                        <span className="text-ink/35">{a.unnamed}</span>
+                      )}
+                    </span>
+                  </>
+                ),
+              },
+              {
+                key: "changes",
+                header: a.changes,
+                className: "text-xs",
+                cell: (row) => {
                   const changes = Object.entries(row.diff);
+                  if (changes.length === 0) return <span className="text-ink/30">{a.noDetails}</span>;
                   return (
-                    <tr key={row.id} className="border-b border-black/[0.04] align-top last:border-0 hover:bg-black/[0.015]">
-                      <td className="whitespace-nowrap px-4 py-3 text-start text-xs tabular-nums text-ink/60">
-                        {formatDateTime(new Date(row.createdAt), lang)}
-                      </td>
-                      <td className="px-4 py-3 text-start text-ink">{a.actors[row.actorName] ?? row.actorName}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-start">
-                        <Badge tone={TONES[row.action] ?? "neutral"}>{a.actions[row.action] ?? humanize(row.action)}</Badge>
-                      </td>
-                      <td className="px-4 py-3 text-start">
-                        <span className="block text-[11px] text-ink/45">{a.entities[row.entity] ?? humanize(row.entity)}</span>
-                        <span className="block max-w-[220px] truncate font-medium text-ink" title={row.entityId ?? undefined}>
-                          {row.name ? (
-                            shortName(row.entity, typeof row.name === "string" ? row.name : pick(row.name, lang))
-                          ) : (
-                            <span className="text-ink/35">{a.unnamed}</span>
-                          )}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-start text-xs">
-                        {changes.length === 0 ? (
-                          <span className="text-ink/30">{a.noDetails}</span>
-                        ) : (
-                          <>
-                            <ChangeList changes={changes.slice(0, VISIBLE)} action={row.action} t={t} lang={lang} people={people} />
-                            {changes.length > VISIBLE && (
-                              <details className="mt-1">
-                                <summary className="cursor-pointer text-ink/45 hover:text-ink">
-                                  {a.more(changes.length - VISIBLE)}
-                                </summary>
-                                <ChangeList changes={changes.slice(VISIBLE)} action={row.action} t={t} lang={lang} people={people} />
-                              </details>
-                            )}
-                          </>
-                        )}
-                      </td>
-                    </tr>
+                    <>
+                      <ChangeList changes={changes.slice(0, VISIBLE)} action={row.action} t={t} lang={lang} people={people} />
+                      {changes.length > VISIBLE && (
+                        <details className="mt-1">
+                          <summary className="cursor-pointer text-ink/45 hover:text-ink">
+                            {a.more(changes.length - VISIBLE)}
+                          </summary>
+                          <ChangeList changes={changes.slice(VISIBLE)} action={row.action} t={t} lang={lang} people={people} />
+                        </details>
+                      )}
+                    </>
                   );
-                })}
-              </tbody>
-            </table>
-          </div>
+                },
+              },
+            ]}
+          />
         )}
       </Card>
     </>

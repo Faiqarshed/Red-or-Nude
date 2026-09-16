@@ -359,7 +359,7 @@ export default function AvailabilityView({
             </ul>
           )}
           <div className="space-y-3 border-t border-black/[0.06] p-4">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <Field label={a.from} error={closureErrors.from}>
                 <Input
                   type="date"

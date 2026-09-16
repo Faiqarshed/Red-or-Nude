@@ -21,8 +21,8 @@ import {
   EmptyState,
   PageHeader,
   Thumb,
-  scoreTone,
-} from "@/components/admin/ui";
+  scoreTone, tabItem, tabTone} from "@/components/admin/ui";
+import { AdminTable } from "@/components/admin/Table";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { statusPulse } from "@/lib/booking-pulse";
 import { cn } from "@/lib/cn";
@@ -273,94 +273,102 @@ function BookingTable({
   const ordered = groupRows(rows);
 
   return (
-    <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-sm">
-                <thead>
-                  <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                    {[t.bookings.time, t.bookings.customer, t.bookings.service, t.bookings.status, t.bookings.total].map(
-                      (h) => (
-                        <th
-                          key={h}
-                          className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45"
-                        >
-                          {h}
-                        </th>
-                      ),
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {ordered.map(({ row: b, size, first, last }) => (
-                    <tr
-                      key={b.id}
-                      onClick={() => onSelect(b)}
-                      className={cn(
-                        "cursor-pointer hover:bg-black/[0.015]",
-                        // The rule between two members of one party is dropped so
-                        // the pair reads as a block; the rule under the party
-                        // stays, and so does every rule between singles.
-                        last ? "border-b border-black/[0.04] last:border-0" : "",
-                        // Status colour beats the party tint; the rail and badge
-                        // still mark the group.
-                        statusPulse(b) || (size > 1 && "bg-sky/[0.035]"),
-                      )}
-                    >
-                      <td
-                        className={cn(
-                          "whitespace-nowrap px-4 py-3 text-start tabular-nums text-ink",
-                          // A rail down the reading-start edge, drawn with a
-                          // logical border so it moves to the right in Arabic.
-                          size > 1 && "border-s-[3px] border-s-sky",
-                        )}
-                        dir="ltr"
-                      >
-                        {localTime(b.startsAt)}
-                      </td>
-                      <td className="px-4 py-3 text-start">
-                        <span className="flex items-center gap-2">
-                          <span className="text-ink">{b.customerName || "—"}</span>
-                          {/* Only on the first of the party: repeating it on both
-                              rows would say the same thing twice and read as two
-                              separate groups rather than one. */}
-                          {size > 1 && first ? (
-                            <span
-                              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sky/15 px-2 py-0.5 text-[10px] font-semibold text-[#2c6a88]"
-                              title={t.bookings.groupNote}
-                            >
-                              <Users className="h-3 w-3" strokeWidth={2} />
-                              {t.bookings.groupOf(partyLetter.get(b.groupId!) ?? "", size)}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="block text-[11px] text-ink/45" dir="ltr">
-                          {b.customerPhone}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-start text-ink/70">
-                        <span className="flex items-center gap-2">
-                          {pick(b.serviceName, lang)}
-                          {/* Beside the service it repeats, the same amber as the
-                              grid and the drawer. */}
-                          {b.refillOfCode ? (
-                            <Badge tone="warning" className="shrink-0 gap-1 font-semibold">
-                              <RefreshCw className="h-3 w-3" strokeWidth={2.25} />
-                              {t.bookings.refillShort}
-                            </Badge>
-                          ) : null}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-start">
-                        <Badge tone={STATUS_TONE[b.status]}>{t.bookings.statuses[b.status]}</Badge>
-                      </td>
-                      <td className="px-4 py-3 text-start font-semibold tabular-nums text-ink">
-                        {b.totalSar.toLocaleString("en-US")}
-                        <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+    <AdminTable
+      rows={ordered}
+      rowKey={({ row: b }) => b.id}
+      minWidth="min-w-[720px]"
+      onRowClick={({ row: b }) => onSelect(b)}
+      rowClassName={({ row: b, size, last }) =>
+        cn(
+          "hover:bg-black/[0.015]",
+          // The rule between two members of one party is dropped so the pair
+          // reads as a block; the rule under the party stays, and so does every
+          // rule between singles.
+          last ? "border-b border-black/[0.04] last:border-0" : "",
+          // Status colour beats the party tint; the rail and badge still mark
+          // the group.
+          statusPulse(b) || (size > 1 && "bg-sky/[0.035]"),
+        )
+      }
+      columns={[
+        {
+          key: "time",
+          header: t.bookings.time,
+          dir: "ltr",
+          className: ({ size }) =>
+            cn(
+              "whitespace-nowrap tabular-nums text-ink",
+              // A rail down the reading-start edge, drawn with a logical border
+              // so it moves to the right in Arabic.
+              size > 1 && "border-s-[3px] border-s-sky",
+            ),
+          cell: ({ row: b }) => localTime(b.startsAt),
+        },
+        {
+          key: "customer",
+          header: t.bookings.customer,
+          primary: true,
+          cell: ({ row: b, size, first }) => (
+            <>
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="text-ink">{b.customerName || "—"}</span>
+                {/* Only on the first of the party: repeating it on both rows
+                    would say the same thing twice and read as two separate
+                    groups rather than one. */}
+                {size > 1 && first ? (
+                  <span
+                    className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sky/15 px-2 py-0.5 text-[10px] font-semibold text-[#2c6a88]"
+                    title={t.bookings.groupNote}
+                  >
+                    <Users className="h-3 w-3" strokeWidth={2} />
+                    {t.bookings.groupOf(partyLetter.get(b.groupId!) ?? "", size)}
+                  </span>
+                ) : null}
+              </span>
+              <span className="block text-[11px] text-ink/45" dir="ltr">
+                {b.customerPhone}
+              </span>
+            </>
+          ),
+        },
+        {
+          key: "service",
+          header: t.bookings.service,
+          className: "text-ink/70",
+          cell: ({ row: b }) => (
+            <span className="flex flex-wrap items-center gap-2">
+              {pick(b.serviceName, lang)}
+              {/* Beside the service it repeats, the same amber as the grid and
+                  the drawer. */}
+              {b.refillOfCode ? (
+                <Badge tone="warning" className="shrink-0 gap-1 font-semibold">
+                  <RefreshCw className="h-3 w-3" strokeWidth={2.25} />
+                  {t.bookings.refillShort}
+                </Badge>
+              ) : null}
+            </span>
+          ),
+        },
+        {
+          key: "status",
+          header: t.bookings.status,
+          cell: ({ row: b }) => (
+            <Badge tone={STATUS_TONE[b.status]}>{t.bookings.statuses[b.status]}</Badge>
+          ),
+        },
+        {
+          key: "total",
+          header: t.bookings.total,
+          className: "font-semibold tabular-nums text-ink",
+          cell: ({ row: b }) => (
+            <>
+              {b.totalSar.toLocaleString("en-US")}
+              <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
+            </>
+          ),
+        },
+      ]}
+    />
   );
 }
 
@@ -587,7 +595,7 @@ export default function BookingsView({
           <select
             value={branchId}
             onChange={(e) => go({ branch: e.target.value })}
-            className="h-10 rounded-xl border border-black/[0.06] bg-white px-3 text-sm text-ink outline-none"
+            className="h-12 rounded-xl border border-black/[0.06] bg-white px-3 text-base text-ink outline-none sm:h-10 sm:text-sm"
           >
             {branches.map((b) => (
               <option key={b.id} value={b.id}>
@@ -598,14 +606,17 @@ export default function BookingsView({
         )}
 
         {tab === "booked" ? (
-        <div className="ms-auto flex gap-1 rounded-xl border border-black/[0.06] bg-white p-1">
+        // Full width on a phone, where `ms-auto` would strand the pair at the
+        // end of a half-empty wrapped row.
+        <div className="ms-auto flex gap-1 rounded-xl border border-black/[0.06] bg-white p-1 max-sm:w-full">
           {(["day", "list"] as const).map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
               className={cn(
-                "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                view === v ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]",
+                tabItem,
+                "flex items-center justify-center gap-1.5 max-sm:flex-1",
+                tabTone(view === v),
               )}
             >
               {v === "day" ? <CalendarDays className="h-3.5 w-3.5" /> : <List className="h-3.5 w-3.5" />}
@@ -629,8 +640,9 @@ export default function BookingsView({
                 setPage(1);
               }}
               className={cn(
-                "flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                tab === k ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]",
+                tabItem,
+                "flex items-center gap-2",
+                tabTone(tab === k),
               )}
             >
               {k === "booked" ? t.bookings.tabBooked : t.bookings.tabDropped}
@@ -696,8 +708,11 @@ export default function BookingsView({
         <Card className="overflow-hidden">
           <div className="overflow-x-auto">
             <div className="flex min-w-[640px]">
-              {/* Hour gutter */}
-              <div className="w-14 shrink-0 border-e border-black/[0.06] pt-9">
+              {/* Hour gutter. Stuck to the reading-start edge so the times stay
+                  on screen while the chairs scroll past them — on a phone the
+                  grid is several screens wide, and a timetable whose clock
+                  scrolls away is a grid of unlabelled boxes. */}
+              <div className="sticky start-0 z-20 w-14 shrink-0 border-e border-black/[0.06] bg-white pt-9">
                 {hours.map((h) => (
                   <div
                     key={h}
@@ -713,7 +728,9 @@ export default function BookingsView({
 
               {/* One column per chair — capacity is visible at a glance. */}
               {stations.map((station) => (
-                <div key={station.id} className="min-w-[120px] flex-1 border-e border-black/[0.04] last:border-0">
+                // Slightly narrower on a phone, so three chairs land on screen
+                // at a time instead of two and a half.
+                <div key={station.id} className="min-w-[104px] flex-1 border-e border-black/[0.04] last:border-0 sm:min-w-[120px]">
                   <div className="sticky top-0 h-9 border-b border-black/[0.06] bg-white px-2 py-2 text-center text-[11px] font-semibold text-ink/60">
                     {t.bookings.station} {station.label}
                   </div>

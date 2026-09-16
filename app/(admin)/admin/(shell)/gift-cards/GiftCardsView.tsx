@@ -11,9 +11,9 @@ import {
   EmptyState,
   Field,
   FormErrors,
-  PageHeader,
-} from "@/components/admin/ui";
+  PageHeader, tabItem, tabTone} from "@/components/admin/ui";
 import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
+import { AdminTable } from "@/components/admin/Table";
 import MediaPicker from "@/components/admin/MediaPicker";
 import TextField, { NumberField, TextPair } from "@/components/admin/TextField";
 import { useAdminI18n } from "@/lib/admin/i18n";
@@ -153,8 +153,9 @@ export default function GiftCardsView({
             key={v}
             onClick={() => setTab(v)}
             className={cn(
-              "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-              tab === v ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]",
+              tabItem,
+              "flex-1 py-2 text-sm",
+              tabTone(tab === v),
             )}
           >
             {v === "issued" ? t.giftCards.tabIssued : t.giftCards.tabSetup}
@@ -173,45 +174,55 @@ export default function GiftCardsView({
           {cards.length === 0 ? (
             <EmptyState title={t.giftCards.empty} icon={<Gift className="h-8 w-8" strokeWidth={1.25} />} />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-sm">
-                <thead>
-                  <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                    {[t.giftCards.code, t.giftCards.recipient, t.giftCards.balance, t.giftCards.status, t.giftCards.issuedAt].map((h) => (
-                      <th key={h} className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {cards.map((c) => (
-                    <tr
-                      key={c.id}
-                      onClick={() => setSelected(c)}
-                      className="cursor-pointer border-b border-black/[0.04] last:border-0 hover:bg-black/[0.015]"
-                    >
-                      <td className="px-4 py-3 text-start font-medium tabular-nums text-ink" dir="ltr">
-                        {c.code}
-                      </td>
-                      <td className="px-4 py-3 text-start text-ink/70">
-                        {c.recipientName || c.recipientEmail || "—"}
-                      </td>
-                      <td className="px-4 py-3 text-start tabular-nums">
-                        <span className="font-semibold text-ink">{c.balanceSar.toLocaleString("en-US")}</span>
-                        <span className="text-ink/35"> / {c.initialSar.toLocaleString("en-US")}</span>
-                      </td>
-                      <td className="px-4 py-3 text-start">
-                        <Badge tone={STATUS_TONE[c.status]}>{t.giftCards.statuses[c.status]}</Badge>
-                      </td>
-                      <td className="px-4 py-3 text-start text-xs tabular-nums text-ink/50" dir="ltr">
-                        {c.createdAt.slice(0, 10)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <AdminTable
+              rows={cards}
+              rowKey={(c) => c.id}
+              minWidth="min-w-[720px]"
+              onRowClick={(c) => setSelected(c)}
+              columns={[
+                {
+                  key: "code",
+                  header: t.giftCards.code,
+                  primary: true,
+                  className: "font-medium tabular-nums text-ink",
+                  dir: "ltr",
+                  cell: (c) => c.code,
+                },
+                {
+                  key: "recipient",
+                  header: t.giftCards.recipient,
+                  className: "text-ink/70",
+                  cell: (c) => c.recipientName || c.recipientEmail || "—",
+                },
+                {
+                  key: "balance",
+                  header: t.giftCards.balance,
+                  className: "tabular-nums",
+                  cell: (c) => (
+                    <>
+                      <span className="font-semibold text-ink">
+                        {c.balanceSar.toLocaleString("en-US")}
+                      </span>
+                      <span className="text-ink/35"> / {c.initialSar.toLocaleString("en-US")}</span>
+                    </>
+                  ),
+                },
+                {
+                  key: "status",
+                  header: t.giftCards.status,
+                  cell: (c) => (
+                    <Badge tone={STATUS_TONE[c.status]}>{t.giftCards.statuses[c.status]}</Badge>
+                  ),
+                },
+                {
+                  key: "issuedAt",
+                  header: t.giftCards.issuedAt,
+                  className: "text-xs tabular-nums text-ink/50",
+                  dir: "ltr",
+                  cell: (c) => c.createdAt.slice(0, 10),
+                },
+              ]}
+            />
           )}
         </Card>
       ) : (
@@ -642,7 +653,7 @@ function CardDrawer({
 
         {canAdjust && card.status !== "cancelled" ? (
           <div className="space-y-3 border-t border-black/[0.06] pt-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <NumberField
                 label={t.giftCards.adjustAmount}
                 hint={preview}

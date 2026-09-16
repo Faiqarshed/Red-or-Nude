@@ -15,6 +15,7 @@ import {
   PageHeader,
 } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
+import { AdminTable } from "@/components/admin/Table";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import TextField from "@/components/admin/TextField";
 import {
@@ -98,59 +99,63 @@ export default function CustomersView({
         {customers.length === 0 ? (
           <EmptyState title={t.customers.empty} icon={<Users className="h-8 w-8" strokeWidth={1.25} />} />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-sm">
-              <thead>
-                <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                  {[
-                    t.customers.name,
-                    t.customers.phone,
-                    t.customers.bookingsCount,
-                    t.customers.lifetime,
-                    t.customers.lastVisit,
-                  ].map((h) => (
-                    <th key={h} className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {customers.map((c) => (
-                  <tr
-                    key={c.id}
-                    onClick={() => setSelected(c)}
-                    className="cursor-pointer border-b border-black/[0.04] last:border-0 hover:bg-black/[0.015]"
-                  >
-                    <td className="px-4 py-3 text-start">
-                      <span className="flex items-center gap-2">
-                        <span className="text-ink">{c.name || "—"}</span>
-                        {c.blocked && <Badge tone="danger">{t.customers.blocked}</Badge>}
-                        {/* Repeat no-shows are the thing a receptionist most
-                            wants to spot before confirming another booking. */}
-                        {c.noShows > 0 && (
-                          <Badge tone="warning">
-                            {c.noShows} {t.customers.noShows}
-                          </Badge>
-                        )}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-start tabular-nums text-ink/70" dir="ltr">
-                      {c.phone}
-                    </td>
-                    <td className="px-4 py-3 text-start tabular-nums text-ink/70">{c.bookingsCount}</td>
-                    <td className="px-4 py-3 text-start font-semibold tabular-nums text-ink">
-                      {c.lifetimeSar.toLocaleString("en-US")}
-                      <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
-                    </td>
-                    <td className="px-4 py-3 text-start text-xs tabular-nums text-ink/50" dir="ltr">
-                      {c.lastVisit ? c.lastVisit.slice(0, 10) : t.customers.never}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <AdminTable
+            rows={customers}
+            rowKey={(c) => c.id}
+            minWidth="min-w-[760px]"
+            onRowClick={(c) => setSelected(c)}
+            columns={[
+              {
+                key: "name",
+                header: t.customers.name,
+                primary: true,
+                cell: (c) => (
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-ink">{c.name || "—"}</span>
+                    {c.blocked && <Badge tone="danger">{t.customers.blocked}</Badge>}
+                    {/* Repeat no-shows are the thing a receptionist most
+                        wants to spot before confirming another booking. */}
+                    {c.noShows > 0 && (
+                      <Badge tone="warning">
+                        {c.noShows} {t.customers.noShows}
+                      </Badge>
+                    )}
+                  </span>
+                ),
+              },
+              {
+                key: "phone",
+                header: t.customers.phone,
+                className: "tabular-nums text-ink/70",
+                dir: "ltr",
+                cell: (c) => c.phone,
+              },
+              {
+                key: "bookings",
+                header: t.customers.bookingsCount,
+                className: "tabular-nums text-ink/70",
+                cell: (c) => c.bookingsCount,
+              },
+              {
+                key: "lifetime",
+                header: t.customers.lifetime,
+                className: "font-semibold tabular-nums text-ink",
+                cell: (c) => (
+                  <>
+                    {c.lifetimeSar.toLocaleString("en-US")}
+                    <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
+                  </>
+                ),
+              },
+              {
+                key: "lastVisit",
+                header: t.customers.lastVisit,
+                className: "text-xs tabular-nums text-ink/50",
+                dir: "ltr",
+                cell: (c) => (c.lastVisit ? c.lastVisit.slice(0, 10) : t.customers.never),
+              },
+            ]}
+          />
         )}
       </Card>
 

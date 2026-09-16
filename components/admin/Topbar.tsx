@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, Globe, LogOut, Search } from "lucide-react";
+import { ChevronDown, Globe, LogOut, Menu, Search } from "lucide-react";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { ROLE_LABELS } from "@/lib/auth/rbac";
 import type { SessionStaff } from "@/lib/auth/guard";
@@ -14,10 +14,15 @@ export default function Topbar({
   user,
   branches,
   signOutAction,
+  navOpen,
+  onOpenNav,
 }: {
   user: SessionStaff;
   branches: BranchOption[];
   signOutAction: () => Promise<void>;
+  /** Below `lg` only: the state of the off-canvas nav the burger opens. */
+  navOpen: boolean;
+  onOpenNav: () => void;
 }) {
   const { t, lang, toggle } = useAdminI18n();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -28,7 +33,20 @@ export default function Topbar({
   const ownBranch = branches.find((b) => b.id === user.branchId);
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-black/[0.06] bg-white/90 px-5 backdrop-blur">
+    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-black/[0.06] bg-white/90 px-4 backdrop-blur sm:px-5">
+      {/* The ::after on this and the two controls opposite grows the *touch*
+          area to 48px without moving a pixel of the design — the 36px circles
+          are sized for a cursor, and a cursor is what `lg` has. */}
+      <button
+        onClick={onOpenNav}
+        aria-label={t.topbar.menu}
+        aria-expanded={navOpen}
+        aria-controls="admin-nav"
+        className="relative grid h-9 w-9 shrink-0 place-items-center rounded-xl text-ink/60 transition-colors after:absolute after:-inset-1.5 after:content-[''] hover:bg-black/[0.04] hover:text-ink lg:hidden"
+      >
+        <Menu className="h-5 w-5" strokeWidth={1.75} />
+      </button>
+
       {/* ⌘K palette lands with Bookings in P1, when there's something to search. */}
       <div className="relative hidden max-w-xs flex-1 md:block">
         <Search
@@ -51,7 +69,7 @@ export default function Topbar({
 
         <button
           onClick={toggle}
-          className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-black/[0.06] bg-white px-3 text-xs font-medium text-ink/70 transition-colors hover:text-ink"
+          className="relative inline-flex h-9 items-center gap-1.5 rounded-xl border border-black/[0.06] bg-white px-3 text-xs font-medium text-ink/70 transition-colors after:absolute after:-inset-y-1.5 after:inset-x-0 after:content-[''] hover:text-ink lg:after:hidden"
           title={lang === "ar" ? "English" : "العربية"}
         >
           <Globe className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -61,7 +79,9 @@ export default function Topbar({
         <div className="relative">
           <button
             onClick={() => setMenuOpen((v) => !v)}
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-black/[0.06] bg-white ps-2 pe-2.5 text-xs transition-colors hover:bg-black/[0.02]"
+            aria-expanded={menuOpen}
+            aria-label={t.topbar.account}
+            className="relative inline-flex h-9 items-center gap-2 rounded-xl border border-black/[0.06] bg-white ps-2 pe-2.5 text-xs transition-colors after:absolute after:-inset-y-1.5 after:inset-x-0 after:content-[''] hover:bg-black/[0.02] lg:after:hidden"
           >
             <span className="grid h-6 w-6 place-items-center rounded-lg bg-red-grad text-[10px] font-bold text-white">
               {user.name.charAt(0).toUpperCase()}

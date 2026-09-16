@@ -90,7 +90,10 @@ export default function PacksView({
                 <li
                   key={row.id}
                   className={cn(
-                    "flex items-center gap-4 px-4 py-3 transition-colors hover:bg-black/[0.015]",
+                    // Same shape as the catalogue list next door: the price and
+                    // the controls take a second line on a phone, so the name is
+                    // not left with fifty pixels to truncate into.
+                    "flex flex-wrap items-center gap-4 px-4 py-3 transition-colors hover:bg-black/[0.015]",
                     !row.active && "opacity-55",
                   )}
                 >
@@ -120,58 +123,62 @@ export default function PacksView({
                     </span>
                   </button>
 
-                  <span className="shrink-0 text-end">
-                    <span className="text-sm font-semibold tabular-nums text-ink">
-                      {row.priceSar.toLocaleString("en-US")}
-                      <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
-                    </span>
-                    {/* Only when it actually is a saving. A pack priced at or
-                        above its parts is a mistake worth seeing, not hiding. */}
-                    {list > row.priceSar && (
-                      <span className="block text-[11px] text-ink/40 line-through tabular-nums">
-                        {list.toLocaleString("en-US")}
+                  {/* Price, reorder and the switch travel together: on a phone
+                      they are the second line, spread across it. */}
+                  <div className="flex shrink-0 items-center gap-4 max-sm:w-full max-sm:justify-between">
+                    <span className="shrink-0 text-end max-sm:text-start">
+                      <span className="text-sm font-semibold tabular-nums text-ink">
+                        {row.priceSar.toLocaleString("en-US")}
+                        <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
                       </span>
-                    )}
-                  </span>
+                      {/* Only when it actually is a saving. A pack priced at or
+                          above its parts is a mistake worth seeing, not hiding. */}
+                      {list > row.priceSar && (
+                        <span className="block text-[11px] text-ink/40 line-through tabular-nums">
+                          {list.toLocaleString("en-US")}
+                        </span>
+                      )}
+                    </span>
 
-                  <div className="flex shrink-0 items-center gap-0.5">
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      <button
+                        onClick={() => run(() => movePack(row.id, "up"))}
+                        disabled={i === 0}
+                        title={t.common.moveUp}
+                        className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
+                      >
+                        <ChevronUp className="h-4 w-4" strokeWidth={2} />
+                      </button>
+                      <button
+                        onClick={() => run(() => movePack(row.id, "down"))}
+                        disabled={i === packs.length - 1}
+                        title={t.common.moveDown}
+                        className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
+                      >
+                        <ChevronDown className="h-4 w-4" strokeWidth={2} />
+                      </button>
+                    </div>
+
                     <button
-                      onClick={() => run(() => movePack(row.id, "up"))}
-                      disabled={i === 0}
-                      title={t.common.moveUp}
-                      className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
+                      role="switch"
+                      aria-checked={row.active}
+                      aria-label={t.catalog.active}
+                      title={t.catalog.activeHint}
+                      onClick={() => run(() => setPackActive(row.id, !row.active))}
+                      className={cn(
+                        "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky",
+                        row.active ? "bg-[#1f7a4d]" : "bg-black/15",
+                      )}
                     >
-                      <ChevronUp className="h-4 w-4" strokeWidth={2} />
-                    </button>
-                    <button
-                      onClick={() => run(() => movePack(row.id, "down"))}
-                      disabled={i === packs.length - 1}
-                      title={t.common.moveDown}
-                      className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
-                    >
-                      <ChevronDown className="h-4 w-4" strokeWidth={2} />
+                      <span
+                        className={cn(
+                          "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all",
+                          row.active ? "end-0.5" : "start-0.5",
+                        )}
+                      />
                     </button>
                   </div>
-
-                  <button
-                    role="switch"
-                    aria-checked={row.active}
-                    aria-label={t.catalog.active}
-                    title={t.catalog.activeHint}
-                    onClick={() => run(() => setPackActive(row.id, !row.active))}
-                    className={cn(
-                      "relative h-5 w-9 shrink-0 rounded-full transition-colors",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky",
-                      row.active ? "bg-[#1f7a4d]" : "bg-black/15",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all",
-                        row.active ? "end-0.5" : "start-0.5",
-                      )}
-                    />
-                  </button>
                 </li>
               );
             })}
