@@ -11,7 +11,7 @@ answers or lose records.** **3, 5 and 8 are UI dead ends.** **9 is docs.**
 ---
 
 ## 1. Two customers can get the same nail technician at the same time
-
+## FIXED
 **Fixed.** `assignDay` now takes a `pg_advisory_xact_lock` per branch and does
 its read, plan and write inside one transaction. `scripts/check-assign.ts`
 check 6 covers it — see `docs/LIVE-ASSIGNMENT.md` §3.
