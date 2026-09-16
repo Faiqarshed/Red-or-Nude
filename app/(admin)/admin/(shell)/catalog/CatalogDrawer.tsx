@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { AlertTriangle, Trash2 } from "lucide-react";
-import { Button, FormErrors } from "@/components/admin/ui";
+import { Button, FormErrors, touchTargetSwitch } from "@/components/admin/ui";
 import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
 import MediaPicker from "@/components/admin/MediaPicker";
 import { pick } from "@/lib/localized";
@@ -454,7 +454,7 @@ function Toggle({
         aria-checked={checked}
         aria-label={label}
         onClick={() => onChange(!checked)}
-        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky ${
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky ${touchTargetSwitch} ${
           checked ? "bg-[#1f7a4d]" : "bg-black/15"
         }`}
       >

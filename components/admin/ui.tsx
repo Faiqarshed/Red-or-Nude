@@ -161,6 +161,24 @@ export const invalidRing =
 export const touchTarget = "after:absolute after:-inset-2 after:content-[''] sm:after:hidden";
 
 /**
+ * The same for the 28px icon buttons — ten pixels of reach rather than eight.
+ *
+ * Only for a button standing on its own. Two of these side by side, as the
+ * reorder arrows are, would have overlapping hit areas and take each other's
+ * taps; those get bigger instead. See CatalogView.
+ */
+export const touchTargetSm = "after:absolute after:-inset-2.5 after:content-[''] sm:after:hidden";
+
+/**
+ * And for the 20×36px active switches, the smallest targets in the panel.
+ *
+ * They already carry `relative` for their own knob, so the ::after costs them
+ * nothing. Fourteen pixels of reach takes them to 48 tall and 64 wide.
+ */
+export const touchTargetSwitch =
+  "after:absolute after:-inset-3.5 after:content-[''] sm:after:hidden";
+
+/**
  * The segmented tab strips — catalogue, gift cards, no-shows, bookings, my day,
  * performance. Seven of them, each previously carrying its own copy of these
  * classes, which is how the touch target came to be added seven times by hand.

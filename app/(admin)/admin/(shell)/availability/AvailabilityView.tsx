@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, QrCode, Trash2 } from "lucide-react";
-import { Badge, Button, Card, CardHeader, Field, Input, invalidRing, PageHeader } from "@/components/admin/ui";
+import { Badge, Button, Card, CardHeader, Field, Input, invalidRing, PageHeader, touchTargetSm, touchTargetSwitch } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { ConfirmDialog } from "@/components/admin/overlays";
 import TextField from "@/components/admin/TextField";
@@ -195,6 +195,7 @@ export default function AvailabilityView({
                   }}
                   className={cn(
                     "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+                      touchTargetSwitch,
                     !day.closed ? "bg-[#1f7a4d]" : "bg-black/15",
                   )}
                 >
@@ -263,6 +264,7 @@ export default function AvailabilityView({
                   onClick={() => run(() => setStationActive(s.id, !s.active))}
                   className={cn(
                     "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+                      touchTargetSwitch,
                     s.active ? "bg-[#1f7a4d]" : "bg-black/15",
                   )}
                 >
@@ -275,7 +277,7 @@ export default function AvailabilityView({
                 </button>
                 <button
                   onClick={() => askDelete({ kind: "station", id: s.id, name: s.label })}
-                  className="grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red"
+                  className={`relative grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red ${touchTargetSm}`}
                   aria-label={t.catalog.delete}
                 >
                   <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -348,7 +350,7 @@ export default function AvailabilityView({
                   {c.global && <Badge tone="info">all</Badge>}
                   <button
                     onClick={() => askDelete({ kind: "closure", id: c.id, name: dayRange(from, to) })}
-                    className="grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red"
+                    className={`relative grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red ${touchTargetSm}`}
                     aria-label={t.catalog.delete}
                   >
                     <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />

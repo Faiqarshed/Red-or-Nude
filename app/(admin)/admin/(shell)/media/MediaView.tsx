@@ -3,7 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { HardDrive, ImageIcon, Loader2, Trash2, Upload } from "lucide-react";
-import { Badge, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import { Badge, Button, Card, EmptyState, PageHeader, touchTargetSm } from "@/components/admin/ui";
 import { ConfirmDialog } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { ALLOWED_TYPES, MAX_UPLOAD_BYTES, type MediaItem } from "@/lib/media";
@@ -143,7 +143,7 @@ export default function MediaView({
                   ) : null}
                   <button
                     onClick={() => setDoomed(item)}
-                    className="absolute top-2 end-2 grid h-7 w-7 place-items-center rounded-lg bg-white/90 text-ink/50 opacity-0 shadow-sm transition-all hover:text-red group-hover:opacity-100"
+                    className={`absolute top-2 end-2 grid h-7 w-7 place-items-center rounded-lg bg-white/90 text-ink/50 opacity-0 shadow-sm transition-all hover:text-red group-hover:opacity-100 ${touchTargetSm}`}
                     aria-label={t.media.deleteConfirm}
                   >
                     <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />

@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronUp, ImageIcon, Plus, Sparkles } from "lucide-react";
-import { Badge, Button, Card, EmptyState, PageHeader, tabItem, tabTone} from "@/components/admin/ui";
+import { Badge, Button, Card, EmptyState, PageHeader, tabItem, tabTone, touchTargetSwitch } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
 import type { Localized } from "@/lib/db/schema";
@@ -174,7 +174,7 @@ export default function CatalogView({
                       onClick={() => run(() => moveCatalogItem(tab, row.id, "up"))}
                       disabled={i === 0}
                       title={t.common.moveUp}
-                      className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
+                      className="grid h-10 w-10 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent sm:h-7 sm:w-7"
                     >
                       <ChevronUp className="h-4 w-4" strokeWidth={2} />
                     </button>
@@ -182,7 +182,7 @@ export default function CatalogView({
                       onClick={() => run(() => moveCatalogItem(tab, row.id, "down"))}
                       disabled={i === rows.length - 1}
                       title={t.common.moveDown}
-                      className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
+                      className="grid h-10 w-10 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent sm:h-7 sm:w-7"
                     >
                       <ChevronDown className="h-4 w-4" strokeWidth={2} />
                     </button>
@@ -199,6 +199,7 @@ export default function CatalogView({
                     onClick={() => run(() => setCatalogActive(tab, row.id, !row.active))}
                     className={cn(
                       "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+                      touchTargetSwitch,
                       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky",
                       row.active ? "bg-[#1f7a4d]" : "bg-black/15",
                     )}

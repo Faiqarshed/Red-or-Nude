@@ -13,6 +13,8 @@ import {
   Input,
   invalidRing,
   PageHeader,
+  touchTargetSm,
+  touchTargetSwitch,
 } from "@/components/admin/ui";
 import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
@@ -170,6 +172,7 @@ export default function StaffView({
                     onClick={() => run(() => setStaffActive(s.id, !s.active))}
                     className={cn(
                       "relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-30",
+                      touchTargetSwitch,
                       s.active ? "bg-[#1f7a4d]" : "bg-black/15",
                     )}
                   >
@@ -184,7 +187,7 @@ export default function StaffView({
                   <button
                     disabled={locked || s.id === currentUserId}
                     onClick={() => setDoomed(s)}
-                    className="grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red disabled:opacity-25 disabled:hover:bg-transparent"
+                    className={`relative grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red disabled:opacity-25 disabled:hover:bg-transparent ${touchTargetSm}`}
                     aria-label={t.catalog.delete}
                   >
                     <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -519,7 +522,12 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
         </ul>
       )}
 
-      <div className="mt-3 flex items-start gap-2">
+      {/* Two native date inputs and a button will not share one row inside a
+          448px drawer: the inputs have a wide intrinsic size and the button,
+          last and shrinkable, is the one that gives — down to its min-content
+          width, which broke "Add days off" across three lines. The dates keep
+          the row; the button takes the one below and the full width of it. */}
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <Field label={t.staff.from} error={errors.from}>
           <Input
             type="date"
@@ -540,10 +548,16 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
             onChange={(e) => setTo(e.target.value)}
           />
         </Field>
-        <Button size="sm" variant="secondary" className="mt-6" disabled={pending} onClick={add}>
-          {t.staff.addDayOff}
-        </Button>
       </div>
+      <Button
+        size="sm"
+        variant="secondary"
+        className="mt-2 w-full"
+        disabled={pending}
+        onClick={add}
+      >
+        {t.staff.addDayOff}
+      </Button>
     </div>
   );
 }
