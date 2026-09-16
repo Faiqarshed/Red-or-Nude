@@ -18,14 +18,28 @@ import PhoneField from "@/components/PhoneField";
 import BookingCard, { RefillDialog, partyOf } from "@/components/booking/BookingCard";
 import { Lock, Riyal } from "@/components/icons";
 import OtpInput from "@/components/OtpInput";
+import { ACCOUNT_OTP_TTL_MS } from "@/lib/otp-length";
 import { useI18n } from "@/lib/i18n";
 import Link from "next/link";
 import { pick } from "@/lib/localized";
 import type { Localized } from "@/lib/localized";
 import { formatDateLabel } from "@/lib/booking";
 import type { BookingSummary } from "@/lib/booking";
-import { isValidSaudiMobile, toNationalDigits, toStoredPhone } from "@/lib/phone";
+import { toNationalDigits, toStoredPhone, validateSaudiMobile } from "@/lib/phone";
 import { REWARDS } from "@/lib/rewards";
+import TextInput from "@/components/TextInput";
+import {
+  birthdayRange,
+  checkBirthday,
+  checkEmail,
+  checkPersonName,
+  EMAIL_MAX,
+  EMAIL_TEXT,
+  PERSON_NAME_MAX,
+  PERSON_TEXT,
+} from "@/lib/admin/validate";
+import { formatDateKey, riyadhDateKey } from "@/lib/time";
+import { validationMessages } from "@/lib/validation-messages";
 
 type Customer = {
   name: string | null;
@@ -552,6 +566,7 @@ function ProfileForm({ customer }: { customer: Customer }) {
   const [phone, setPhone] = useState(toNationalDigits(customer.phone));
   const [birthday, setBirthday] = useState(customer.birthday ?? "");
   const [phoneTouched, setPhoneTouched] = useState(false);
+  const [tried, setTried] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -565,10 +580,13 @@ function ProfileForm({ customer }: { customer: Customer }) {
     toStoredPhone(phone) !== customer.phone ||
     (birthday || null) !== customer.birthday;
 
-  const canSave = dirty && !busy && Boolean(name.trim()) && isValidSaudiMobile(phone);
+  const errors = profileErrors(lang, a, { name, phone, birthday });
+  const canSave = dirty && !busy;
 
   const save = async () => {
     if (!canSave) return;
+    setTried(true);
+    if (errors.name || errors.phone || errors.birthday) return;
     setBusy(true);
     setError(null);
     setSaved(false);
@@ -609,18 +627,19 @@ function ProfileForm({ customer }: { customer: Customer }) {
         }}
         className="mt-4 space-y-4"
       >
-        <label className="block">
-          <span className="mb-1.5 block text-[12px] text-ink/55">{a.nameLabel}</span>
-          <input
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value.slice(0, 120));
-              setSaved(false);
-            }}
-            autoComplete="name"
-            className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-sm text-ink outline-none focus:border-red/40"
-          />
-        </label>
+        <TextInput
+          label={a.nameLabel}
+          opts={PERSON_TEXT}
+          max={PERSON_NAME_MAX}
+          error={errors.name}
+          showError={tried}
+          autoComplete="name"
+          value={name}
+          onChange={(v) => {
+            setName(v);
+            setSaved(false);
+          }}
+        />
 
         <PhoneField
           label={a.phoneLabel}
@@ -630,27 +649,18 @@ function ProfileForm({ customer }: { customer: Customer }) {
             setSaved(false);
           }}
           required
-          showError={phoneTouched}
+          showError={phoneTouched || tried}
           onBlur={() => setPhoneTouched(true)}
         />
 
-        <label className="block">
-          <span className="mb-1.5 block text-[12px] text-ink/55">{a.birthdayLabel}</span>
-          {/* The browser's own date input: it localises, it validates, and it
-              hands back the YYYY-MM-DD the `date` column stores. */}
-          <input
-            value={birthday}
-            onChange={(e) => {
-              setBirthday(e.target.value);
-              setSaved(false);
-            }}
-            type="date"
-            max={new Date().toISOString().slice(0, 10)}
-            dir="ltr"
-            className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-left text-sm text-ink outline-none focus:border-red/40"
-          />
-          <span className="mt-1.5 block text-[11px] text-ink/40">{a.birthdayNote}</span>
-        </label>
+        <BirthdayInput
+          value={birthday}
+          error={errors.birthday}
+          onChange={(v) => {
+            setBirthday(v);
+            setSaved(false);
+          }}
+        />
 
         <button
           type="submit"
@@ -697,10 +707,15 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tried, setTried] = useState(false);
+  const timer = useCodeTimer();
+  useEffect(() => {
+    if (timer.expired) setCode("");
+  }, [timer.expired]);
 
-  const emailOk =
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) &&
-    email.trim().toLowerCase() !== currentEmail.toLowerCase();
+  const emailError =
+    checkEmail(validationMessages[lang], a.emailLabel, email, { required: true }) ??
+    (email.trim().toLowerCase() === currentEmail.toLowerCase() ? a.errors.sameEmail : undefined);
 
   const say = (key: string | undefined): string =>
     (a.errors as Record<string, string>)[toCamel(key ?? "failed")] ?? a.errors.failed;
@@ -711,10 +726,13 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
     setEmail("");
     setCode("");
     setError(null);
+    setTried(false);
   };
 
   const request = async () => {
-    if (busy || !emailOk) return;
+    if (busy) return;
+    setTried(true);
+    if (emailError) return;
     setBusy(true);
     setError(null);
     try {
@@ -731,6 +749,7 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
       setSentTo(data.sentTo ?? null);
       setCode("");
       setStep("code");
+      timer.start();
     } catch {
       setError(a.errors.failed);
     } finally {
@@ -739,7 +758,7 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
   };
 
   const confirm = async () => {
-    if (busy || code.length !== 6) return;
+    if (busy || code.length !== 6 || timer.expired) return;
     setBusy(true);
     setError(null);
     try {
@@ -795,17 +814,17 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
 
           {step === "email" ? (
             <>
-              <input
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                type="email"
-                inputMode="email"
-                dir="ltr"
-                maxLength={200}
+              <TextInput
+                label={a.emailLabel}
+                opts={EMAIL_TEXT}
+                max={EMAIL_MAX}
+                error={emailError}
+                showError={tried}
                 placeholder={a.newEmailPlaceholder}
-                className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-left text-sm text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
+                value={email}
+                onChange={setEmail}
               />
-              <Submit disabled={busy || !emailOk} label={busy ? a.sending : a.sendCode} />
+              <Submit disabled={busy} label={busy ? a.sending : a.sendCode} />
             </>
           ) : (
             <>
@@ -813,7 +832,11 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
                 {a.codeSentTo.replace("{email}", sentTo ?? email)}
               </p>
               <OtpInput value={code} onChange={setCode} />
-              <Submit disabled={busy || code.length !== 6} label={busy ? a.sending : a.verify} />
+              <CodeCountdown timer={timer} />
+              <Submit disabled={busy || code.length !== 6 || timer.expired} label={busy ? a.sending : a.verify} />
+              <div className="mt-4 text-[12px]">
+                <ResendButton timer={timer} busy={busy} onClick={() => void request()} />
+              </div>
             </>
           )}
 
@@ -849,17 +872,26 @@ function SignedOut() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [emailTried, setEmailTried] = useState(false);
+  const [profileTried, setProfileTried] = useState(false);
+  const timer = useCodeTimer();
+  // The server has discarded it; a half-typed one would only earn "expired".
+  useEffect(() => {
+    if (timer.expired) setCode("");
+  }, [timer.expired]);
 
-  // Loose on purpose — the server's zod schema is the real check. This only
-  // decides whether the button is clickable.
-  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  // The same checks the API runs (lib/account/fields.ts), said before sending.
+  const emailError = checkEmail(validationMessages[lang], a.emailLabel, email, { required: true });
+  const errors = profileErrors(lang, a, { name, phone, birthday });
 
   /** Map a server error code to a sentence. Unknown codes fall back rather than blank. */
   const say = (key: string | undefined): string =>
     (a.errors as Record<string, string>)[toCamel(key ?? "failed")] ?? a.errors.failed;
 
   const sendCode = async () => {
-    if (busy || !emailOk) return;
+    if (busy) return;
+    setEmailTried(true);
+    if (emailError) return;
     setBusy(true);
     setError(null);
     try {
@@ -876,6 +908,7 @@ function SignedOut() {
       setSentTo(data.sentTo ?? null);
       setCode("");
       setStep("code");
+      timer.start();
     } catch {
       setError(a.errors.failed);
     } finally {
@@ -884,7 +917,7 @@ function SignedOut() {
   };
 
   const verify = async () => {
-    if (busy || code.length !== 6) return;
+    if (busy || code.length !== 6 || timer.expired) return;
     setBusy(true);
     setError(null);
     try {
@@ -917,7 +950,9 @@ function SignedOut() {
   };
 
   const register = async () => {
-    if (busy || !ticket || !name.trim() || !isValidSaudiMobile(phone)) return;
+    if (busy || !ticket) return;
+    setProfileTried(true);
+    if (errors.name || errors.phone || errors.birthday) return;
     setBusy(true);
     setError(null);
     try {
@@ -971,20 +1006,18 @@ function SignedOut() {
                 void sendCode();
               }}
             >
-              <label className="block">
-                <span className="mb-1.5 block text-[12px] text-ink/55">{a.emailLabel}</span>
-                <input
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  type="email"
-                  inputMode="email"
-                  autoComplete="email"
-                  dir="ltr"
-                  maxLength={200}
-                  className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-left text-sm text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
-                />
-              </label>
-              <Submit disabled={busy || !emailOk} label={busy ? a.sending : a.sendCode} />
+              <TextInput
+                label={a.emailLabel}
+                opts={EMAIL_TEXT}
+                max={EMAIL_MAX}
+                error={emailError}
+                showError={emailTried}
+                hint={a.emailIdentityNote}
+                autoComplete="email"
+                value={email}
+                onChange={setEmail}
+              />
+              <Submit disabled={busy} label={busy ? a.sending : a.sendCode} />
             </form>
           )}
 
@@ -1002,17 +1035,11 @@ function SignedOut() {
                 <span className="mb-1.5 block text-[12px] text-ink/55">{a.codeLabel}</span>
                 <OtpInput value={code} onChange={setCode} />
               </label>
-              <Submit disabled={busy || code.length !== 6} label={busy ? a.sending : a.verify} />
+              <CodeCountdown timer={timer} />
+              <Submit disabled={busy || code.length !== 6 || timer.expired} label={busy ? a.sending : a.verify} />
 
               <div className="mt-4 flex items-center justify-between gap-3 text-[12px]">
-                <button
-                  type="button"
-                  onClick={() => void sendCode()}
-                  disabled={busy}
-                  className="text-ink/45 underline underline-offset-4 hover:text-red disabled:opacity-40"
-                >
-                  {a.resend}
-                </button>
+                <ResendButton timer={timer} busy={busy} onClick={() => void sendCode()} />
                 <button
                   type="button"
                   onClick={() => {
@@ -1035,37 +1062,22 @@ function SignedOut() {
               }}
               className="space-y-4"
             >
-              <label className="block">
-                <span className="mb-1.5 block text-[12px] text-ink/55">{a.nameLabel}</span>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value.slice(0, 120))}
-                  autoComplete="name"
-                  className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-sm text-ink outline-none focus:border-red/40"
-                />
-              </label>
-
-              <PhoneField label={a.phoneLabel} value={phone} onChange={setPhone} required />
-
-              <label className="block">
-                <span className="mb-1.5 block text-[12px] text-ink/55">{a.birthdayLabel}</span>
-                {/* The browser's own date input: it localises, it validates, and
-                    it hands back the YYYY-MM-DD the `date` column stores. */}
-                <input
-                  value={birthday}
-                  onChange={(e) => setBirthday(e.target.value)}
-                  type="date"
-                  max={new Date().toISOString().slice(0, 10)}
-                  dir="ltr"
-                  className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-left text-sm text-ink outline-none focus:border-red/40"
-                />
-                <span className="mt-1.5 block text-[11px] text-ink/40">{a.birthdayNote}</span>
-              </label>
-
-              <Submit
-                disabled={busy || !name.trim() || !isValidSaudiMobile(phone)}
-                label={busy ? a.sending : a.createAccount}
+              <TextInput
+                label={a.nameLabel}
+                opts={PERSON_TEXT}
+                max={PERSON_NAME_MAX}
+                error={errors.name}
+                showError={profileTried}
+                autoComplete="name"
+                value={name}
+                onChange={setName}
               />
+
+              <PhoneField label={a.phoneLabel} value={phone} onChange={setPhone} required showError={profileTried} />
+
+              <BirthdayInput value={birthday} error={errors.birthday} onChange={setBirthday} />
+
+              <Submit disabled={busy} label={busy ? a.sending : a.createAccount} />
             </form>
           )}
 
@@ -1078,21 +1090,23 @@ function SignedOut() {
 
         {/* The advert. Shown signed out on purpose — this is the reason to make
             an account, so hiding it behind one would be backwards. */}
-        <section className="mt-8 rounded-[20px] bg-white/60 p-6 text-start">
-          <h2 className="flex items-center gap-2 font-display text-lg font-extrabold text-ink">
-            <Riyal className="h-4 w-4 text-red" />
+        {/* One row of tiles, not a stacked list: it sits under the form and
+            must not outweigh it. */}
+        <section className="mt-6 rounded-[20px] bg-white/60 px-5 py-4 text-start">
+          <h2 className="flex items-center gap-2 font-display text-base font-extrabold text-ink">
+            <Riyal className="h-3.5 w-3.5 text-red" />
             {a.walletTitle}
           </h2>
-          <p className="mt-2 text-[12px] text-ink/50">{a.walletHowTo}</p>
-          <ul className="mt-4 space-y-2">
+          <p className="mt-1 text-[12px] text-ink/50">{a.walletHowTo}</p>
+          <ul className="mt-3 grid grid-cols-3 gap-2">
             {REWARDS.map((r) => (
-              <li
-                key={r.points}
-                className="rounded-[14px] bg-black/[0.04] px-4 py-3 text-[13px] font-semibold text-ink/60"
-              >
-                {a.rewardRow
-                  .replace("{points}", String(r.points))
-                  .replace("{percent}", String(r.percent))}
+              <li key={r.points} className="rounded-[12px] bg-black/[0.04] px-2 py-2 text-center">
+                <span className="block text-sm font-extrabold text-ink" dir="ltr">
+                  {r.percent}%
+                </span>
+                <span className="block text-[11px] text-ink/50">
+                  {a.walletPoints.replace("{n}", String(r.points))}
+                </span>
               </li>
             ))}
           </ul>
@@ -1101,6 +1115,110 @@ function SignedOut() {
 
       <SiteFooter />
     </main>
+  );
+}
+
+/**
+ * The profile's checks, shared by sign-up and "My details" and matching
+ * lib/account/fields.ts. `phone` is PhoneField's own code; it says the sentence.
+ */
+function profileErrors(
+  lang: "ar" | "en",
+  a: { nameLabel: string; birthdayLabel: string },
+  f: { name: string; phone: string; birthday: string },
+) {
+  const v = validationMessages[lang];
+  return {
+    name: checkPersonName(v, a.nameLabel, f.name),
+    phone: validateSaudiMobile(f.phone) ?? undefined,
+    birthday: checkBirthday(v, a.birthdayLabel, f.birthday, riyadhDateKey(), (k) => formatDateKey(k, lang)),
+  };
+}
+
+/** The browser's own date input, bounded to the range checkBirthday accepts. */
+function BirthdayInput({ value, error, onChange }: { value: string; error?: string; onChange: (v: string) => void }) {
+  const { c } = useI18n();
+  const { earliest, latest } = birthdayRange(riyadhDateKey());
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-[12px] text-ink/55">{c.account.birthdayLabel}</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        type="date"
+        min={earliest}
+        max={latest}
+        dir="ltr"
+        aria-invalid={error ? true : undefined}
+        className={`w-full rounded-[12px] border bg-white px-4 py-3 text-left text-sm text-ink outline-none ${
+          error ? "border-red/60" : "border-black/[0.08] focus:border-red/40"
+        }`}
+      />
+      <span className={`mt-1.5 block text-[11px] ${error ? "text-red" : "text-ink/40"}`}>
+        {error ?? c.account.birthdayNote}
+      </span>
+    </label>
+  );
+}
+
+type CodeTimer = { left: number; expired: boolean; time: string; start: () => void };
+
+/**
+ * The code's minute, counted down. It starts when a code is sent and matches
+ * ACCOUNT_OTP_TTL_MS, the moment the server discards that code.
+ */
+function useCodeTimer(): CodeTimer {
+  const [endsAt, setEndsAt] = useState(0);
+  const [now, setNow] = useState(0);
+
+  useEffect(() => {
+    if (!endsAt) return;
+    const id = setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= endsAt) clearInterval(id);
+    }, 250);
+    return () => clearInterval(id);
+  }, [endsAt]);
+
+  const left = endsAt ? Math.max(0, Math.ceil((endsAt - now) / 1000)) : 0;
+  return {
+    left,
+    expired: endsAt > 0 && left === 0,
+    time: `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`,
+    start: () => {
+      const t = Date.now();
+      setNow(t);
+      setEndsAt(t + ACCOUNT_OTP_TTL_MS);
+    },
+  };
+}
+
+function CodeCountdown({ timer }: { timer: CodeTimer }) {
+  const { c } = useI18n();
+  return timer.expired ? (
+    <p role="alert" className="mt-2 text-start text-[12px] text-red">
+      {c.account.codeExpired}
+    </p>
+  ) : (
+    <p className="mt-2 text-start text-[12px] tabular-nums text-ink/45">
+      {c.account.codeExpiresIn.replace("{time}", timer.time)}
+    </p>
+  );
+}
+
+/** Held until the current code has expired, so only one code is ever live. */
+function ResendButton({ timer, busy, onClick }: { timer: CodeTimer; busy: boolean; onClick: () => void }) {
+  const { c } = useI18n();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy || !timer.expired}
+      className="text-ink/45 underline underline-offset-4 hover:text-red disabled:cursor-not-allowed disabled:no-underline disabled:opacity-40"
+    >
+      {timer.expired ? c.account.resend : `${c.account.resend} (${timer.time})`}
+    </button>
   );
 }
 

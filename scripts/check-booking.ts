@@ -17,8 +17,9 @@ import "./_test-db";
 import assert from "node:assert";
 import { and, eq, inArray, like, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { addons, bookings, branches, customers, services, stations, ticketCounters } from "@/lib/db/schema";
-import { createBooking, createBookings, sweepNoShows } from "@/lib/bookings";
+import { addons, bookings, branches, customers, loyaltyTxns, services, stations, ticketCounters } from "@/lib/db/schema";
+import { createAccount } from "@/lib/account/create";
+import { createBooking, createBookings, releaseWebHold, sweepNoShows } from "@/lib/bookings";
 import { confirmBookingPayment } from "@/lib/payments/confirm";
 import { utcToLocalDate } from "@/lib/availability";
 import { splitGroupPrice, vatIncludedIn } from "@/lib/money";
@@ -625,6 +626,92 @@ async function main() {
   );
   console.log(`  walk-in: ${webRow.ticketNo} (web) then ${walkIn.ticketNo} (desk), one queue ✓`);
 
+  // -- A phone never leads to an account ------------------------------------
+  // Nobody proves they own a number. A guest checkout under an account holder's
+  // phone must not book onto that account (her points) or touch its email (her
+  // sign-in).
+  await cleanup(branch.id);
+  const [account] = await db
+    .insert(customers)
+    .values({ phone: TEST_PHONE, name: "Owner", email: "owner@example.com", emailVerifiedAt: new Date() })
+    .returning();
+  const stranger = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: TEST_PHONE, email: "stranger@example.com" },
+    source: "web",
+    status: "confirmed",
+    members: [{ serviceId: svcA.id, addonIds: [] }],
+  });
+  assert.ok(stranger.ok, `guest checkout failed: ${stranger.ok ? "" : stranger.error}`);
+  const [strangerRow] = await db.select().from(bookings).where(eq(bookings.id, stranger.bookings[0].id));
+  assert.notEqual(strangerRow.customerId, account.id, "a guest booking under an account's phone stays off the account");
+  const [accountAfter] = await db.select().from(customers).where(eq(customers.id, account.id));
+  assert.equal(accountAfter.email, "owner@example.com", "and never rewrites the account's sign-in email");
+  console.log("  identity: an account is never matched on a phone number ✓");
+
+  // A walk-in the desk matched by her email books onto the account, whatever
+  // phone was typed, so the visit's points reach her.
+  await cleanup(branch.id);
+  const [member] = await db
+    .insert(customers)
+    .values({ phone: TEST_PHONE, name: "Member", email: "member@example.com", emailVerifiedAt: new Date() })
+    .returning();
+  const deskVisit = await createBooking({
+    branchId: branch.id,
+    serviceId: svcA.id,
+    addonIds: [],
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: "0500000009", email: "member@example.com" },
+    customerId: member.id,
+    source: "walk_in",
+  });
+  assert.ok(deskVisit.ok, `walk-in failed: ${deskVisit.ok ? "" : deskVisit.error}`);
+  const [deskRow] = await db.select().from(bookings).where(eq(bookings.id, deskVisit.id));
+  assert.equal(deskRow.customerId, member.id, "a walk-in matched by email is her account's booking");
+  console.log("  walk-in: matched by email, booked onto her account ✓");
+
+  // Signing up brings back every guest booking made under that email, from any
+  // phone: the bookings, and the points that came with them.
+  await cleanup(branch.id);
+  const guestVisit = (phone: string, at: number) =>
+    createBookings({
+      branchId: branch.id,
+      startsAt: new Date(base + at).toISOString(),
+      customer: { phone, email: "Guest.Twice@example.com" },
+      source: "web",
+      status: "confirmed",
+      members: [{ serviceId: svcA.id, addonIds: [] }],
+    });
+  const guestA = await guestVisit(TEST_PHONE, 0);
+  const guestB = await guestVisit("0500000008", 3 * 60 * 60_000);
+  assert.ok(guestA.ok && guestB.ok, "both guest checkouts went through");
+  const [olderGuest] = await db.select().from(bookings).where(eq(bookings.id, guestA.bookings[0].id));
+  await db.insert(loyaltyTxns).values({ customerId: olderGuest.customerId!, bookingId: olderGuest.id, deltaPoints: 40 });
+
+  const account2 = await createAccount({
+    email: "guest.twice@example.com",
+    name: "Guest Twice",
+    phone: "0500000007",
+    birthday: null,
+    lang: "en",
+  });
+  const mine = await db
+    .select({ id: bookings.id })
+    .from(bookings)
+    .where(eq(bookings.customerId, account2.id));
+  assert.deepEqual(
+    mine.map((b) => b.id).sort(),
+    [guestA.bookings[0].id, guestB.bookings[0].id].sort(),
+    "both guest bookings, from two phones, are on the new account",
+  );
+  const [points] = await db.select().from(loyaltyTxns).where(eq(loyaltyTxns.bookingId, olderGuest.id));
+  assert.equal(points.customerId, account2.id, "and the points earned as a guest came with them");
+  const sameEmail = await db.select({ id: customers.id }).from(customers).where(like(customers.email, "%guest.twice%"));
+  assert.equal(sameEmail.length, 1, "leaving one row for the address, not a guest row beside the account");
+  await db.delete(customers).where(eq(customers.id, account2.id));
+  console.log("  sign-up: every guest booking under her email comes back, whatever the phone ✓");
+
   // -- An unpaid hold gets no ticket ---------------------------------------
   await cleanup(branch.id);
   const held = await createBookings({
@@ -638,6 +725,25 @@ async function main() {
   assert.ok(held.ok, "a pending hold should still be created");
   assert.equal(held.bookings[0].ticketNo, null, "an unpaid hold must not get a ticket number");
   console.log("  pending hold carries no ticket ✓");
+
+  // Going back from checkout lets her own hold go — but only with her email.
+  await cleanup(branch.id);
+  const walkedAway = await createBookings({
+    branchId: branch.id,
+    startsAt: new Date(base).toISOString(),
+    customer: { phone: TEST_PHONE, email: "walked.away@example.com" },
+    source: "web",
+    status: "pending",
+    members: [{ serviceId: svcA.id, addonIds: [] }],
+  });
+  assert.ok(walkedAway.ok, "the hold to walk away from was created");
+  const awayCode = walkedAway.bookings[0].code;
+  assert.equal(await releaseWebHold(awayCode, "someone.else@example.com"), false, "a code without her email releases nothing");
+  assert.equal(await releaseWebHold(awayCode, "Walked.Away@example.com"), true, "her own email releases it");
+  const [awayRow] = await db.select().from(bookings).where(eq(bookings.id, walkedAway.bookings[0].id));
+  assert.equal(awayRow.status, "cancelled", "the chair is free again");
+  assert.equal(await releaseWebHold(awayCode, "walked.away@example.com"), false, "and a second release is a no-op");
+  console.log("  back from checkout: her unpaid hold is released, only with her email ✓");
 
   await cleanup(branch.id);
   // -- No-show release: chairs given back when nobody checks in ------------

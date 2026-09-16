@@ -19,8 +19,8 @@
 //   • the code is HASHED at rest — this table guards customer data, so a
 //     database leak must not hand over live codes
 //   • single use — consumed on the first successful verify
-//   • 10 minutes — long enough to switch to an inbox, short enough that a
-//     forwarded email is not a standing key
+//   • 10 minutes by default, one for sign-in and email changes (the page counts
+//     that minute down) — short enough that a forwarded email is not a standing key
 //   • 5 attempts — six digits is only a million, and an unlimited verify walks
 //     it in minutes
 //   • one live code per subject — requesting a new one invalidates the old,
@@ -32,8 +32,8 @@ import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { otps } from "@/lib/db/schema";
 
-import { OTP_LENGTH } from "./otp-length";
-export { OTP_LENGTH };
+import { ACCOUNT_OTP_TTL_MS, OTP_LENGTH } from "./otp-length";
+export { ACCOUNT_OTP_TTL_MS, OTP_LENGTH };
 export const OTP_TTL_MS = 10 * 60_000;
 export const OTP_MAX_ATTEMPTS = 5;
 
@@ -86,7 +86,7 @@ function sameHash(a: string, b: string): boolean {
  * Issue a code for a subject, invalidating any earlier live one.
  * Returns the plaintext — the *only* moment it exists outside the email.
  */
-export async function issueOtp(subject: string): Promise<string> {
+export async function issueOtp(subject: string, ttlMs: number = OTP_TTL_MS): Promise<string> {
   // Burn outstanding codes first: two valid codes in two inboxes is one more
   // way in than the customer asked for.
   await db
@@ -98,7 +98,7 @@ export async function issueOtp(subject: string): Promise<string> {
   await db.insert(otps).values({
     subject,
     codeHash: hash(code),
-    expiresAt: new Date(Date.now() + OTP_TTL_MS),
+    expiresAt: new Date(Date.now() + ttlMs),
   });
   return code;
 }

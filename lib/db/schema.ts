@@ -354,7 +354,16 @@ export const customers = pgTable(
     ...stamps,
   },
   (t) => ({
-    phoneUnique: unique("customers_phone_unique").on(t.phone),
+    /**
+     * One *guest* row per phone, so checkout recognises a returning guest.
+     * Accounts are left out on purpose: nobody proves they own a number, so a
+     * phone must never lead to an account. Otherwise signing up with, or booking
+     * as a guest under, someone else's number hands over their history and
+     * points. An account is found by its verified email alone.
+     */
+    guestPhoneUnique: uniqueIndex("customers_guest_phone_unique")
+      .on(t.phone)
+      .where(sql`${t.emailVerifiedAt} is null`),
     /**
      * Unique, but only over *verified* emails — deliberately partial.
      *

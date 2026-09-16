@@ -31,6 +31,7 @@ import {
   validateSaudiMobile,
 } from "@/lib/phone";
 import { adminStrings } from "@/lib/admin/strings";
+import { emailField, nameField } from "@/lib/account/fields";
 import {
   allowedPunct,
   blockedChar,
@@ -41,6 +42,7 @@ import {
   checkPersonName,
   checkStaff,
   checkTimeOff,
+  checkBirthday,
   collect,
   EMAIL_TEXT,
   NOTES_TEXT,
@@ -146,6 +148,7 @@ for (const input of [
   "00966512345678",
   "+966 51 234 5678",
   "051-234-5678",
+  "٠٥١٢٣٤٥٦٧٨",
 ]) {
   assert.equal(toNationalDigits(input), "512345678", `${input} should normalise`);
 }
@@ -473,6 +476,30 @@ console.log("  closures: a stored range reads back as the days the admin typed �
   assert.equal(chair(" 2 "), `There's already a chair called "2" in this branch. Please pick another name.`);
   assert.equal(chair("كرسي خاص"), undefined, "Arabic chair names are fine");
 
+  // Mash arrives in three shapes, and all three are refused wherever a real
+  // word is asked for — a run of consonants, a group drummed out, a keyboard row.
+  const gibberish = (s: string) => `Label: "${s}" doesn't look like a real word. Please check the spelling.`;
+  for (const junk of [
+    "ergtrwfrthegrwtegrg", // consonants in a row
+    "asdasdasd", "abcabcabc", // a group drummed out
+    "qwertyuiop", "Zxcvbnm", "lkjhgf", "asdf", // a run along one row
+    "ftgyhujhygtfr", "rtyuio", "dfghjk", // a walk across the keys
+  ]) {
+    assert.equal(chair(junk), gibberish(junk), `mash refused: ${junk}`);
+  }
+  // And the salon's own words still pass. A rule that cries wolf gets worked around.
+  for (const real of ["Chair 7", "Window", "Bridal Suite", "Manicure 1", "Lounge", "B3"]) {
+    assert.equal(chair(real), undefined, `a real label stays allowed: ${real}`);
+  }
+  // Sawsan walks s-a-w-s-a and Trewin holds "trew": both real, both must pass.
+  for (const name of ["Noura Al Qahtani", "Anne-Marie O'Neill", "Lulwah", "Abdulrahman", "Mishaal", "Sawsan", "Trewin", "Aswad"]) {
+    assert.equal(checkPersonName(adminStrings.en.validation, "Name", name), undefined, `a real name stays allowed: ${name}`);
+  }
+  assert.ok(
+    checkCustomer(adminStrings.en, { name: "Noura", phone: "0555123456", email: "asdasdasd@gmail.com", notes: "" }).email,
+    "mash in the local part of an address is refused too",
+  );
+
   // Closures: a year back, two years ahead, 90 days long, a real reason.
   const day = "2026-09-15";
   const closure = (from: string, to: string, reason = "Eid holiday") =>
@@ -495,5 +522,29 @@ console.log("  closures: a stored range reads back as the days the admin typed �
   assert.equal(adminStrings.en.validation.blocked("#", allowedPunct({ script: "en" })), `"#" can't be used here. Allowed: letters, numbers and - & ' . ( ) /`);
 }
 console.log("  admin forms: each failing field gets its own message, passing ones none ✓");
+
+// -- customer account API ----------------------------------------------------
+{
+  // The address from the QA report: well-formed, plainly mash.
+  assert.equal(emailField.safeParse("239032849234230@gmail.com").success, false, "digit-mash address is refused");
+  assert.equal(emailField.safeParse(" noura@example.com ").success, true);
+  assert.equal(emailField.safeParse("noura@x-.com").success, false, "stricter than zod's email()");
+  assert.equal(nameField.safeParse("Noura Al-Qahtani").success, true);
+  assert.equal(nameField.safeParse("Noura 2").success, false, "digits never land in a name");
+  assert.equal(nameField.safeParse("sdfghjk").success, false);
+
+  const v = adminStrings.en.validation;
+  const bday = (s: string) => checkBirthday(v, "Birthday", s, "2026-09-15");
+  assert.equal(bday(""), undefined, "optional");
+  assert.equal(bday("1995-03-20"), undefined);
+  assert.equal(bday("2026-09-14"), undefined, "yesterday is the latest");
+  assert.equal(bday("2026-09-15"), "Birthday must be a date in the past", "not today");
+  assert.equal(bday("2026-09-16"), "Birthday must be a date in the past");
+  assert.equal(bday("1926-09-15"), undefined, "100 years back is the limit itself");
+  assert.equal(bday("1926-09-14"), "Birthday can't be before 1926-09-15");
+  assert.equal(bday("1700-01-01"), "Birthday can't be before 1926-09-15");
+  assert.equal(bday("20256-01-01"), "Birthday is required", "a mistyped year is not a date");
+}
+console.log("  account: email, name and birthday refused by the API as on the page ✓");
 
 console.log("\nAll field boundary checks passed.");

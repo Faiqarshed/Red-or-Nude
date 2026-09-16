@@ -1,10 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookings, loyaltyTxns, packTxns, payments, reviews } from "@/lib/db/schema";
+import { bookings, customers, loyaltyTxns, packTxns, payments, reviews } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { can } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
@@ -14,7 +14,7 @@ import { inviteReview } from "@/lib/reviews/invite";
 import { assignIfToday, notifyTechnician, pickTechnician } from "@/lib/assign";
 import { getSettings } from "@/lib/settings";
 import { adminStrings } from "@/lib/admin/strings";
-import { CANCEL_REASON_MAX, checkNote, checkPersonName, NO_SHOW_NOTE_MAX } from "@/lib/admin/validate";
+import { CANCEL_REASON_MAX, checkEmail, checkNote, checkPersonName, NO_SHOW_NOTE_MAX } from "@/lib/admin/validate";
 import { validateSaudiMobile } from "@/lib/phone";
 
 export type Result = { ok: true } | { ok: false; error: string };
@@ -307,6 +307,7 @@ const walkInSchema = z.object({
   startsAt: z.string().datetime(),
   name: z.string().trim().max(120).optional(),
   phone: z.string().trim().min(6).max(20),
+  email: z.string().trim().optional(),
   notes: z.string().max(500).optional(),
 });
 
@@ -325,6 +326,19 @@ export async function createWalkIn(input: WalkInInput): Promise<Result & { code?
     return { ok: false, error: "name" };
   }
   if (validateSaudiMobile(data.phone)) return { ok: false, error: "phone" };
+  const email = data.email?.toLowerCase() || null;
+  if (email && checkEmail(adminStrings.en.validation, "Email", email)) return { ok: false, error: "email" };
+
+  // An account is found by its email, never its phone (see customers_guest_phone_unique).
+  // She is standing at the desk, so the visit and its points go to her account;
+  // with no match it is a guest booking that keeps the address on file.
+  const [account] = email
+    ? await db
+        .select({ id: customers.id })
+        .from(customers)
+        .where(and(sql`lower(${customers.email}) = ${email}`, isNotNull(customers.emailVerifiedAt)))
+        .limit(1)
+    : [];
 
   const result = await createBooking({
     branchId: data.branchId,
@@ -332,7 +346,8 @@ export async function createWalkIn(input: WalkInInput): Promise<Result & { code?
     addonIds: data.addonIds,
     removalTypeId: data.removalTypeId ?? null,
     startsAt: data.startsAt,
-    customer: { name: data.name, phone: data.phone },
+    customer: { name: data.name, phone: data.phone, email },
+    customerId: account?.id,
     source: "walk_in",
     notes: data.notes,
   });

@@ -6,8 +6,11 @@ import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import TextField from "@/components/admin/TextField";
 import {
+  checkEmail,
   checkPersonName,
   collect,
+  EMAIL_MAX,
+  EMAIL_TEXT,
   focusFirstInvalid,
   hasErrors,
   PERSON_NAME_MAX,
@@ -43,6 +46,7 @@ export default function WalkInDrawer({
   const [removalId, setRemovalId] = useState<string>("");
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [startsAt, setStartsAt] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +60,7 @@ export default function WalkInDrawer({
     setRemovalId("");
     setPhone("");
     setName("");
+    setEmail("");
     setStartsAt(null);
     setError(null);
     setTried(false);
@@ -89,6 +94,7 @@ export default function WalkInDrawer({
     return collect({
       name: checkPersonName(v, t.bookings.customer, name, { required: false }),
       phone: phoneError === "required" ? v.required(phoneLabel) : phoneError && v.mobile(phoneLabel),
+      email: checkEmail(v, t.customers.email, email),
       serviceId: !serviceId && v.required(t.bookings.service),
       startsAt: !startsAt && v.required(t.bookings.time),
     });
@@ -107,8 +113,9 @@ export default function WalkInDrawer({
         removalTypeId: removalId || null,
         startsAt,
         name: name.trim() || undefined,
-        // 05XXXXXXXX, the shape a returning customer is matched on — see lib/phone.ts.
+        // 05XXXXXXXX, the shape a returning guest is matched on — see lib/phone.ts.
         phone: toStoredPhone(phone),
+        email: email.trim() || undefined,
       });
       if (res.ok) onCreated();
       else
@@ -117,7 +124,11 @@ export default function WalkInDrawer({
             ? t.bookings.slotTaken
             : res.error === "phone"
               ? v.mobile(phoneLabel)
-              : t.common.error,
+              : res.error === "email"
+                ? v.email(t.customers.email)
+                : res.error === "blocked"
+                  ? t.bookings.walkInBlocked
+                  : t.common.error,
         );
     });
 
@@ -167,6 +178,18 @@ export default function WalkInDrawer({
             className="text-left"
           />
         </Field>
+
+        <div>
+          <TextField
+            label={`${t.customers.email} (${t.bookings.optional})`}
+            {...EMAIL_TEXT}
+            max={EMAIL_MAX}
+            error={errors.email}
+            value={email}
+            onChange={setEmail}
+          />
+          <p className="mt-1 text-start text-xs text-ink/45">{t.bookings.walkInEmailHint}</p>
+        </div>
 
         <Field label={t.bookings.service} error={errors.serviceId}>
           <select

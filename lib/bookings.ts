@@ -20,6 +20,7 @@ import {
   branches,
   customers,
   designs,
+  payments,
   removalTypes,
   services,
   staff,
@@ -220,6 +221,8 @@ export type CreateBookingInput = {
   source: "web" | "walk_in" | "phone";
   notes?: string | null;
   technicianId?: string | null;
+  /** The account to book onto, resolved by the caller. See CreateBookingsInput. */
+  customerId?: string | null;
 };
 
 export type CreateBookingResult =
@@ -636,6 +639,52 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
 }
 
 /**
+ * Give back an unpaid web hold its own customer walked away from.
+ *
+ * She went back from checkout to change the booking. Left alone, the hold keeps
+ * her own chair until the window runs out, so the calendar shows the very time
+ * she had as taken and a second hold for it is refused.
+ *
+ * A code is four characters — guessable — so the email the hold was made under
+ * has to match as well. Refused while a payment for the party is in flight: that
+ * charge may still land.
+ *
+ * Cancelled as `payment-timeout`, what the sweep writes: it is the same unpaid
+ * hold, let go early, so a pack credit or points spent on it come back under the
+ * rules that already exist for that (lib/packs.ts, lib/rewards.ts).
+ */
+export async function releaseWebHold(code: string, email: string): Promise<boolean> {
+  const [anchor] = await db
+    .select({ id: bookings.id, groupId: bookings.groupId })
+    .from(bookings)
+    .innerJoin(customers, eq(customers.id, bookings.customerId))
+    .where(
+      and(
+        eq(bookings.code, code),
+        eq(bookings.status, "pending"),
+        eq(bookings.source, "web"),
+        sql`lower(${customers.email}) = ${email.trim().toLowerCase()}`,
+      ),
+    )
+    .limit(1);
+  if (!anchor) return false;
+
+  const released = await db
+    .update(bookings)
+    .set({ status: "cancelled", cancelReason: "payment-timeout", updatedAt: new Date() })
+    .where(
+      and(
+        anchor.groupId ? eq(bookings.groupId, anchor.groupId) : eq(bookings.id, anchor.id),
+        eq(bookings.status, "pending"),
+        eq(bookings.source, "web"),
+        sql`not exists (select 1 from ${payments} p where p.booking_id = ${bookings.id} and p.status = 'pending')`,
+      ),
+    )
+    .returning({ id: bookings.id });
+  return released.length > 0;
+}
+
+/**
  * Release chairs whose customer never checked in.
  *
  * A booking is paid for and holds a chair for its whole duration. If nobody
@@ -972,7 +1021,11 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
               lang: input.customer.lang ?? "ar",
             })
             .onConflictDoUpdate({
+              // Guest rows only (customers_guest_phone_unique): an account
+              // holder's number makes a guest row beside the account, never a
+              // booking on it, and never a change to its sign-in email.
               target: customers.phone,
+              targetWhere: sql`${customers.emailVerifiedAt} is null`,
               // Don't blank an existing name or email with an empty one from a
               // rushed form — but do record a newly supplied one: it is how a
               // returning customer gets an address on file, and it keeps the
@@ -1145,6 +1198,7 @@ export async function createBooking(input: CreateBookingInput): Promise<CreateBo
     branchId: input.branchId,
     startsAt: input.startsAt,
     customer: input.customer,
+    customerId: input.customerId,
     source: input.source,
     notes: input.notes,
     technicianId: input.technicianId,

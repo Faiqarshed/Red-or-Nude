@@ -1,22 +1,33 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import { useI18n } from "@/lib/i18n";
 import ScheduleModal from "@/components/booking/ScheduleModal";
+import RedoDialog, { branchRedo, guestRedo, restoredLine, type Redo } from "@/components/booking/RedoDialog";
 import BranchPicker from "@/components/booking/BranchPicker";
 import Summary from "@/components/booking/Summary";
 import GuestPicker, {
   Card,
   emptyGuest,
+  guestFromMember,
   guestTotals,
   toMemberSelection,
   type GuestState,
 } from "@/components/booking/GuestPicker";
-import { saveBooking, formatDateLabel, formatTime, weekdayLabel } from "@/lib/booking";
+import {
+  heldTimeProblem,
+  loadBooking,
+  releaseHold,
+  saveBooking,
+  formatDateLabel,
+  formatTime,
+  weekdayLabel,
+} from "@/lib/booking";
+import { localTime, riyadhDateKey } from "@/lib/time";
 import { pick } from "@/lib/localized";
 import type { RefillOffer } from "@/lib/bookings";
 import type { PublicCatalog, PublicBranch } from "@/lib/catalog";
@@ -98,6 +109,12 @@ export default function BookingView({
   const [date, setDate] = useState<string | null>(null);
   const [time, setTime] = useState<string | null>(null);
   const [startsAt, setStartsAt] = useState<string | null>(null);
+  /**
+   * How long an appointment the held time was checked for. Not the current
+   * length: going 90 → 60 → 90 minutes is back inside what was checked, and
+   * must not ask her to pick again.
+   */
+  const [checkedMin, setCheckedMin] = useState(0);
   const [agree, setAgree] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   /**
@@ -110,9 +127,59 @@ export default function BookingView({
    * beside the total it changes.
    */
   const [declinedCredit, setDeclinedCredit] = useState(false);
+  /** A change that would cost her the time she picked, or a restored time that could not be kept. */
+  const [redo, setRedo] = useState<Redo | null>(null);
+  /** The time on screen now, for the restore check that answers after she may have moved on. */
+  const shownStartsAt = useRef(startsAt);
+  shownStartsAt.current = startsAt;
 
-  // Changing anything that alters how long the chair is needed invalidates a
-  // slot that was picked for the old duration.
+  // Back from checkout: reopen on what she saved there instead of a blank page.
+  // Only a solo selection made on this page, for this same refill or none — a
+  // group or a station-QR booking is not this screen's to resume.
+  useEffect(() => {
+    const saved = loadBooking();
+    const m = saved?.members[0];
+    const restored = m && guestFromMember(catalog, m, lang);
+    const resumable =
+      saved && restored && restored.service !== null && saved.members.length === 1 &&
+      !saved.stationToken && (saved.refillOf ?? null) === (offer?.code ?? null);
+
+    if (resumable) {
+      setGuest(restored);
+      setDeclinedCredit(!m.customerPackId);
+      setAgree(true);
+      if (saved.startsAt && saved.branchId && branches.some((br) => br.id === saved.branchId)) {
+        setBranchId(saved.branchId);
+        setDate(riyadhDateKey(new Date(saved.startsAt)));
+        setTime(localTime(saved.startsAt));
+        setStartsAt(saved.startsAt);
+        setCheckedMin(m.durationMin ?? 0);
+        // Now, not on the next render: the check below can finish before that
+        // render, and would read the empty page as her having changed the time.
+        shownStartsAt.current = saved.startsAt;
+      }
+    }
+
+    void (async () => {
+      // Her own unpaid hold first, or it is what makes her time look taken.
+      await releaseHold();
+      if (!resumable || !saved.startsAt || !saved.branchId || shownStartsAt.current !== saved.startsAt) return;
+      const length = guestTotals(catalog, restored).durationMin;
+      const problem = await heldTimeProblem(saved.branchId, saved.startsAt, length, m.durationMin);
+      // She may have changed it herself while this was asking.
+      if (!problem || shownStartsAt.current !== saved.startsAt) return;
+      clearSchedule();
+      setCheckedMin(length);
+      setRedo({
+        title: b.redoTitle.restored,
+        body: `${restoredLine(b, problem, formatTime(localTime(saved.startsAt), c.date))} ${b.redoNext}`,
+        pickTime: () => setScheduling(true),
+      });
+    })();
+    // Once, on arrival. Later renders are her own edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const clearSchedule = () => {
     setDate(null);
     setTime(null);
@@ -123,6 +190,36 @@ export default function BookingView({
     () => guestTotals(catalog, guest),
     [catalog, guest],
   );
+
+  const heldTime = time ? formatTime(time, c.date) : "";
+
+  /** Her picker changed. Asked first, and told why, when it costs her the time. */
+  const changeGuest = (next: GuestState) => {
+    const why = guestRedo(catalog, guest, next, checkedMin, heldTime, b, lang);
+    const apply = () => {
+      setGuest(next);
+      if (why) clearSchedule();
+      // A different service is a different credit, so the question is asked
+      // again rather than staying declined from the last one.
+      setDeclinedCredit(false);
+    };
+    if (!why || !startsAt) return apply();
+    setRedo({ ...why, apply, pickTime: () => setScheduling(true) });
+  };
+
+  const changeBranch = (id: string) => {
+    if (id === branchId) return;
+    const apply = () => {
+      setBranchId(id);
+      clearSchedule();
+    };
+    if (!startsAt) return apply();
+    setRedo({
+      ...branchRedo(b, heldTime, branches.find((br) => br.id === id)?.name ?? ""),
+      apply,
+      pickTime: () => setScheduling(true),
+    });
+  };
 
   const service = guest.service !== null ? catalog.services[guest.service] : null;
   // A credit is for one service. Offered only once she has picked the service it
@@ -150,14 +247,38 @@ export default function BookingView({
 
   const ready = guest.service !== null && branchId !== null && startsAt !== null && agree;
 
+  /**
+   * Saved as she goes, not only on proceed: a refresh then reopens on what is on
+   * screen, not on whatever she last took to checkout. Checkout refuses a
+   * selection without a service or a time, so an unfinished one is safe to keep.
+   */
+  const firstRender = useRef(true);
+  useEffect(() => {
+    // The arrival render holds the page's defaults, not her booking — and in
+    // StrictMode would overwrite it before the restore above has read it.
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    if (guest.service !== null) saveSelection();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guest, branchId, startsAt, checkedMin, declinedCredit, lang]);
+
   const proceed = () => {
     if (!ready || !branchId || !startsAt) return;
+    saveSelection();
+    router.push("/booking/payment");
+  };
+
+  function saveSelection() {
     saveBooking({
       branchId,
       startsAt,
       members: [
         {
           ...member,
+          // The length her time was picked for, which is what a return checks.
+          durationMin: checkedMin,
           price,
           customerPackId: spending?.customerPackId ?? null,
           // What the credit took off, kept beside the reduced price so the
@@ -174,8 +295,7 @@ export default function BookingView({
       total: price,
       refillOf: offer?.code ?? null,
     });
-    router.push("/booking/payment");
-  };
+  }
 
   return (
     <main className="min-h-screen bg-cream">
@@ -186,10 +306,7 @@ export default function BookingView({
           <BranchPicker
             branches={branches}
             value={branchId}
-            onChange={(id) => {
-              setBranchId(id);
-              clearSchedule();
-            }}
+            onChange={changeBranch}
           />
 
           {offer ? (
@@ -258,13 +375,7 @@ export default function BookingView({
             <GuestPicker
               catalog={catalog}
               value={guest}
-              onChange={(next) => {
-                setGuest(next);
-                clearSchedule();
-                // A different service is a different credit, so the question is
-                // asked again rather than staying declined from the last one.
-                setDeclinedCredit(false);
-              }}
+              onChange={changeGuest}
             />
           )}
 
@@ -356,11 +467,14 @@ export default function BookingView({
             setDate(d);
             setTime(t);
             setStartsAt(iso);
+            setCheckedMin(durationMin);
             setScheduling(false);
           }}
           onClose={() => setScheduling(false)}
         />
       )}
+
+      {redo && <RedoDialog redo={redo} b={b} onClose={() => setRedo(null)} />}
     </main>
   );
 }

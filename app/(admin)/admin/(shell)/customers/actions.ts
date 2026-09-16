@@ -56,11 +56,11 @@ export async function updateCustomer(input: z.input<typeof updateSchema>): Promi
   try {
     await db.update(customers).set(values).where(eq(customers.id, d.id));
   } catch (err) {
-    // A number that belongs to someone else: customers_phone_unique refuses it,
-    // race or no race. Drizzle wraps the driver's error in `cause`. Anything
-    // else is a real failure and stays one.
+    // A guest moved onto another guest's number: customers_guest_phone_unique
+    // refuses it, race or no race (accounts may share one). Drizzle wraps the
+    // driver's error in `cause`. Anything else is a real failure and stays one.
     const pg = ((err as { cause?: unknown }).cause ?? err) as { constraint_name?: string };
-    if (pg.constraint_name === "customers_phone_unique") return { ok: false, error: "phone-taken" };
+    if (pg.constraint_name === "customers_guest_phone_unique") return { ok: false, error: "phone-taken" };
     throw err;
   }
 

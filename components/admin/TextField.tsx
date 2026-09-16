@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Field, Input, invalidRing } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
-import { blockedChar, blockedMessage, numeric, typedText, type TextOpts } from "@/lib/admin/validate";
+import { numeric, typedInput, type TextOpts } from "@/lib/admin/validate";
 
 /**
  * Arabic and English boxes side by side, so a missing translation is visible
@@ -113,11 +113,9 @@ export default function TextField({
     value,
     onBlur: () => setNote(null),
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      const raw = e.target.value;
-      const bad = blockedChar(raw, opts);
-      const clean = typedText(raw, opts);
-      setNote(bad ? blockedMessage(t.validation, bad, opts) : clean.length > max ? t.validation.cut(max) : null);
-      onChange(clean.slice(0, max));
+      const typed = typedInput(t.validation, e.target.value, opts, max);
+      setNote(typed.note);
+      onChange(typed.value);
     },
   } as const;
 

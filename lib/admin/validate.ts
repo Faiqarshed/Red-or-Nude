@@ -8,7 +8,8 @@
 // Usage: build `errors` from `rules(t.validation)` on every render once a save
 // has been tried, so a message disappears the moment the field is fixed.
 
-import { validateSaudiMobile } from "@/lib/phone";
+import { latinDigits, validateSaudiMobile } from "@/lib/phone";
+import type { ValidationMessages } from "@/lib/validation-messages";
 import type { AdminStrings } from "./strings";
 
 export type Errors = Record<string, string>;
@@ -44,7 +45,7 @@ export function fakeEmailPart(local: string, domain: string): string | undefined
   const looksMashed = (part: string) =>
     // A run of digits longer than any date or year pair.
     /\d{10,}/.test(part) ||
-    MASH.test(part) ||
+    mashed(part) ||
     part.split(/[._+-]/).some((seg) => {
       // Letters and digits swapping back and forth: "a1b2c3", or a few swaps
       // dragging a long tail of digits, "uygt76t879708770979678687".
@@ -56,17 +57,69 @@ export function fakeEmailPart(local: string, domain: string): string | undefined
   if (looksMashed(withoutMobile)) return local;
   // Every domain label but the ending: "sdfghj" in noura@sdfghj.com.
   const labels = domain.split(".").slice(0, -1);
-  if (labels.some((l) => MASH.test(l))) return domain;
+  if (labels.some(mashed)) return domain;
 }
 
 /** Five Latin consonants in a row: "sdfghjk". No name or word does that. */
 const MASH = /[bcdfghjklmnpqrstvwxz]{5,}/i;
+/** One short group hammered out three times over: "asdasdasd", "abcabcabc". */
+const DRUMMED = /([a-z]{2,4})\1{2,}/i;
+const ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"].flatMap((row) => [
+  row,
+  [...row].reverse().join(""),
+]);
+/**
+ * The word is nothing but a run along one row: "asdf", "qwer", "lkjh".
+ *
+ * The whole word, not a piece of it: "trew" sits inside the surname Trewin, and
+ * a rule that refuses a real name is a rule the salon learns to work around.
+ * Mash longer than this is caught by walked() below anyway.
+ */
+const isRowRun = (w: string) => w.length >= 4 && ROWS.some((row) => row.includes(w));
+
+/** Where each key sits, rows staggered half a key like a real keyboard. */
+const KEYS = new Map<string, [number, number]>(
+  ["qwertyuiop", "asdfghjkl", "zxcvbnm"].flatMap((row, r) =>
+    [...row].map((k): [string, [number, number]] => [k, [r, i(row, k) + r * 0.5]]),
+  ),
+);
+function i(row: string, k: string) {
+  return row.indexOf(k);
+}
+const touching = (a: string, b: string) => {
+  const [p, q] = [KEYS.get(a), KEYS.get(b)];
+  return !!p && !!q && Math.abs(p[0] - q[0]) <= 1 && Math.abs(p[1] - q[1]) <= 1;
+};
+
+/**
+ * Six keys walked across the keyboard, each next to the last: "ftgyhujh". Six,
+ * not five, because five catches real names — "Sawsan" walks s-a-w-s-a.
+ */
+function walked(w: string) {
+  const s = w.toLowerCase();
+  let run = 1;
+  for (let n = 1; n < s.length; n++) {
+    run = touching(s[n - 1], s[n]) ? run + 1 : 1;
+    if (run >= 6) return true;
+  }
+  return false;
+}
+
+/**
+ * Latin keyboard mash, by the shapes it actually arrives in. Latin-only on
+ * purpose, so it never fires on an Arabic word.
+ *
+ * ponytail: heuristics, not a dictionary — "asdf" is four keys and caught,
+ * "qwe" is three and passes. No regex tells a made-up word from a brand name.
+ */
+const mashed = (w: string) =>
+  MASH.test(w) || DRUMMED.test(w) || walked(w) || isRowRun(w.toLowerCase());
 const ARABIC = /[؀-ۿ]/;
 const LETTER = /\p{L}/u;
 
 type Script = "ar" | "en" | "any";
 
-export function rules(v: AdminStrings["validation"]) {
+export function rules(v: ValidationMessages) {
   return {
     /**
      * `script: "ar"` asks for Arabic letters; `"en"` refuses them; `"any"`
@@ -83,14 +136,11 @@ export function rules(v: AdminStrings["validation"]) {
       if (o.script && !LETTER.test(s)) return v.letters(label);
       if (o.script === "ar" && !ARABIC.test(s)) return v.arabic(label);
       if (o.script === "en" && ARABIC.test(s)) return v.notArabic(label);
-      // ponytail: keyboard-mash heuristics only — "asdf" still passes; no regex
-      // can tell a made-up word from a brand name.
       // The whole word is quoted, so she can find it in a long name.
-      const word = (re: RegExp) => s.split(/\s+/).find((w) => re.test(w));
-      const repeated = o.script && word(/(\p{L})\1\1/u);
+      const word = (bad: (w: string) => boolean) => s.split(/\s+/).find(bad);
+      const repeated = o.script && word((w) => /(\p{L})\1\1/u.test(w));
       if (repeated) return v.repeated(label, repeated);
-      // Latin consonants only, so it never fires on Arabic words.
-      const mash = o.script && o.script !== "ar" && word(MASH);
+      const mash = o.script && o.script !== "ar" && word(mashed);
       if (mash) return v.gibberish(label, mash);
       if (o.min && s.length < o.min) return v.tooShort(label, o.min);
       if (o.max && s.length > o.max) return v.tooLong(label, o.max);
@@ -143,9 +193,6 @@ export function rules(v: AdminStrings["validation"]) {
     },
   };
 }
-
-/** Arabic-Indic ٠-٩ as 0-9, so a number typed on an Arabic keyboard still reads. */
-const latinDigits = (raw: string) => raw.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x660));
 
 /**
  * Filter a number box as it is typed: digits only (Arabic-Indic ٠-٩ become
@@ -228,14 +275,27 @@ export const blockedChar = (raw: string, o: TextOpts): string | undefined =>
     : raw.match(disallowed(o, "u"))?.[0];
 
 /** Why a box refused `ch`, in her words. */
-export function blockedMessage(v: AdminStrings["validation"], ch: string, o: TextOpts): string {
+export function blockedMessage(v: ValidationMessages, ch: string, o: TextOpts): string {
   if (o.email) return ch === "@" ? v.emailOneAt : v.blockedEmail(ch, allowedPunct(o));
   if (ARABIC.test(ch)) return v.blockedArabic;
   return (o.person ? v.blockedName : v.blocked)(ch, allowedPunct(o));
 }
 
+/**
+ * What a filtered box keeps of a keystroke or paste, and the note saying what
+ * was dropped or cut, so a lost character never looks like a broken keyboard.
+ */
+export function typedInput(v: ValidationMessages, raw: string, o: TextOpts, max: number) {
+  const bad = blockedChar(raw, o);
+  const clean = typedText(raw, o);
+  return {
+    value: clean.slice(0, max),
+    note: bad ? blockedMessage(v, bad, o) : clean.length > max ? v.cut(max) : null,
+  };
+}
+
 /** The blocked-character message for `value`, if any character is. */
-const blockedIn = (v: AdminStrings["validation"], value: string, o: TextOpts) => {
+const blockedIn = (v: ValidationMessages, value: string, o: TextOpts) => {
   const bad = blockedChar(value, o);
   return bad ? blockedMessage(v, bad, o) : undefined;
 };
@@ -277,7 +337,7 @@ export const typedPhone = (raw: string) => {
  * Letters required, no keyboard mash, no stray symbols, line breaks allowed.
  */
 export function checkNote(
-  v: AdminStrings["validation"],
+  v: ValidationMessages,
   label: string,
   value: string,
   o: { required?: boolean; max: number },
@@ -290,7 +350,7 @@ export function checkNote(
 
 /** A person's name: letters, spaces and - ' . only, no mash. Shared by every form that takes one. */
 export function checkPersonName(
-  v: AdminStrings["validation"],
+  v: ValidationMessages,
   label: string,
   value: string,
   o: { required?: boolean } = {},
@@ -299,6 +359,43 @@ export function checkPersonName(
     blockedIn(v, value, PERSON_TEXT) ??
     rules(v).text(label, value, { required: o.required ?? true, min: 2, max: PERSON_NAME_MAX, script: "any" })
   );
+}
+
+/** An email address: allowed characters, a real shape, not keyboard mash. */
+export function checkEmail(
+  v: ValidationMessages,
+  label: string,
+  value: string,
+  o: { required?: boolean } = {},
+): string | undefined {
+  return blockedIn(v, value, EMAIL_TEXT) ?? rules(v).email(label, value, { required: o.required, max: EMAIL_MAX });
+}
+
+/**
+ * The range a birthday may fall in, as YYYY-MM-DD: at most 100 years back, and
+ * yesterday at the latest, since nobody booking a salon was born today.
+ */
+export const birthdayRange = (today: string) => ({
+  earliest: shiftYears(today, -100),
+  latest: new Date(Date.parse(`${today}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10),
+});
+
+/**
+ * An optional YYYY-MM-DD birthday inside `birthdayRange` of `today` (the
+ * Riyadh date key). `fmt` shows the limit to her.
+ */
+export function checkBirthday(
+  v: ValidationMessages,
+  label: string,
+  value: string,
+  today: string,
+  fmt: (key: string) => string = (k) => k,
+): string | undefined {
+  if (!value) return;
+  const { earliest, latest } = birthdayRange(today);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value))) return v.required(label);
+  if (value > latest) return v.future(label);
+  if (value < earliest) return v.notBefore(label, fmt(earliest));
 }
 
 export const CANCEL_REASON_MAX = 200;
@@ -315,7 +412,7 @@ export function checkCustomer(
   return collect({
     name: checkPersonName(v, l.name, c.name),
     phone: phone === "required" ? v.required(l.phone) : phone && v.mobile(l.phone),
-    email: blockedIn(v, c.email, EMAIL_TEXT) ?? rules(v).email(l.email, c.email, { max: EMAIL_MAX }),
+    email: checkEmail(v, l.email, c.email),
     notes: checkNote(v, l.notes, c.notes, { required: false, max: NOTES_MAX }),
   });
 }
@@ -338,7 +435,7 @@ export function checkStaff(
   return collect({
     name: checkPersonName(v, l.name, s.name),
     // Her sign-in, so never optional.
-    email: blockedIn(v, s.email, EMAIL_TEXT) ?? rules(v).email(l.email, s.email, { required: true, max: EMAIL_MAX }),
+    email: checkEmail(v, l.email, s.email, { required: true }),
     phone: phone && v.mobile(l.phone),
     // Blank keeps the current password on an edit; a new account needs one.
     password: !s.password

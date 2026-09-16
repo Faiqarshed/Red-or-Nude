@@ -13,6 +13,7 @@
 import type { Content } from "./dictionary";
 import type { bookingStatus } from "@/lib/db/schema";
 import type { Localized } from "@/lib/localized";
+import { riyadhDateKey } from "@/lib/time";
 
 type DateStrings = Content["date"];
 
@@ -88,6 +89,12 @@ export type MemberSelection = {
 
   /** SAR, before any group discount — shown as this guest's own line. */
   price: number;
+  /**
+   * How long her chair is needed, as it was when her time was picked. Kept so a
+   * return from checkout can tell the salon changed a length (or retired an
+   * add-on) since, and ask her to pick again rather than keep a stale time.
+   */
+  durationMin?: number;
 
   /**
    * Where and when this guest sits, when it is not where and when the party
@@ -202,6 +209,91 @@ export function loadBooking(): BookingSelection | null {
 export function clearBooking() {
   if (typeof window === "undefined") return;
   sessionStorage.removeItem(KEY);
+  sessionStorage.removeItem(CHECKOUT_KEY);
+}
+
+/**
+ * What she chose on the payment page itself, so going back to change a service
+ * and coming forward again does not lose it. Kept apart from the selection:
+ * the booking pages rewrite that whole on every proceed, and know nothing of
+ * these.
+ */
+export type CheckoutChoices = {
+  /** `"<member index>:<add-on id>"`, as the payment page keys them. */
+  treats: string[];
+  promo: string | null;
+  redeemPoints: number | null;
+  /** The unpaid hold a declined card left behind, and whose it is. */
+  held: { code: string; email: string } | null;
+};
+
+const CHECKOUT_KEY = "ron-checkout";
+
+export function saveCheckout(choices: CheckoutChoices) {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(CHECKOUT_KEY, JSON.stringify(choices));
+}
+
+export function loadCheckout(): CheckoutChoices | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return JSON.parse(sessionStorage.getItem(CHECKOUT_KEY) ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Let go of her own unpaid hold, if checkout left one. Called wherever a new
+ * one might be made — the booking pages and checkout itself — so her old hold
+ * never shows her own time as taken. Resolves once the server has answered.
+ */
+export async function releaseHold(): Promise<void> {
+  const saved = loadCheckout();
+  if (!saved?.held) return;
+  saveCheckout({ ...saved, held: null });
+  await fetch("/api/bookings/release", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(saved.held),
+  }).catch(() => {
+    /* the hold expires on its own; this only brings that forward */
+  });
+}
+
+/** Why a time restored from checkout can't be kept, or null when it still can. */
+export type HeldTimeProblem = "passed" | "changed" | "taken";
+
+/**
+ * Re-check a restored time before showing it as hers.
+ *
+ * `changed`: the appointment is not the length the time was picked for — the
+ * salon edited a duration or retired an add-on while she was away. `taken`: the
+ * calendar no longer offers it. Call after releaseHold, or her own hold is what
+ * makes it look taken.
+ *
+ * ponytail: checks each guest alone, not against her own party's other picks;
+ * those were valid together when chosen, and the hold re-checks all of it.
+ */
+export async function heldTimeProblem(
+  branchId: string,
+  startsAt: string,
+  durationMin: number,
+  checkedMin: number | undefined,
+): Promise<HeldTimeProblem | null> {
+  if (Date.parse(startsAt) <= Date.now()) return "passed";
+  if (durationMin !== checkedMin) return "changed";
+  const day = await fetch(
+    `/api/availability?branchId=${branchId}&date=${riyadhDateKey(new Date(startsAt))}&duration=${durationMin}`,
+  )
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  // Unanswered is not refused: the time stays, and the hold checks it anyway.
+  if (!day) return null;
+  const slot = (day.slots as HoldableSlot[] | undefined)?.find(
+    (s) => Date.parse(s.startsAt) === Date.parse(startsAt),
+  );
+  return slot?.available ? null : "taken";
 }
 
 // ---- display helpers --------------------------------------------------------

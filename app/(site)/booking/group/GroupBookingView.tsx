@@ -21,7 +21,7 @@
 // above them: every guest, her state and her price, on one row, always visible,
 // with the open one marked. The accordion is the workspace; the strip is the map.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Riyal } from "@/components/icons";
 import { useRouter } from "next/navigation";
@@ -31,20 +31,36 @@ import { useI18n } from "@/lib/i18n";
 import ScheduleModal from "@/components/booking/ScheduleModal";
 import BranchPicker from "@/components/booking/BranchPicker";
 import Summary from "@/components/booking/Summary";
+import RedoDialog, { branchRedo, guestRedo, restoredLine, type Redo } from "@/components/booking/RedoDialog";
 import GuestPicker, {
   emptyGuest,
+  guestFromMember,
   guestTotals,
   toMemberSelection,
   type GuestState,
 } from "@/components/booking/GuestPicker";
-import { saveBooking, formatDateLabel, formatTime, weekdayLabel } from "@/lib/booking";
+import {
+  heldTimeProblem,
+  loadBooking,
+  releaseHold,
+  saveBooking,
+  formatDateLabel,
+  formatTime,
+  weekdayLabel,
+} from "@/lib/booking";
+import { localTime, riyadhDateKey } from "@/lib/time";
 import type { PublicCatalog, PublicBranch } from "@/lib/catalog";
 
 /** The cap the client asked for. app/api/bookings/route.ts holds the same line. */
 const MAX_GUESTS = 4;
 
-/** Where and when one guest sits. The day is the party's, not hers. */
-type Slot = { branchId: string | null; time: string | null; startsAt: string | null };
+/**
+ * Where and when one guest sits. The day is the party's, not hers.
+ *
+ * `checkedMin` is how long an appointment her time was picked for: a change
+ * that lands back on that length keeps it (see guestRedo).
+ */
+type Slot = { branchId: string | null; time: string | null; startsAt: string | null; checkedMin: number };
 
 export default function GroupBookingView({
   catalog,
@@ -62,7 +78,7 @@ export default function GroupBookingView({
   const b = c.booking;
   const branches = lang === "ar" ? branchesAr : branchesEn;
 
-  const emptySlot = (): Slot => ({ branchId: branches[0]?.id ?? null, time: null, startsAt: null });
+  const emptySlot = (): Slot => ({ branchId: branches[0]?.id ?? null, time: null, startsAt: null, checkedMin: 0 });
 
   // Two to start with, because that is what this page is reached for; the third
   // and fourth are added on demand.
@@ -76,15 +92,109 @@ export default function GroupBookingView({
   /** Whose calendar is open, or null. */
   const [scheduling, setScheduling] = useState<number | null>(null);
 
+  /** A change that would cost a guest her time, or restored times that could not be kept. */
+  const [redo, setRedo] = useState<Redo | null>(null);
+  /** The slots on screen now, for the restore check that answers after she may have moved on. */
+  const shownSlots = useRef(slots);
+  shownSlots.current = slots;
+
+  // Back from checkout: reopen on the party she saved there instead of two blank
+  // guests. Only a group selection; a solo or station-QR one is not this page's.
+  useEffect(() => {
+    // Her own unpaid hold first, or it is what makes the party's times look taken.
+    const letGo = releaseHold();
+    const saved = loadBooking();
+    const party =
+      saved && saved.members.length >= 2 && saved.members.length <= MAX_GUESTS && !saved.stationToken && !saved.refillOf
+        ? saved.members.map((m) => ({ m, guest: guestFromMember(catalog, m, lang) }))
+        : null;
+    if (!saved || !party) return;
+
+    const restoredSlots = party.map(({ m }): Slot => {
+      const branchId = m.branchId ?? saved.branchId;
+      const startsAt = m.startsAt ?? saved.startsAt;
+      return branchId && startsAt && branches.some((br) => br.id === branchId)
+        ? { branchId, startsAt, time: localTime(startsAt), checkedMin: m.durationMin ?? 0 }
+        : emptySlot();
+    });
+    setGuests(party.map((p) => p.guest));
+    setSlots(restoredSlots);
+    // Now, not on the next render: the check below can finish before that
+    // render, and would read the blank guests as her having changed their times.
+    shownSlots.current = restoredSlots;
+    // The party's day, from whichever guest has a time: an unfinished party saves none of its own.
+    const timed = restoredSlots.find((s) => s.startsAt)?.startsAt;
+    if (timed) setDay(riyadhDateKey(new Date(timed)));
+    setAgree(true);
+
+    void (async () => {
+      await letGo;
+      const problems = await Promise.all(
+        restoredSlots.map((s, i) =>
+          s.branchId && s.startsAt
+            ? heldTimeProblem(s.branchId, s.startsAt, guestTotals(catalog, party[i].guest).durationMin, s.checkedMin)
+            : null,
+        ),
+      );
+      // Only guests whose time is still the restored one; she may have changed some already.
+      const lost = problems.flatMap((p, i) =>
+        p && shownSlots.current[i]?.startsAt === restoredSlots[i].startsAt ? [{ p, i }] : [],
+      );
+      if (lost.length === 0) return;
+
+      const cleared = shownSlots.current.map((s, j) => (lost.some((l) => l.i === j) ? clearTime(s) : s));
+      setSlots(cleared);
+      // Nobody left holding an hour on that day, so nothing holds the day either.
+      if (!cleared.some((s) => s.startsAt)) setDay(null);
+      setRedo({
+        title: b.redoTitle.restored,
+        body: `${lost
+          .map(
+            ({ p, i }) =>
+              `${b.guestN.replace("{n}", String(i + 1))}: ${restoredLine(b, p, formatTime(restoredSlots[i].time!, c.date))}`,
+          )
+          .join("\n")}\n${b.redoNext}`,
+        pickTime: () => {
+          setOpenGuest(lost[0].i);
+          setScheduling(lost[0].i);
+        },
+      });
+    })();
+    // Once, on arrival. Later renders are her own edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /** Her chosen hour no longer fits, or no longer exists. */
   const clearTime = (s: Slot): Slot => ({ ...s, time: null, startsAt: null });
 
+  /**
+   * Her picks changed. Only her own hour is at stake (nobody else's is touched,
+   * which is the point of each guest holding her own), and she is asked first,
+   * and told why, when the change costs it.
+   */
   const setGuest = (i: number, next: GuestState) => {
-    setGuests((prev) => prev.map((g, j) => (j === i ? next : g)));
-    // Anything she changes can change how long her chair is needed, so her own
-    // hour is no longer known to fit. Nobody else's is touched — that is the
-    // point of each guest holding her own.
-    setSlots((prev) => prev.map((s, j) => (j === i ? clearTime(s) : s)));
+    const slot = slots[i];
+    const heldTime = slot.time ? formatTime(slot.time, c.date) : "";
+    const why = guestRedo(catalog, guests[i], next, slot.checkedMin, heldTime, b, lang);
+    const apply = () => {
+      setGuests((prev) => prev.map((g, j) => (j === i ? next : g)));
+      if (why) setSlots((prev) => prev.map((s, j) => (j === i ? clearTime(s) : s)));
+    };
+    if (!why || !slot.startsAt) return apply();
+    setRedo({ ...why, apply, pickTime: () => setScheduling(i) });
+  };
+
+  /** A different salon has different chairs and hours, so her hour never carries. */
+  const setBranch = (i: number, id: string) => {
+    const slot = slots[i];
+    if (id === slot.branchId) return;
+    const apply = () => setSlot(i, { branchId: id, time: null, startsAt: null });
+    if (!slot.startsAt) return apply();
+    setRedo({
+      ...branchRedo(b, slot.time ? formatTime(slot.time, c.date) : "", branchName(id) ?? ""),
+      apply,
+      pickTime: () => setScheduling(i),
+    });
   };
 
   /**
@@ -175,27 +285,48 @@ export default function GroupBookingView({
 
   const ready = guests.every((_, i) => done(i)) && agree;
 
+  /**
+   * Saved as they go, not only on proceed: a refresh then reopens on what is on
+   * screen, not on whatever was last taken to checkout. The party's time is
+   * only filled in once every guest has one, so checkout refuses an unfinished
+   * party rather than posting it.
+   */
+  const firstRender = useRef(true);
+  useEffect(() => {
+    // The arrival render holds two blank guests, not her party, and in
+    // StrictMode would overwrite it before the restore above has read it.
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    if (guests.some((g) => g.service !== null)) saveSelection();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [members]);
+
   const proceed = () => {
     if (!ready || !day) return;
+    saveSelection();
+    router.push("/booking/payment");
+  };
+
+  function saveSelection() {
     // Guest 1's branch and hour stand as the party's, and every guest carries her
     // own alongside. A group that all picked the same thing therefore posts
     // exactly the shape it always did.
     const first = slots[0];
-    if (!first.branchId || !first.startsAt) return;
-
     saveBooking({
       branchId: first.branchId,
-      startsAt: first.startsAt,
-      members,
+      startsAt: slots.every((s) => s.startsAt) ? first.startsAt : null,
+      // The length each time was picked for, which is what a return checks.
+      members: members.map((m, i) => ({ ...m, durationMin: slots[i].checkedMin })),
       branch: branchName(first.branchId),
-      dateLabel: formatDateLabel(day, lang),
+      dateLabel: day ? formatDateLabel(day, lang) : null,
       timeLabel: first.time ? formatTime(first.time, c.date) : null,
       checkoutAddons: catalog.checkoutAddons,
       grossTotal,
       total,
     });
-    router.push("/booking/payment");
-  };
+  }
 
   return (
     <main className="min-h-screen bg-cream">
@@ -371,11 +502,7 @@ export default function GroupBookingView({
                       <BranchPicker
                         branches={branches}
                         value={slots[i].branchId}
-                        onChange={(id) =>
-                          // A different salon has different chairs and different
-                          // hours, so whatever hour she picked no longer holds.
-                          setSlot(i, { branchId: id, time: null, startsAt: null })
-                        }
+                        onChange={(id) => setBranch(i, id)}
                       />
                     </div>
 
@@ -448,12 +575,14 @@ export default function GroupBookingView({
           initialTime={slots[scheduling]!.time}
           onConfirm={(d, t, iso) => {
             setDay(d);
-            setSlot(scheduling, { time: t, startsAt: iso });
+            setSlot(scheduling, { time: t, startsAt: iso, checkedMin: totals[scheduling].durationMin });
             setScheduling(null);
           }}
           onClose={() => setScheduling(null)}
         />
       )}
+
+      {redo && <RedoDialog redo={redo} b={b} onClose={() => setRedo(null)} />}
     </main>
   );
 }

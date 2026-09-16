@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Coffee } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -10,7 +10,15 @@ import PaymentMethods, { methodIdFor } from "@/components/PaymentMethods";
 import PhoneField from "@/components/PhoneField";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
-import { clearBooking, emptySelection, loadBooking, type BookingSelection } from "@/lib/booking";
+import {
+  clearBooking,
+  emptySelection,
+  loadBooking,
+  loadCheckout,
+  releaseHold,
+  saveCheckout,
+  type BookingSelection,
+} from "@/lib/booking";
 import { isValidSaudiMobile, toNationalDigits, toStoredPhone } from "@/lib/phone";
 import { pick } from "@/lib/localized";
 import { REWARDS } from "@/lib/rewards";
@@ -91,11 +99,36 @@ export default function PaymentPage() {
    */
   const [treats, setTreats] = useState<string[]>([]);
 
+  /**
+   * Her own hold from an earlier visit to this page — a reload, or back and
+   * forward again — let go before a new one is made. Awaited by confirm(), so
+   * the old hold cannot refuse the new one for the very same chair.
+   */
+  const released = useRef<Promise<void>>(Promise.resolve());
+
   useEffect(() => {
+    released.current = releaseHold();
     const saved = loadBooking();
     if (saved) setBooking(saved);
     setLoaded(true);
   }, []);
+
+  // What she chose here last time — a treat, a code, a reward — so going back to
+  // change a service does not quietly drop them. The code and the reward are
+  // quoted again rather than trusted: the bill they apply to may have changed.
+  useEffect(() => {
+    if (!loaded) return;
+    const saved = loadCheckout();
+    if (!saved) return;
+    setTreats(saved.treats.filter((key) => Number(key.split(":")[0]) < booking.members.length));
+    if (saved.promo) {
+      setPromoInput(saved.promo);
+      void applyPromo(saved.promo);
+    }
+    if (saved.redeemPoints !== null) void pickReward(saved.redeemPoints);
+    // Once, when the selection has loaded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
 
   // Who she is, if the cookie knows. Everything the form below asks for is
   // already on her account, so it is filled in rather than asked for — the
@@ -133,7 +166,12 @@ export default function PaymentPage() {
   }, []);
 
   // A direct visit with nothing selected has nothing to pay for.
-  const hasSelection = booking.members.length > 0 && booking.startsAt !== null;
+  // The booking pages save as she goes, so what arrives can be half-picked. The
+  // party's time is only filled in once every guest has one of her own.
+  const hasSelection =
+    booking.members.length > 0 &&
+    booking.startsAt !== null &&
+    booking.members.every((m) => m.serviceId);
 
   // The invoice is emailed the moment the charge clears, so an address is as
   // required as the phone number. Kept loose on purpose — the server's zod
@@ -232,8 +270,8 @@ export default function PaymentPage() {
     }
   };
 
-  const applyPromo = async () => {
-    const code = promoInput.trim();
+  const applyPromo = async (typed = promoInput) => {
+    const code = typed.trim();
     if (!code || promoChecking) return;
     setPromoChecking(true);
     setPromoError(null);
@@ -339,6 +377,18 @@ export default function PaymentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [promoDiscountSar, booking.total]);
 
+  useEffect(() => {
+    if (!loaded) return;
+    saveCheckout({
+      treats,
+      promo: promoApplied,
+      redeemPoints,
+      held: heldCode ? { code: heldCode, email: email.trim() } : null,
+    });
+    // `email` is read only alongside a new hold; typing does not need a write.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, treats, promoApplied, redeemPoints, heldCode]);
+
   const confirm = async () => {
     if (!hasSelection || submitting) return;
     // PaymentMethods has its own confirm button, which doesn't know about these
@@ -354,6 +404,7 @@ export default function PaymentPage() {
       // Step 1 — hold the chairs, unless a previous attempt already did.
       let code = heldCode;
       if (!code) {
+        await released.current;
         const res = await fetch("/api/bookings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -764,7 +815,7 @@ export default function PaymentPage() {
                     />
                     <button
                       type="button"
-                      onClick={applyPromo}
+                      onClick={() => void applyPromo()}
                       disabled={!promoInput.trim() || promoChecking}
                       className="shrink-0 rounded-[12px] bg-black/[0.06] px-5 text-sm font-bold text-ink transition-colors hover:bg-black/[0.1] disabled:cursor-not-allowed disabled:text-ink/40"
                     >
