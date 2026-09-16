@@ -1,0 +1,689 @@
+// What this branch added, asserted feature by feature.
+//
+// The existing suites already cover the chair race, ticket queues, party holds,
+// pack credits, the cancel route and the day boundary. This one takes the rest
+// of the branch: the discount stack and the order it runs in, the flat refill,
+// the reward ladder, the floor's colours, and the field rules that keep a form
+// and its server action agreeing.
+//
+// Dates carry their own clock wherever one is involved — a suite that reads the
+// wall clock passes in March and fails in April.
+
+import { beforeEach, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { addons, bookings, services } from "@/lib/db/schema";
+import { createBooking, createBookings, bookingSummaries, releaseWebHold } from "@/lib/bookings";
+import { confirmBookingPayment } from "@/lib/payments/confirm";
+import { halalasToSar, sarToHalalas, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
+import { promoDiscount, normalizePromoCode } from "@/lib/promo";
+import { REWARDS, pointsEarned, rewardDiscount, rewardFor, rewardRefusal } from "@/lib/rewards";
+import { statusPulse } from "@/lib/booking-pulse";
+import { formatTicketNo } from "@/lib/tickets";
+import { maskEmail } from "@/lib/otp";
+import {
+  formatNational,
+  latinDigits,
+  toNationalDigits,
+  toStoredPhone,
+  validateSaudiMobile,
+} from "@/lib/phone";
+import { brandOf, cvvLength, formatCardNumber, luhnValid, validateExpiry } from "@/lib/card";
+import { checkBirthday, checkEmail, checkNote, checkPersonName } from "@/lib/admin/validate";
+import { validationMessages } from "@/lib/validation-messages";
+import { utcToLocalDate } from "@/lib/availability";
+import { getSettings } from "@/lib/settings";
+import { FUTURE, TEST_PHONE, fixtures, reset, groupRows, type Fixtures } from "./helpers";
+
+const v = validationMessages.en;
+const DAY = 86_400_000;
+
+let f: Fixtures;
+
+beforeEach(async () => {
+  f = await fixtures();
+  await reset(f.branchA, f.branchB);
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the discount stack, in the order it runs", () => {
+  it("gives a group its discount and a solo booking none", async () => {
+    const { group_discount_percent: percent } = await getSettings(["group_discount_percent"]);
+
+    const solo = splitGroupPrice([20_000], 0);
+    expect(solo[0].discountHalalas).toBe(0);
+    expect(solo[0].totalHalalas).toBe(20_000);
+
+    const pair = splitGroupPrice([20_000, 20_000], percent);
+    const discount = pair.reduce((s, p) => s + p.discountHalalas, 0);
+    expect(discount).toBe(Math.round(40_000 * percent / 100));
+    // The guests' totals still add to the bill, to the halala.
+    expect(pair.reduce((s, p) => s + p.totalHalalas, 0)).toBe(40_000 - discount);
+  });
+
+  it("rounds the group discount once, off the combined bill", () => {
+    // Three guests at an odd price: rounding each share separately would lose or
+    // invent a halala, which is why shareAmount exists.
+    const grosses = [3_333, 3_333, 3_334];
+    const split = splitGroupPrice(grosses, 10);
+    const total = grosses.reduce((a, b) => a + b, 0);
+    expect(split.reduce((s, p) => s + p.discountHalalas, 0)).toBe(Math.round(total * 0.1));
+    expect(split.reduce((s, p) => s + p.totalHalalas, 0)).toBe(total - Math.round(total * 0.1));
+  });
+
+  it("never over- or under-allocates a shared amount, whatever the weights", () => {
+    const cases: [number[], number][] = [
+      [[1], 7],
+      [[1, 1, 1], 100],
+      [[1, 2, 97], 33],
+      [[5_000, 5_000, 5_001], 999],
+      [[0, 10_000], 500],
+    ];
+    for (const [weights, amount] of cases) {
+      const shares = shareAmount(weights, amount);
+      expect(shares.reduce((a, b) => a + b, 0)).toBe(amount);
+      expect(shares.every((s) => s >= 0)).toBe(true);
+    }
+    // Nothing to share, or nothing to share it over.
+    expect(shareAmount([1, 1], 0)).toEqual([0, 0]);
+    expect(shareAmount([0, 0], 100)).toEqual([0, 0]);
+  });
+
+  it("takes VAT out of the discounted total rather than adding it on", () => {
+    // Prices are shown VAT-inclusive, so the customer pays exactly what she saw.
+    const total = 23_000;
+    const vat = vatIncludedIn(total, 15);
+    expect(vat).toBe(total - Math.round((total * 100) / 115));
+    expect(total - vat + vat).toBe(total);
+    // Never more than the total it came out of.
+    expect(vat).toBeLessThan(total);
+    expect(vatIncludedIn(0, 15)).toBe(0);
+  });
+
+  it("caps a promo at the bill, so a code can never hand money back", () => {
+    const fixed = { type: "fixed" as const, value: 50_000, minTotalHalalas: 0, startsAt: null, endsAt: null, maxUses: null, uses: 0, active: true };
+    expect(promoDiscount(fixed, 20_000)).toBe(20_000);
+    expect(promoDiscount(fixed, 0)).toBe(0);
+
+    const percent = { ...fixed, type: "percent" as const, value: 100 };
+    expect(promoDiscount(percent, 20_000)).toBe(20_000);
+    expect(promoDiscount({ ...percent, value: 10 }, 20_001)).toBe(Math.round(20_001 * 0.1));
+  });
+
+  it("reads a code in any casing and any spacing", () => {
+    expect(normalizePromoCode("  eid25 ")).toBe("EID25");
+    expect(normalizePromoCode("Sara")).toBe("SARA");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the reward ladder", () => {
+  it("only knows the rungs it declares", () => {
+    for (const r of REWARDS) expect(rewardFor(r.points)).toEqual(r);
+    // Between two rungs is not a rung.
+    expect(rewardFor(150)).toBeNull();
+    expect(rewardFor(0)).toBeNull();
+    expect(rewardFor(-100)).toBeNull();
+    expect(rewardFor(1_000_000)).toBeNull();
+  });
+
+  it("names why a rung cannot be spent", () => {
+    expect(rewardRefusal(150, 10_000)).toBe("unknown");
+    expect(rewardRefusal(200, 199)).toBe("locked");
+    // Exactly enough is enough.
+    expect(rewardRefusal(200, 200)).toBeNull();
+  });
+
+  it("caps a rung at the bill, as a promo is capped", () => {
+    const top = REWARDS[REWARDS.length - 1];
+    expect(rewardDiscount(top, 0)).toBe(0);
+    expect(rewardDiscount(top, 10_000)).toBe(Math.round(10_000 * top.percent / 100));
+    expect(rewardDiscount({ points: 1, percent: 500 }, 10_000)).toBe(10_000);
+  });
+
+  it("floors what a bill earns, so a point cannot be minted by splitting one", () => {
+    // One point per 5 SAR: a 9.99 SAR bill earns 1, not 2.
+    expect(pointsEarned(sarToHalalas(9.99), 5)).toBe(1);
+    expect(pointsEarned(sarToHalalas(10), 5)).toBe(2);
+    expect(pointsEarned(sarToHalalas(4.99), 5)).toBe(0);
+    // Two halves of a bill never beat the whole.
+    const whole = pointsEarned(sarToHalalas(99), 5);
+    const halves = pointsEarned(sarToHalalas(49.5), 5) * 2;
+    expect(halves).toBeLessThanOrEqual(whole);
+    // Always a whole number, and never negative.
+    expect(Number.isInteger(pointsEarned(12_345, 7))).toBe(true);
+    expect(pointsEarned(-1, 5)).toBe(0);
+    expect(pointsEarned(10_000, 0)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("a refill is a flat price, whatever the service costs", () => {
+  async function servedBooking(email: string) {
+    await db.update(services).set({ refillDays: 30 }).where(eq(services.id, f.svcA.id));
+    const made = await createBooking({
+      branchId: f.branchA,
+      serviceId: f.svcA.id,
+      addonIds: [],
+      startsAt: new Date(Date.now() - DAY).toISOString(),
+      customer: { phone: TEST_PHONE, email },
+      source: "web",
+    });
+    if (!made.ok) throw new Error(made.error);
+    await db.update(bookings).set({ status: "completed" }).where(eq(bookings.id, made.id));
+    return made.code;
+  }
+
+  it("charges the flat refill price rather than a percentage of the service", async () => {
+    const { refill_price_halalas: flat, vat_percent } = await getSettings([
+      "refill_price_halalas",
+      "vat_percent",
+    ]);
+    const code = await servedBooking("refill@example.com");
+
+    const result = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(Date.now() + DAY).toISOString(),
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE, email: "refill@example.com" },
+      source: "web",
+      status: "pending",
+      refillOfCode: code,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // The whole point of the flat price: it does not track the service price.
+    expect(result.totalHalalas).toBe(flat);
+    expect(result.totalHalalas).not.toBe(f.svcA.priceHalalas);
+
+    const [row] = await db
+      .select()
+      .from(bookings)
+      .where(eq(bookings.id, result.bookings[0].id));
+    expect(row.servicePriceHalalas).toBe(flat);
+    expect(row.refillOfBookingId).not.toBeNull();
+    // VAT still comes out of the discounted total, not on top of it.
+    expect(row.vatHalalas).toBe(vatIncludedIn(flat, vat_percent));
+    expect(row.subtotalHalalas + row.vatHalalas).toBe(row.totalHalalas);
+  });
+
+  it("refuses an appointment past the window, and says so differently from a lapsed offer", async () => {
+    const code = await servedBooking("window@example.com");
+
+    const tooLate = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(Date.now() + 60 * DAY).toISOString(),
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE, email: "window@example.com" },
+      source: "web",
+      status: "pending",
+      refillOfCode: code,
+    });
+    // The offer stands; the date is outside it. A different answer from "gone".
+    expect(tooLate).toMatchObject({ ok: false, error: "refill-window" });
+
+    const noSuchCode = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(Date.now() + DAY).toISOString(),
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE, email: "window@example.com" },
+      source: "web",
+      status: "pending",
+      refillOfCode: "RON-NOPE1",
+    });
+    expect(noSuchCode).toMatchObject({ ok: false, error: "refill-expired" });
+  });
+
+  it("is one guest and the same service, never a party", async () => {
+    const code = await servedBooking("solo@example.com");
+
+    const asGroup = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(Date.now() + DAY).toISOString(),
+      members: [
+        { serviceId: f.svcA.id, addonIds: [] },
+        { serviceId: f.svcA.id, addonIds: [] },
+      ],
+      customer: { phone: TEST_PHONE, email: "solo@example.com" },
+      source: "web",
+      status: "pending",
+      refillOfCode: code,
+    });
+    expect(asGroup).toMatchObject({ ok: false, error: "invalid-service" });
+
+    const wrongService = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(Date.now() + DAY).toISOString(),
+      members: [{ serviceId: f.svcB.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE, email: "solo@example.com" },
+      source: "web",
+      status: "pending",
+      refillOfCode: code,
+    });
+    expect(wrongService).toMatchObject({ ok: false, error: "invalid-service" });
+  });
+
+  it("spends the window once, so a second refill finds nothing", async () => {
+    const code = await servedBooking("once@example.com");
+
+    const first = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(Date.now() + DAY).toISOString(),
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE, email: "once@example.com" },
+      source: "web",
+      status: "pending",
+      refillOfCode: code,
+    });
+    expect(first.ok).toBe(true);
+
+    const second = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(Date.now() + 2 * DAY).toISOString(),
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE, email: "once@example.com" },
+      source: "web",
+      status: "pending",
+      refillOfCode: code,
+    });
+    // `bookings_refill_of_unique` decides it, not a read two requests could pass.
+    expect(second).toMatchObject({ ok: false, error: "refill-expired" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("a checkout treat is 10 riyals however the bill is discounted", () => {
+  it("keeps an at-checkout add-on out of the group discount entirely", async () => {
+    const [treat] = await db
+      .select()
+      .from(addons)
+      .where(eq(addons.atCheckout, true))
+      .limit(1);
+    if (!treat) return; // no upsell seeded
+
+    const { group_discount_percent: percent } = await getSettings(["group_discount_percent"]);
+    if (!percent) return;
+
+    const withTreat = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE).toISOString(),
+      members: [
+        { serviceId: f.svcA.id, addonIds: [treat.id] },
+        { serviceId: f.svcA.id, addonIds: [] },
+      ],
+      customer: { phone: TEST_PHONE, email: "treat@example.com" },
+      source: "web",
+      status: "pending",
+    });
+    expect(withTreat.ok).toBe(true);
+    if (!withTreat.ok) return;
+
+    await reset(f.branchA, f.branchB);
+
+    const without = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE).toISOString(),
+      members: [
+        { serviceId: f.svcA.id, addonIds: [] },
+        { serviceId: f.svcA.id, addonIds: [] },
+      ],
+      customer: { phone: TEST_PHONE, email: "treat@example.com" },
+      source: "web",
+      status: "pending",
+    });
+    expect(without.ok).toBe(true);
+    if (!without.ok) return;
+
+    // Ten riyals is ten riyals: the treat adds its full price, undiscounted.
+    expect(withTreat.totalHalalas - without.totalHalalas).toBe(treat.priceHalalas);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("a party is one bill and one unit", () => {
+  it("holds every guest to the party's day and refuses two days", async () => {
+    const day = new Date(FUTURE);
+    const nextDay = new Date(FUTURE + DAY);
+
+    const split = await createBookings({
+      branchId: f.branchA,
+      startsAt: day.toISOString(),
+      members: [
+        { serviceId: f.svcA.id, addonIds: [] },
+        { serviceId: f.svcA.id, addonIds: [], startsAt: nextDay.toISOString() },
+      ],
+      customer: { phone: TEST_PHONE },
+      source: "web",
+      status: "pending",
+    });
+    expect(split).toMatchObject({ ok: false, error: "different-day" });
+  });
+
+  it("lets each guest take her own branch and hour on that one day", async () => {
+    const at = new Date(FUTURE);
+    const later = new Date(FUTURE + 3 * 3_600_000);
+    expect(utcToLocalDate(at)).toBe(utcToLocalDate(later));
+
+    const party = await createBookings({
+      branchId: f.branchA,
+      startsAt: at.toISOString(),
+      members: [
+        { serviceId: f.svcA.id, addonIds: [] },
+        {
+          serviceId: f.svcA.id,
+          addonIds: [],
+          branchId: f.branchB,
+          startsAt: later.toISOString(),
+        },
+      ],
+      customer: { phone: TEST_PHONE },
+      source: "web",
+      status: "pending",
+    });
+    expect(party.ok).toBe(true);
+    if (!party.ok) return;
+
+    const rows = await groupRows(party.groupId!);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.branchId).sort()).toEqual([f.branchA, f.branchB].sort());
+    expect(rows.every((r) => r.groupId === party.groupId)).toBe(true);
+    // One customer across the party — which is what makes one reference open it.
+    expect(new Set(rows.map((r) => r.customerId)).size).toBe(1);
+  });
+
+  it("opens the whole party from any one guest's reference", async () => {
+    const party = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE).toISOString(),
+      members: [
+        { serviceId: f.svcA.id, addonIds: [], guestName: "Noura" },
+        { serviceId: f.svcA.id, addonIds: [], guestName: "Sara" },
+      ],
+      customer: { phone: TEST_PHONE, email: "party@example.com" },
+      source: "web",
+      status: "pending",
+    });
+    expect(party.ok).toBe(true);
+    if (!party.ok) return;
+
+    const summaries = await bookingSummaries({ code: party.bookings[1].code });
+    expect(summaries).toHaveLength(2);
+    expect(summaries.every((s) => s.groupSize === 2)).toBe(true);
+  });
+
+  it("never returns a name, a phone, an address or a chair to a reference holder", async () => {
+    const made = await createBooking({
+      branchId: f.branchA,
+      serviceId: f.svcA.id,
+      addonIds: [],
+      startsAt: new Date(FUTURE).toISOString(),
+      customer: { phone: TEST_PHONE, name: "Private Person", email: "private@example.com" },
+      source: "web",
+    });
+    if (!made.ok) throw new Error(made.error);
+
+    const [summary] = await bookingSummaries({ code: made.code });
+    // The shape is a privacy boundary, not a view model.
+    const keys = Object.keys(summary);
+    for (const leaked of ["name", "customerName", "phone", "email", "stationId", "notes"]) {
+      expect(keys).not.toContain(leaked);
+    }
+    expect(JSON.stringify(summary)).not.toContain("Private Person");
+    expect(JSON.stringify(summary)).not.toContain("private@example.com");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("going back from checkout gives the chair up", () => {
+  it("releases an unpaid hold to the address that made it, and nobody else", async () => {
+    const made = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE).toISOString(),
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE, email: "held@example.com" },
+      source: "web",
+      status: "pending",
+    });
+    expect(made.ok).toBe(true);
+    if (!made.ok) return;
+    const code = made.bookings[0].code;
+
+    // Wrong address: the same "no" an unknown code gets.
+    expect(await releaseWebHold(code, "someone@example.com")).toBe(false);
+    // Right address, any casing.
+    expect(await releaseWebHold(code, "Held@Example.com")).toBe(true);
+
+    const [row] = await db.select().from(bookings).where(eq(bookings.code, code));
+    expect(row.status).toBe("cancelled");
+    // Let go early is the same thing the sweep writes, so credits and points
+    // come back under rules that already exist.
+    expect(row.cancelReason).toBe("payment-timeout");
+
+    // Releasing twice is not an error and changes nothing.
+    expect(await releaseWebHold(code, "held@example.com")).toBe(false);
+  });
+
+  it("will not release a confirmed booking, only a hold", async () => {
+    const made = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE).toISOString(),
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE, email: "paid@example.com" },
+      source: "web",
+      status: "pending",
+    });
+    if (!made.ok) throw new Error(made.error);
+
+    const paid = await confirmBookingPayment({ code: made.bookings[0].code, method: "card" });
+    expect(paid.ok).toBe(true);
+
+    expect(await releaseWebHold(made.bookings[0].code, "paid@example.com")).toBe(false);
+    const [row] = await db.select().from(bookings).where(eq(bookings.code, made.bookings[0].code));
+    expect(row.status).toBe("confirmed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the floor's colours track the service, not the paperwork", () => {
+  it("lights a checked-in customer as waiting", () => {
+    expect(statusPulse({ status: "checked_in" })).toContain("animate-row-checkin");
+  });
+
+  it("pulses only while the technician has not finished", () => {
+    expect(statusPulse({ status: "in_progress" })).toContain("animate-running-pulse");
+    // Finished mid-service: the light settles even though the ticket is open.
+    expect(statusPulse({ status: "in_progress", finishedAt: "2031-05-14T09:00:00Z" })).not.toContain(
+      "animate-running-pulse",
+    );
+  });
+
+  it("changes nothing when the desk finally closes the ticket", () => {
+    const finished = statusPulse({ status: "in_progress", finishedAt: "2031-05-14T09:00:00Z" });
+    const closed = statusPulse({ status: "completed", finishedAt: "2031-05-14T09:00:00Z" });
+    expect(closed).toBe(finished);
+  });
+
+  it("keeps quiet for the states with no light of their own", () => {
+    for (const status of ["pending", "confirmed", "cancelled", "no_show"] as const) {
+      expect(statusPulse({ status })).toBe("");
+    }
+  });
+
+  it("respects a reader who asked for no motion", () => {
+    for (const status of ["checked_in", "in_progress"] as const) {
+      expect(statusPulse({ status })).toContain("motion-reduce:animate-none");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("ticket numbers read aloud", () => {
+  it("rolls into a letter rather than growing a digit", () => {
+    expect(formatTicketNo(1)).toBe("A1");
+    // Ninety-nine to a letter, not a hundred: A99 is the 99th and B1 the 100th.
+    expect(formatTicketNo(99)).toBe("A99");
+    expect(formatTicketNo(100)).toBe("B1");
+    expect(formatTicketNo(198)).toBe("B99");
+    expect(formatTicketNo(199)).toBe("C1");
+    // And it wraps rather than growing a second letter.
+    expect(formatTicketNo(99 * 26 + 1)).toBe("A1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("a Saudi mobile, however it was pasted", () => {
+  it("lands on one stored shape from every spelling people use", () => {
+    for (const typed of [
+      "0512345678",
+      "512345678",
+      "+966512345678",
+      "966512345678",
+      "00966512345678",
+      "+966 51 234 5678",
+      "051-234-5678",
+    ]) {
+      expect(toStoredPhone(typed)).toBe("0512345678");
+    }
+  });
+
+  it("reads an Arabic keyboard", () => {
+    expect(latinDigits("٠٥١٢٣٤٥٦٧٨")).toBe("0512345678");
+    expect(toStoredPhone("٠٥١٢٣٤٥٦٧٨")).toBe("0512345678");
+  });
+
+  it("names which rule a number broke", () => {
+    expect(validateSaudiMobile("")).toBe("required");
+    expect(validateSaudiMobile("05123")).toBe("length");
+    // 01x-04x are landlines and cannot receive what this number exists for.
+    expect(validateSaudiMobile("0412345678")).toBe("prefix");
+    expect(validateSaudiMobile("0512345678")).toBeNull();
+  });
+
+  it("drops digits past the ninth rather than reordering them", () => {
+    expect(toNationalDigits("05123456789999")).toBe("512345678");
+  });
+
+  it("groups for reading without changing what is submitted", () => {
+    expect(formatNational("0512345678")).toBe("51 234 5678");
+    expect(toStoredPhone(formatNational("0512345678"))).toBe("0512345678");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the card form, which never sends a card anywhere", () => {
+  it("knows the brands it claims to", () => {
+    expect(brandOf("4111111111111111")).toBe("visa");
+    expect(brandOf("5500000000000004")).toBe("mastercard");
+    expect(brandOf("340000000000009")).toBe("amex");
+    expect(brandOf("")).toBe("unknown");
+  });
+
+  it("asks American Express for four digits and everyone else for three", () => {
+    expect(cvvLength("340000000000009")).toBe(4);
+    expect(cvvLength("4111111111111111")).toBe(3);
+  });
+
+  it("checks the digits add up", () => {
+    expect(luhnValid("4111111111111111")).toBe(true);
+    expect(luhnValid("4111111111111112")).toBe(false);
+  });
+
+  it("spaces a number as it is typed", () => {
+    expect(formatCardNumber("4111111111111111")).toMatch(/^4111 1111 1111 1111$/);
+  });
+
+  it("keeps a card valid through the last day of its printed month", () => {
+    // Local dates on purpose: validateExpiry reads getFullYear/getMonth, which
+    // are the reader's own clock. Building these in UTC would put the last
+    // instant of June into July on any positive offset — including Riyadh's.
+    const june2031 = new Date(2031, 5, 15);
+    // A card expiring this month is still good today — months are compared, not days.
+    expect(validateExpiry("06/31", june2031)).toBeNull();
+    expect(validateExpiry("05/31", june2031)).toBe("expiry-past");
+    expect(validateExpiry("07/31", june2031)).toBeNull();
+
+    // The very last instant of the expiry month still passes, and the first
+    // instant of the next month does not.
+    expect(validateExpiry("06/31", new Date(2031, 5, 30, 23, 59, 59, 999))).toBeNull();
+    expect(validateExpiry("06/31", new Date(2031, 6, 1))).toBe("expiry-past");
+  });
+
+  it("refuses an impossible month and a mistyped year", () => {
+    const now = new Date(Date.UTC(2031, 5, 15));
+    expect(validateExpiry("00/31", now)).toBe("expiry-month");
+    expect(validateExpiry("13/31", now)).toBe("expiry-month");
+    expect(validateExpiry("06/99", now)).toBe("expiry-far");
+    expect(validateExpiry("6/31", now)).toBe("expiry-format");
+    expect(validateExpiry("", now)).toBe("required");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the admin form says which field is wrong", () => {
+  it("accepts a real name in either script and refuses what is not one", () => {
+    expect(checkPersonName(v, "Name", "Noura Al Saud")).toBeUndefined();
+    expect(checkPersonName(v, "Name", "نورة السعود")).toBeUndefined();
+    expect(checkPersonName(v, "Name", "", { required: true })).toBeDefined();
+    // Not a name: digits and markup have no business in one.
+    expect(checkPersonName(v, "Name", "<script>")).toBeDefined();
+  });
+
+  it("accepts an address and refuses a shape that is not one", () => {
+    expect(checkEmail(v, "Email", "sara@example.com")).toBeUndefined();
+    expect(checkEmail(v, "Email", "sara@")).toBeDefined();
+    expect(checkEmail(v, "Email", "sara example.com")).toBeDefined();
+    expect(checkEmail(v, "Email", "", { required: true })).toBeDefined();
+    // Optional by default, so a blank one passes unless asked for.
+    expect(checkEmail(v, "Email", "")).toBeUndefined();
+  });
+
+  it("bounds a note rather than writing an unbounded string to the row", () => {
+    expect(checkNote(v, "Reason", "Customer rang to cancel", { max: 200 })).toBeUndefined();
+    expect(checkNote(v, "Reason", "x".repeat(201), { max: 200 })).toBeDefined();
+    expect(checkNote(v, "Reason", "", { required: true, max: 200 })).toBeDefined();
+  });
+
+  it("will not take a birthday in the future or from before anyone alive", () => {
+    const today = "2031-05-14";
+    expect(checkBirthday(v, "Birthday", "1995-03-02", today)).toBeUndefined();
+    // The range ends yesterday, so today itself is already too new.
+    expect(checkBirthday(v, "Birthday", "2031-05-13", today)).toBeUndefined();
+    expect(checkBirthday(v, "Birthday", today, today)).toBeDefined();
+    expect(checkBirthday(v, "Birthday", "2031-05-15", today)).toBeDefined();
+    expect(checkBirthday(v, "Birthday", "1830-01-01", today)).toBeDefined();
+    // Blank is allowed — a customer who would rather not say still gets an account.
+    expect(checkBirthday(v, "Birthday", "", today)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("small helpers with money or privacy behind them", () => {
+  it("masks an address enough to recognise and not enough to harvest", () => {
+    expect(maskEmail("sara@gmail.com")).toBe("s•••@gmail.com");
+    expect(maskEmail("a@b.com")).toBe("a•@b.com");
+    expect(maskEmail("notanemail")).toBe("•••");
+  });
+
+  it("converts riyals and halalas without losing a halala", () => {
+    expect(sarToHalalas(99)).toBe(9_900);
+    expect(sarToHalalas(0.01)).toBe(1);
+    expect(sarToHalalas(10.005)).toBe(1_001); // rounded, not truncated
+    expect(halalasToSar(9_900)).toBe(99);
+    for (const sar of [0, 1, 49.5, 99.99, 2_000]) {
+      expect(halalasToSar(sarToHalalas(sar))).toBeCloseTo(sar, 2);
+    }
+  });
+});
