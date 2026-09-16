@@ -87,12 +87,17 @@ export default function RedoDialog({
   return (
     <Modal title={redo.title} onClose={onClose} className="max-w-[460px]">
       <p className="whitespace-pre-line text-start text-sm leading-6 text-ink/70">{redo.body}</p>
-      <div className="mt-6 flex gap-3">
+      {/* Side by side the two answers split a phone's width in half, and the
+          longer one wraps to two lines while the other stays on one — a pair of
+          mismatched boxes at the moment she is deciding. Stacked below `sm`
+          each answer gets the full width and reads on one line, in the same
+          order as the row. */}
+      <div className="mt-6 flex flex-col gap-3 sm:flex-row">
         {redo.apply && (
           <button
             type="button"
             onClick={onClose}
-            className="flex-1 rounded-[12px] bg-black/[0.05] py-3.5 text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
+            className="min-h-[48px] flex-1 rounded-[12px] bg-black/[0.05] py-3.5 text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
           >
             {b.redoKeep}
           </button>
@@ -105,7 +110,7 @@ export default function RedoDialog({
             // Straight to the calendar: picking the time again is what is left.
             redo.pickTime();
           }}
-          className="flex-1 rounded-[12px] bg-red-grad py-3.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
+          className="min-h-[48px] flex-1 rounded-[12px] bg-red-grad py-3.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
         >
           {redo.apply ? b.redoContinue : b.redoPick}
         </button>
