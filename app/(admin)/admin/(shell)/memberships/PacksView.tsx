@@ -4,11 +4,12 @@
 // reorder, an active switch, click to edit — with one column that is this
 // screen's own: what is in it, because a pack is nothing but that.
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronUp, ImageIcon, Package, Plus } from "lucide-react";
 import { Badge, Button, Card, EmptyState, PageHeader, touchTargetSwitch } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { cn } from "@/lib/cn";
 import type { Localized } from "@/lib/db/schema";
 import PackDrawer from "./PackDrawer";
@@ -47,12 +48,13 @@ export default function PacksView({
   const router = useRouter();
   const [editing, setEditing] = useState<PackRow | null>(null);
   const [creating, setCreating] = useState(false);
-  const [, startTransition] = useTransition();
+  const { run: refreshAfter } = usePendingAction();
 
+  // Holds through the refresh, not just the action — see
+  // components/admin/use-pending-action.
   const run = (fn: () => Promise<unknown>) =>
-    startTransition(async () => {
+    refreshAfter(async () => {
       await fn();
-      router.refresh();
     });
 
   /** What a pack is worth at list price, so the discount is visible while pricing it. */

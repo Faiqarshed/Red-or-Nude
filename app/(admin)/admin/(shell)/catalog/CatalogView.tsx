@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronUp, ImageIcon, Plus, Sparkles } from "lucide-react";
 import { Badge, Button, Card, EmptyState, PageHeader, tabItem, tabTone, touchTargetSwitch } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
 import type { Localized } from "@/lib/db/schema";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import CatalogDrawer from "./CatalogDrawer";
 import { moveCatalogItem, setCatalogActive, type CatalogKind } from "./actions";
 
@@ -63,7 +64,7 @@ export default function CatalogView({
   const [tab, setTab] = useState<CatalogKind>("service");
   const [editing, setEditing] = useState<CatalogRow | null>(null);
   const [creating, setCreating] = useState(false);
-  const [, startTransition] = useTransition();
+  const { run: refreshAfter } = usePendingAction();
 
   const rows =
     tab === "service" ? services : tab === "addon" ? addons : tab === "upsell" ? upsells : removals;
@@ -77,10 +78,11 @@ export default function CatalogView({
           ? t.catalog.newUpsell
           : t.catalog.newRemoval;
 
+  // Holds through the refresh, not just the action — see
+  // components/admin/use-pending-action for why startTransition could not.
   const run = (fn: () => Promise<unknown>) =>
-    startTransition(async () => {
+    refreshAfter(async () => {
       await fn();
-      router.refresh();
     });
 
   return (

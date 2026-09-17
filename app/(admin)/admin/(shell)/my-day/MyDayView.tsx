@@ -16,7 +16,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { BellRing } from "lucide-react";
+import { BellRing, Loader2 } from "lucide-react";
 import { Card, CardHeader, EmptyState, PageHeader, StatCard, Badge, Thumb, tabItem } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
@@ -148,9 +148,16 @@ export default function MyDayView({
   //
   // ponytail: polling, not push. 20 seconds is well inside "she is still
   // finishing the last set"; swap in a websocket only if that stops being true.
+  //
+  // The hidden-tab guard is the one /admin/bookings already carries and this
+  // screen was missing. A technician's tablet is open all day and overnight, and
+  // each tick re-runs loadMyDay() — so an unguarded timer is thousands of
+  // queries a night rendering pixels nobody is looking at. Worse here than on
+  // the bookings board: this screen's loader runs sweepNoShows(), which writes.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => {
+      if (document.hidden) return;
       setNow(Date.now());
       router.refresh();
     }, 20_000);
@@ -497,20 +504,28 @@ function NextCard({
       </div>
 
       <div className="flex shrink-0 flex-col gap-2.5 sm:w-44">
+        {/* Wet hands and thirty seconds: the spinner matters more here than
+            anywhere else in the panel. Greying the button out says "not now";
+            it does not say "I heard you, it is going through". Without one a
+            technician presses Start again. */}
         {control === "start" ? (
           <button
             onClick={onStart}
             disabled={busy}
-            className="h-14 w-full rounded-2xl bg-red text-base font-bold text-white transition-colors hover:bg-red-dark disabled:bg-red/50"
+            aria-busy={busy || undefined}
+            className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-red text-base font-bold text-white transition-colors hover:bg-red-dark disabled:bg-red/50"
           >
+            {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
             {m.start}
           </button>
         ) : control === "finish" ? (
           <button
             onClick={onFinish}
             disabled={busy}
-            className="h-14 w-full rounded-2xl bg-ink text-base font-bold text-white transition-colors hover:bg-ink/85 disabled:bg-ink/40"
+            aria-busy={busy || undefined}
+            className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-ink text-base font-bold text-white transition-colors hover:bg-ink/85 disabled:bg-ink/40"
           >
+            {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
             {m.finish}
           </button>
         ) : control === "handedOver" ? (
@@ -652,16 +667,20 @@ function DetailDialog({
           <button
             onClick={onStart}
             disabled={busy}
-            className="h-12 w-full rounded-xl bg-red text-base font-bold text-white transition-colors hover:bg-red-dark disabled:bg-red/50"
+            aria-busy={busy || undefined}
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-red text-base font-bold text-white transition-colors hover:bg-red-dark disabled:bg-red/50"
           >
+            {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
             {m.start}
           </button>
         ) : control === "finish" ? (
           <button
             onClick={onFinish}
             disabled={busy}
-            className="h-12 w-full rounded-xl bg-ink text-base font-bold text-white transition-colors hover:bg-ink/85 disabled:bg-ink/40"
+            aria-busy={busy || undefined}
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-ink text-base font-bold text-white transition-colors hover:bg-ink/85 disabled:bg-ink/40"
           >
+            {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
             {m.finish}
           </button>
         ) : null

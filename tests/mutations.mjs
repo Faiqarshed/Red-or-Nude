@@ -31,6 +31,8 @@ const ENGINE = "lib/bookings.ts";
 const ROUTE = "app/api/bookings/route.ts";
 const PACKS = "lib/packs.ts";
 const CLIENT = "lib/booking.ts";
+const REORDER = "lib/admin/reorder.ts";
+const HISTORY = "app/(admin)/admin/(shell)/customers/data.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -247,8 +249,8 @@ const mutations = [
     apply: () =>
       mutate(
         PACKS,
-        "  if (status === null) return false; // not attached to a booking at all",
-        "  return false; // not attached to a booking at all",
+        '  if (status === null) return row.reason === "booking" || !!row.reason?.startsWith("return:");',
+        "  if (status === null) return false;",
       ),
   },
   {
@@ -309,13 +311,18 @@ const mutations = [
       ),
   },
   {
-    name: "subtle: always leave one chair, whatever the party asked for",
+    // Was "always leave one chair, whatever the party asked for", anchored on a
+    // `guests` parameter subtractPartyHolds no longer takes — the rule is now
+    // per-guest, so there is no party size in scope to compare against. Same
+    // boundary, retargeted at the rule that is actually there: one off by one
+    // and she is offered a chair her own friend is already sitting in.
+    name: "subtle: let the party take one more chair than the branch has",
     expect: "tests/party-holds.test.ts",
     apply: () =>
       mutate(
         CLIENT,
-        "    return taken > 0 && s.freeCount - taken < guests",
         "    return taken > 0 && s.freeCount - taken < 1",
+        "    return taken > 0 && s.freeCount - taken < 0",
       ),
   },
   {
@@ -334,13 +341,62 @@ const mutations = [
     apply: () =>
       mutate(
         CANCEL,
-        "  const refused = members.map((m) => cancelRefusal(m, cutoff)).find(Boolean);",
-        "  const refused = cancelRefusal(anchor, cutoff);",
+        "  const blocked = members.find((m) => cancelRefusal(m, cutoff));",
+        "  const blocked = cancelRefusal(anchor, cutoff) ? anchor : undefined;",
+      ),
+  },
+  // ---- the admin screens' own reads ------------------------------------------
+  //
+  // Both reads were rewritten for speed, and both are the shape of change that
+  // renumbers or drops the wrong rows without anything going red.
+  {
+    name: "reorder: let Postgres decide the CASE result type",
+    expect: "tests/reorder.test.ts",
+    apply: () =>
+      mutate(
+        REORDER,
+        "    .set({ sort: sql`(case ${cases} end)::int` })",
+        "    .set({ sort: sql`case ${cases} end` })",
+      ),
+  },
+  {
+    name: "reorder: renumber the whole table, not just the list the arrows belong to",
+    expect: "tests/reorder.test.ts",
+    apply: () =>
+      mutate(
+        REORDER,
+        lines(
+          "    .from(table)",
+          "    .where(within)",
+        ),
+        lines(
+          "    .from(table)",
+        ),
+      ),
+  },
+  {
+    name: "history: go back to the newest bookings in the salon, whoever they belong to",
+    expect: "tests/customer-history.test.ts",
+    apply: () =>
+      mutate(
+        HISTORY,
+        "    .where(inArray(bookings.customerId, ids))",
+        "    .where(sql`true`)",
+      ),
+  },
+  {
+    name: "subtle: rank every booking together instead of per customer",
+    expect: "tests/customer-history.test.ts",
+    apply: () =>
+      mutate(
+        HISTORY,
+        "        partition by ${bookings.customerId} order by ${bookings.startsAt} desc",
+        "        order by ${bookings.startsAt} desc",
       ),
   },
 ];
 
-const touched = [CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT];
+const touched = [CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));
 

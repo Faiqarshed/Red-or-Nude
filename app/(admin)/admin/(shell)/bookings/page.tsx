@@ -54,12 +54,25 @@ export default async function BookingsPage({
   // the receptionist is looking at a grid that still shows them as occupied.
   await sweepNoShows(branchId);
 
-  const { checkin_early_min: checkinEarlyMin } = await getSettings(["checkin_early_min"]);
-
   const dayStart = localToUtc(date, "00:00");
   const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
 
-  const [stationRows, rows, [noShowCount], addonLinks, serviceRows, addonRows, removalRows] = await Promise.all([
+  // `getSettings` joins the batch below rather than sitting on its own `await`
+  // above it. It depends on nothing here, so as a separate statement it was a
+  // whole extra sequential round trip to a database in another region before
+  // the first row of the day was even asked for — one of five waves this page
+  // used to run through before it could render.
+  const [
+    { checkin_early_min: checkinEarlyMin },
+    stationRows,
+    rows,
+    [noShowCount],
+    addonLinks,
+    serviceRows,
+    addonRows,
+    removalRows,
+  ] = await Promise.all([
+    getSettings(["checkin_early_min"]),
     db
       .select()
       .from(stations)
@@ -131,9 +144,16 @@ export default async function BookingsPage({
           isNull(bookings.noShowResolvedAt),
         ),
       ),
+    // Scoped to the day being browsed, the same way front-desk/data.ts scopes
+    // its copy. Without the join this read every add-on row the salon has ever
+    // sold, on every load, to label one day's bookings.
     db
       .select({ bookingId: bookingAddons.bookingId, name: bookingAddons.name })
-      .from(bookingAddons),
+      .from(bookingAddons)
+      .innerJoin(bookings, eq(bookings.id, bookingAddons.bookingId))
+      .where(
+        and(eq(bookings.branchId, branchId), gte(bookings.startsAt, dayStart), lt(bookings.startsAt, dayEnd)),
+      ),
     db.select().from(services).where(eq(services.active, true)).orderBy(asc(services.sort)),
     db.select().from(addons).where(eq(addons.active, true)).orderBy(asc(addons.sort)),
     db.select().from(removalTypes).where(eq(removalTypes.active, true)).orderBy(asc(removalTypes.sort)),

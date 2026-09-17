@@ -8,7 +8,7 @@
 // automatically: the receptionist knows which of her customers can wait and which
 // cannot, and the software does not.
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CalendarClock, ChevronDown } from "lucide-react";
 import { Badge, BranchFilter, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
@@ -18,6 +18,7 @@ import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { localTime } from "@/lib/time";
 import { busyDuring } from "@/lib/slots";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { cn } from "@/lib/cn";
 import type { Localized } from "@/lib/db/schema";
 import type { FloorBooking, FloorData } from "./data";
@@ -42,7 +43,11 @@ export default function FloorView({
   const { t, lang } = useAdminI18n();
   const f = t.floor;
   const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  // `startTransition(async …)` ends the transition at the first `await` on
+  // React 18, so `pending` here used to go false the instant the server action
+  // was *sent* — before its result, and long before the refresh it triggers.
+  // usePendingAction spans both. See components/admin/use-pending-action.
+  const { pending, run } = usePendingAction();
   const [error, setError] = useState<string | null>(null);
   const [open, toggle] = useToggleSet();
   const now = useDayClock();
@@ -56,12 +61,11 @@ export default function FloorView({
   const [leaveError, setLeaveError] = useState<string | null>(null);
   const [rescheduling, setRescheduling] = useState<FloorBooking | null>(null);
 
-  const run = (fn: () => Promise<{ ok: boolean; error?: string }>) =>
-    startTransition(async () => {
+  const act = (fn: () => Promise<{ ok: boolean; error?: string }>) =>
+    run(async () => {
       setError(null);
       const res = await fn();
       if (!res.ok) setError(res.error === "on-leave" ? f.onLeave : t.common.error);
-      router.refresh();
     });
 
   const working = data.technicians.filter((tech) => !tech.off).length;
@@ -89,17 +93,20 @@ export default function FloorView({
   };
 
   const confirmLeaving = () =>
-    startTransition(async () => {
-      if (!leaving || !allPlaced) return;
+    run(async () => {
+      if (!leaving || !allPlaced) return false;
       setLeaveError(null);
       const res = await sendHome(
         leaving,
         waiting.map((b) => ({ bookingId: b.id, technicianId: picks[b.id] })),
       );
-      router.refresh();
-      if (res.ok) return closeLeaving();
-      // `unplaced`: a booking landed on her while the popup was open. The refresh
-      // above puts it in the list; saying so beats a Done that silently fails.
+      if (res.ok) {
+        closeLeaving();
+        return;
+      }
+      // `unplaced`: a booking landed on her while the popup was open. The
+      // refresh still runs, which puts it in the list; saying so beats a Done
+      // that silently fails.
       setLeaveError(
         res.error === "unplaced" ? f.unplaced : res.error === "bad-target" ? f.badTarget : t.common.error,
       );
@@ -128,7 +135,7 @@ export default function FloorView({
               this is "move it", not "show who has it". */}
           <TechSelect
             value=""
-            onChange={(to) => run(() => assignTechnician(b.id, to))}
+            onChange={(to) => act(() => assignTechnician(b.id, to))}
             options={data.technicians}
             busyIds={busyDuring(data.rows, b)}
             omitId={b.technicianId}
@@ -228,7 +235,7 @@ export default function FloorView({
                       variant="secondary"
                       size="sm"
                       disabled={pending}
-                      onClick={() => run(() => bringBack(tech.id))}
+                      onClick={() => act(() => bringBack(tech.id))}
                     >
                       {f.bringBack}
                     </Button>
@@ -292,7 +299,7 @@ export default function FloorView({
             <Button variant="secondary" size="sm" onClick={closeLeaving} disabled={pending}>
               {t.common.cancel}
             </Button>
-            <Button size="sm" onClick={confirmLeaving} disabled={pending || !allPlaced}>
+            <Button size="sm" onClick={confirmLeaving} pending={pending} disabled={!allPlaced}>
               {f.done}
             </Button>
           </>

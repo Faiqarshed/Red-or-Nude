@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { IdCard, Plus, Trash2 } from "lucide-react";
 import {
@@ -17,6 +17,7 @@ import {
   touchTargetSwitch,
 } from "@/components/admin/ui";
 import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import TextField from "@/components/admin/TextField";
 import { dayRange, formatDateKey, riyadhDateKey } from "@/lib/time";
@@ -77,7 +78,7 @@ export default function StaffView({
   const [editing, setEditing] = useState<StaffRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [, startTransition] = useTransition();
+  const { run: refreshAfter } = usePendingAction();
   const [doomed, setDoomed] = useState<StaffRow | null>(null);
 
   const messageFor = (code: string) =>
@@ -97,12 +98,13 @@ export default function StaffView({
                 ? t.staff.branchRequired
                 : t.common.error;
 
+  // Holds through the refresh, not just the action — see
+  // components/admin/use-pending-action.
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) =>
-    startTransition(async () => {
+    refreshAfter(async () => {
       setError(null);
       const res = await fn();
       if (!res.ok) setError(messageFor(res.error ?? ""));
-      router.refresh();
     });
 
   return (
@@ -250,7 +252,10 @@ function StaffDrawer({
   messageFor: (code: string) => string;
 }) {
   const { t, lang } = useAdminI18n();
-  const [pending, startTransition] = useTransition();
+  // Not a bare useTransition: on React 18 that ends at the first `await`, so
+  // Save re-enabled itself while the staff record was still being written —
+  // one impatient second click away from two saves.
+  const { pending, run } = usePendingAction();
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
 
   const [name, setName] = useState("");
@@ -295,10 +300,13 @@ function StaffDrawer({
   const errors = tried ? check() : {};
 
   const submit = () =>
-    startTransition(async () => {
+    run(async () => {
       setError(null);
       setTried(true);
-      if (hasErrors(check())) return focusFirstInvalid();
+      if (hasErrors(check())) {
+        focusFirstInvalid();
+        return false;
+      }
       const res = await saveStaff({
         id: member?.id,
         name: name.trim(),
@@ -309,8 +317,11 @@ function StaffDrawer({
         password: password || "",
         active,
       });
+      // onSaved() closes the drawer and refreshes the list itself, so this
+      // does not ask for a second one.
       if (res.ok) onSaved();
       else setError(messageFor(res.error));
+      return false;
     });
 
   return (
@@ -450,7 +461,7 @@ function StaffDrawer({
 function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string) => void }) {
   const { t, lang } = useAdminI18n();
   const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  const { pending, run: refreshAfter } = usePendingAction();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [tried, setTried] = useState(false);
@@ -460,27 +471,35 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
   const errors = tried ? check() : {};
 
   const add = () =>
-    startTransition(async () => {
+    refreshAfter(async () => {
       setTried(true);
-      if (hasErrors(check())) return focusFirstInvalid();
+      if (hasErrors(check())) {
+        focusFirstInvalid();
+        // Nothing was sent, so there is nothing to re-read.
+        return false;
+      }
       // An empty end means a single day, which is the common case — typing the
       // same date twice to book one day off is a small daily annoyance.
       const res = await addTimeOff({ staffId: member.id, startsOn: from, endsOn: to || from });
-      if (!res.ok) return onError(res.error);
+      if (!res.ok) {
+        onError(res.error);
+        return false;
+      }
       setFrom("");
       setTo("");
       setTried(false);
-      router.refresh();
     });
 
   const [doomed, setDoomed] = useState<TimeOffRow | null>(null);
   const drop = () =>
-    startTransition(async () => {
-      if (!doomed) return;
+    refreshAfter(async () => {
+      if (!doomed) return false;
       const res = await removeTimeOff(doomed.id);
       setDoomed(null);
-      if (!res.ok) return onError(res.error);
-      router.refresh();
+      if (!res.ok) {
+        onError(res.error);
+        return false;
+      }
     });
 
   return (

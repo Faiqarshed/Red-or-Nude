@@ -1,11 +1,11 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRef, useState } from "react";
 import { HardDrive, ImageIcon, Loader2, Trash2, Upload } from "lucide-react";
 import { Badge, Button, Card, EmptyState, PageHeader, touchTargetSm } from "@/components/admin/ui";
 import { ConfirmDialog } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { ALLOWED_TYPES, MAX_UPLOAD_BYTES, type MediaItem } from "@/lib/media";
 import { deleteMedia, uploadMedia } from "./actions";
 
@@ -24,14 +24,13 @@ export default function MediaView({
   driver: "supabase" | "local";
 }) {
   const { t } = useAdminI18n();
-  const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
+  const { pending, run: refreshAfter } = usePendingAction();
 
   const upload = (files: FileList | null) => {
     if (!files?.length) return;
-    startTransition(async () => {
+    refreshAfter(async () => {
       setError(null);
       for (const file of Array.from(files)) {
         if (!ALLOWED_TYPES.includes(file.type)) {
@@ -59,21 +58,19 @@ export default function MediaView({
         const res = await uploadMedia(body);
         if (!res.ok) setError(res.error === "storage" ? t.media.uploadFailed : t.media.badType);
       }
-      router.refresh();
     });
   };
 
   const [doomed, setDoomed] = useState<MediaItem | null>(null);
-  const [deleting, startDelete] = useTransition();
+  const { pending: deleting, run: refreshAfterDelete } = usePendingAction();
 
   const remove = () =>
-    startDelete(async () => {
-      if (!doomed) return;
+    refreshAfterDelete(async () => {
+      if (!doomed) return false;
       setError(null);
       const res = await deleteMedia(doomed.id);
       if (!res.ok) setError(t.common.error);
       setDoomed(null);
-      router.refresh();
     });
 
   return (
