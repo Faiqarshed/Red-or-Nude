@@ -470,6 +470,16 @@ const ar = {
     proceed: "المتابعة للدفع",
     confirmWithTech: "بعد الدفع أظهري رقم التذكرة للفنية.",
     confirmAtTable: "بعد الدفع انتقلي إلى {table} وأظهري رقم التذكرة هناك.",
+    // -- a coffee for the visit she is already in --
+    treatTitle: "تحبين قهوة؟",
+    treatNote: "نجهّزها لكِ على طاولتك — تُضاف إلى زيارتك الحالية.",
+    treatOrder: "اطلبي",
+    treatSending: "جارٍ…",
+    treatAdded: "في الطريق",
+    treatAlready: "طلبتِ هذه بالفعل في هذه الزيارة.",
+    treatNotInService: "لا توجد زيارة جارية على هذه الطاولة الآن.",
+    treatDeclined: "لم تتم عملية الدفع. جرّبي بطاقة أخرى.",
+    treatFailed: "تعذّر إتمام الطلب. اسألي موظفة الاستقبال.",
   },
 
   modals: {
@@ -1043,6 +1053,16 @@ const en: Content = {
     proceed: "Continue to payment",
     confirmWithTech: "After paying, show your ticket number to your technician.",
     confirmAtTable: "After paying, move to {table} and show your ticket number there.",
+    // -- a coffee for the visit she is already in --
+    treatTitle: "Fancy a coffee?",
+    treatNote: "Brought to your table — added to the visit you are in.",
+    treatOrder: "Order",
+    treatSending: "Sending…",
+    treatAdded: "On its way",
+    treatAlready: "You have already ordered that this visit.",
+    treatNotInService: "No visit is running at this table right now.",
+    treatDeclined: "That payment did not go through. Try another card.",
+    treatFailed: "Could not place that order. Ask the front desk.",
   },
 
   modals: {

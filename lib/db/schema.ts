@@ -690,6 +690,22 @@ export const payments = pgTable(
      * gift_card_id above: a receipt must outlive the thing it paid for.
      */
     customerPackId: uuid("customer_pack_id"),
+    /**
+     * A treat bought mid-visit from the chair's QR sticker, and the booking it
+     * was brought to.
+     *
+     * **Deliberately not `booking_id`.** That column is watched by
+     * `payments_booking_live_unique`, which allows one live payment per booking
+     * so a double-tapped checkout cannot charge the card twice. A treat top-up
+     * is a genuine second charge against the same booking, so putting it in
+     * `booking_id` would either be refused by that index or force it to be
+     * relaxed — and relaxing it is how the original double-charge bug comes
+     * back. A separate column keeps the guarantee intact.
+     *
+     * Plain uuid rather than a foreign key, like the two above, and for the
+     * same reason: a receipt must outlive the thing it paid for.
+     */
+    treatBookingId: uuid("treat_booking_id"),
     provider: text("provider"), // moyasar | tap | manual
     providerRef: text("provider_ref"),
     method: paymentMethod("method"),

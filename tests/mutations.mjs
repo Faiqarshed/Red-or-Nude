@@ -35,6 +35,7 @@ const REORDER = "lib/admin/reorder.ts";
 const HISTORY = "app/(admin)/admin/(shell)/customers/data.ts";
 const REWARDS = "lib/rewards.ts";
 const MYDAY = "app/(admin)/admin/(shell)/my-day/data.ts";
+const TREAT = "lib/station-treat.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -462,9 +463,50 @@ const mutations = [
         "    if (!a.atCheckout) {",
       ),
   },
+  // ---- a treat ordered from the chair ----------------------------------------
+  {
+    name: "station: sell a service add-on from the chair, duration and all",
+    expect: "tests/station-treat.test.ts",
+    apply: () =>
+      mutate(
+        TREAT,
+        "    .where(and(eq(addons.id, input.addonId), eq(addons.active, true), eq(addons.atCheckout, true)))",
+        "    .where(eq(addons.id, input.addonId))",
+      ),
+  },
+  {
+    name: "station: charge the card before checking she has not already ordered",
+    expect: "tests/station-treat.test.ts",
+    apply: () =>
+      mutate(
+        TREAT,
+        "  if (existing) return { ok: false, reason: \"already-added\" };",
+        "  if (false) return { ok: false, reason: \"already-added\" };",
+      ),
+  },
+  {
+    name: "subtle: let the sticker keep selling for a minute after she leaves",
+    expect: "tests/station-treat.test.ts",
+    apply: () =>
+      mutate(
+        TREAT,
+        "        gt(bookings.endsAt, now),",
+        "        gt(bookings.endsAt, new Date(now.getTime() - 60_000)),",
+      ),
+  },
+  {
+    name: "station: put the treat's receipt in booking_id after all",
+    expect: "tests/station-treat.test.ts",
+    apply: () =>
+      mutate(
+        TREAT,
+        "        treatBookingId: booking.id,",
+        "        bookingId: booking.id,",
+      ),
+  },
 ];
 
-const touched = [CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, MYDAY];
+const touched = [CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, MYDAY, TREAT];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));
 
