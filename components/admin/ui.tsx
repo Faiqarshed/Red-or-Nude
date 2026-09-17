@@ -85,9 +85,11 @@ const buttonVariants = {
   danger: "bg-red text-white hover:bg-red-dark",
 } as const;
 
+// Taller below `sm`, where these are thumb targets rather than mouse targets.
+// The desktop heights are the ones after the prefix, unchanged.
 const buttonSizes = {
-  sm: "h-8 px-3 text-xs",
-  md: "h-10 px-4 text-sm",
+  sm: "h-10 px-3 text-xs sm:h-8",
+  md: "h-12 px-4 text-sm sm:h-10",
 } as const;
 
 export function Button({
@@ -121,9 +123,13 @@ export function Input({
   return (
     <input
       className={cn(
-        "h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink",
+        // 16px below `sm` is not a type choice: iOS Safari zooms the whole page
+        // in on focus for anything smaller, which throws the layout sideways
+        // every time someone taps a field. Desktop keeps text-sm.
+        "h-12 w-full rounded-xl border border-black/10 bg-white px-3 text-base text-ink sm:h-10 sm:text-sm",
         "text-start outline-none transition-colors placeholder:text-ink/35",
         "focus:border-sky focus:ring-2 focus:ring-sky/20",
+        invalidRing,
         "disabled:bg-black/[0.03] disabled:text-ink/40",
         className,
       )}
@@ -132,20 +138,125 @@ export function Input({
   );
 }
 
+/**
+ * Red outline for a control marked `aria-invalid`. Driven by the attribute
+ * rather than a prop, so the same flag a screen reader hears is what paints it —
+ * and native selects and textareas can take the class too.
+ */
+export const invalidRing =
+  "aria-[invalid=true]:border-red aria-[invalid=true]:focus:border-red aria-[invalid=true]:focus:ring-red/15";
+
+/**
+ * Grows a control's *touch* area to 48px without moving a pixel of it.
+ *
+ * The panel's small round buttons are 32px because that is the right size for a
+ * cursor; a thumb needs half as much again. A transparent ::after does it
+ * without resizing anything visible, and drops away at `sm` where there is a
+ * pointer. The element needs to be a positioning context — every user here is
+ * already `relative`.
+ *
+ * Controls that are not 32px squares set their own inset; this is the common
+ * case, not the only one.
+ */
+export const touchTarget = "after:absolute after:-inset-2 after:content-[''] sm:after:hidden";
+
+/**
+ * The same for the 28px icon buttons — ten pixels of reach rather than eight.
+ *
+ * Only for a button standing on its own. Two of these side by side, as the
+ * reorder arrows are, would have overlapping hit areas and take each other's
+ * taps; those get bigger instead. See CatalogView.
+ */
+export const touchTargetSm = "after:absolute after:-inset-2.5 after:content-[''] sm:after:hidden";
+
+/**
+ * And for the 20×36px active switches, the smallest targets in the panel.
+ *
+ * They already carry `relative` for their own knob, so the ::after costs them
+ * nothing. Fourteen pixels of reach takes them to 48 tall and 64 wide.
+ */
+export const touchTargetSwitch =
+  "after:absolute after:-inset-3.5 after:content-[''] sm:after:hidden";
+
+/**
+ * The segmented tab strips — catalogue, gift cards, no-shows, bookings, my day,
+ * performance. Seven of them, each previously carrying its own copy of these
+ * classes, which is how the touch target came to be added seven times by hand.
+ *
+ * Shape only. The strips differ in container, element (button or Link) and text
+ * size, so those stay at the call site rather than becoming four props here.
+ */
+export const tabItem =
+  "min-h-[48px] rounded-lg px-3 py-1.5 text-xs font-medium transition-colors sm:min-h-0";
+
+/** Selected or not, in the one place that decides what selected looks like. */
+export const tabTone = (active: boolean) =>
+  active ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]";
+
+/**
+ * Everything a refused save is waiting on, in one box beside the Save button:
+ * the field checks (also shown under their fields, for the ones scrolled out of
+ * view), or the server's own refusal once those have passed.
+ */
+export function FormErrors({
+  errors,
+  summary,
+  server,
+}: {
+  errors: Record<string, string>;
+  summary: (n: number) => string;
+  server?: string | null;
+}) {
+  const list = Object.values(errors);
+  if (list.length === 0 && !server) return null;
+  return (
+    <div role="alert" className="rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
+      {list.length > 0 ? (
+        <>
+          <p className="font-medium">{summary(list.length)}</p>
+          <ul className="mt-1 list-disc space-y-0.5 ps-4">
+            {list.map((m) => (
+              <li key={m}>{m}</li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        server
+      )}
+    </div>
+  );
+}
+
 export function Field({
   label,
   hint,
   error,
+  counter,
   children,
 }: {
   label: string;
   hint?: string;
   error?: string;
+  /** Shows "12/30" beside the label; amber once the limit is reached. */
+  counter?: { value: number; max: number };
   children: React.ReactNode;
 }) {
   return (
     <label className="block text-start">
-      <span className="mb-1.5 block text-xs font-medium text-ink/70">{label}</span>
+      <span className="mb-1.5 flex items-baseline justify-between gap-2 text-xs font-medium text-ink/70">
+        {label}
+        {counter ? (
+          <span
+            dir="ltr"
+            className={cn(
+              "text-[11px] font-normal tabular-nums",
+              counter.value >= counter.max ? "text-[#8a5a06]" : "text-ink/35",
+            )}
+          >
+            {counter.value}/{counter.max}
+          </span>
+        ) : null}
+      </span>
       {children}
       {error ? (
         <span className="mt-1 block text-xs text-red">{error}</span>
@@ -272,11 +383,18 @@ export function StatCard({
     </>
   );
 
-  if (!href) return <Card className={cn(w.card, "text-start")}>{body}</Card>;
+  // `max-sm:h-full` on both, because the grid stretches only its own item — the
+  // Link — and the Card inside it would otherwise stop at its content. Two
+  // tiles side by side on a phone, one label wrapping to a second line, and the
+  // pair comes out at two different heights. Scoped below `sm`: the labels fit
+  // on one line at desktop widths, so nothing there moves.
+  if (!href) return <Card className={cn(w.card, "text-start max-sm:h-full")}>{body}</Card>;
 
   return (
-    <Link href={href} className="group block text-start">
-      <Card className={cn(w.card, "transition-colors group-hover:border-red/25")}>{body}</Card>
+    <Link href={href} className="group block text-start max-sm:h-full">
+      <Card className={cn(w.card, "transition-colors group-hover:border-red/25 max-sm:h-full")}>
+        {body}
+      </Card>
     </Link>
   );
 }
@@ -547,7 +665,11 @@ export function EmptyState({
   icon?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 px-6 py-14 text-center">
+    // Shallower on a phone. Fourteen units of padding above and below is a
+    // quarter of a small screen spent saying "None", and an empty card that
+    // large reads as something that failed to load rather than something with
+    // nothing in it yet.
+    <div className="flex flex-col items-center justify-center gap-2 px-6 py-10 text-center sm:py-14">
       {icon ? <span className="text-ink/20">{icon}</span> : null}
       <p className="text-sm font-medium text-ink">{title}</p>
       {body ? <p className="max-w-sm text-xs text-ink/50">{body}</p> : null}
@@ -587,10 +709,15 @@ export function DateStepper({
   };
 
   return (
-    <div className="flex items-center gap-1 rounded-xl border border-black/[0.06] bg-white p-1">
+    // Full width on a phone so the date sits between its two arrows instead of
+    // being squeezed by whatever else shares the toolbar row.
+    <div className="flex items-center gap-1 rounded-xl border border-black/[0.06] bg-white p-1 max-sm:w-full">
       <button
         onClick={() => step(-1)}
-        className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]"
+        className={cn(
+          "relative grid h-8 w-8 shrink-0 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]",
+          touchTarget,
+        )}
         aria-label={labels.prev}
       >
         <ChevronLeft className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
@@ -608,12 +735,15 @@ export function DateStepper({
           }
         }}
         aria-label={labels.date}
-        className="min-w-[130px] cursor-pointer rounded-lg bg-transparent px-2 text-center text-sm font-medium tabular-nums text-ink outline-none focus:bg-black/[0.03]"
+        className="min-w-0 flex-1 cursor-pointer rounded-lg bg-transparent px-2 text-center text-base font-medium tabular-nums text-ink outline-none focus:bg-black/[0.03] sm:min-w-[130px] sm:flex-none sm:text-sm"
         dir="ltr"
       />
       <button
         onClick={() => step(1)}
-        className="grid h-8 w-8 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]"
+        className={cn(
+          "relative grid h-8 w-8 shrink-0 place-items-center rounded-lg text-ink/50 hover:bg-black/[0.04]",
+          touchTarget,
+        )}
         aria-label={labels.next}
       >
         <ChevronRight className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
@@ -655,7 +785,7 @@ export function BranchFilter({
       value={branchId ?? ""}
       onChange={(e) => onChange(e.target.value || null)}
       aria-label={allLabel}
-      className="h-10 rounded-xl border border-black/[0.06] bg-white px-3 text-sm text-ink outline-none"
+      className="h-12 rounded-xl border border-black/[0.06] bg-white px-3 text-base text-ink outline-none sm:h-10 sm:text-sm"
     >
       {allowAll ? <option value="">{allLabel}</option> : null}
       {options.map((b) => (

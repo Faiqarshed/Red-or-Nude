@@ -248,16 +248,23 @@ Two ways one gets issued, both through the same idempotent
 - **on hire** — `saveStaff` issues one for the month the account was created in,
   wrapped so it can never fail the hire;
 - **monthly** — `GET /api/cron/staff-codes`, guarded by `CRON_SECRET` exactly
-  like the refill reminder. Not scheduled yet; add to `vercel.json` when the
-  salon wants it live:
+  like the refill reminder. Scheduled in `vercel.json` for `0 21 * * *`:
+  midnight in Riyadh, every night. Only the first night of a month does
+  anything; the rest find every code current, and a missed night is caught by
+  the next one.
 
-  ```json
-  { "crons": [{ "path": "/api/cron/staff-codes", "schedule": "0 1 1 * *" }] }
-  ```
+Months are Riyadh calendar months (`monthWindow`), so a code opens at local
+midnight on the 1st.
 
-Nothing deletes last month's code — an unused one lapses when its window closes,
-which is what "expires if unused" means, and the row stays as a record of what
-was offered.
+Renewal keeps the **same code**: her existing row gets the new month's window
+and `uses` back to 0, so "SARA" stays SARA instead of becoming SARA2, SARA3 and
+running out after ten months. Last month's bookings still point at that row
+through `promo_code_id`, which is where the record of what was used lives. Each
+renewal writes a "Renewed for the month" row to the audit log.
+
+A code a person switched off stays off when renewed (its window still moves).
+An ended month never touches the flag, so a lapsed code comes back on. Staff who
+are switched off get no renewal.
 
 The brief's "later linked to HR / government ID so it cannot be shared" is
 explicitly a later phase. Not built.

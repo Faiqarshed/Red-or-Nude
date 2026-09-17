@@ -250,6 +250,13 @@ export const addons = pgTable("addons", {
   image: text("image"),
   // The seasonal add-on opens the designs pop-up on the public site.
   isSeasonal: boolean("is_seasonal").notNull().default(false),
+  /**
+   * Offered at checkout instead of beside the services — the coffee-and-cookie
+   * upsell. Keep `duration_min` at 0 for these: they are picked after the chair
+   * has been quoted, so a duration would move `ends_at` under a booking that is
+   * already about to be held.
+   */
+  atCheckout: boolean("at_checkout").notNull().default(false),
   sort: integer("sort").notNull().default(0),
   active: boolean("active").notNull().default(true),
   ...stamps,
@@ -347,7 +354,16 @@ export const customers = pgTable(
     ...stamps,
   },
   (t) => ({
-    phoneUnique: unique("customers_phone_unique").on(t.phone),
+    /**
+     * One *guest* row per phone, so checkout recognises a returning guest.
+     * Accounts are left out on purpose: nobody proves they own a number, so a
+     * phone must never lead to an account. Otherwise signing up with, or booking
+     * as a guest under, someone else's number hands over their history and
+     * points. An account is found by its verified email alone.
+     */
+    guestPhoneUnique: uniqueIndex("customers_guest_phone_unique")
+      .on(t.phone)
+      .where(sql`${t.emailVerifiedAt} is null`),
     /**
      * Unique, but only over *verified* emails — deliberately partial.
      *
@@ -422,9 +438,10 @@ export const bookings = pgTable(
     ticketNo: text("ticket_no"),
 
 
-    // Two guests booked together share one uuid. No booking_groups table: a group
-    // holds no fact its members don't already carry, and the only query anyone
-    // runs is "the other rows with this id".
+    // Guests booked together share one uuid — up to four of them, who may sit at
+    // different branches at different hours on the one day. No booking_groups
+    // table: a group holds no fact its members don't already carry, and the only
+    // query anyone runs is "the other rows with this id".
     groupId: uuid("group_id"),
 
     /**
@@ -662,18 +679,49 @@ export const reviews = pgTable(
 
 // ------------------------------------------------------------ commerce ------
 
-export const payments = pgTable("payments", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "set null" }),
-  giftCardId: uuid("gift_card_id"),
-  provider: text("provider"), // moyasar | tap | manual
-  providerRef: text("provider_ref"),
-  method: paymentMethod("method"),
-  amountHalalas: integer("amount_halalas").notNull(),
-  status: paymentStatus("status").notNull().default("pending"),
-  raw: jsonb("raw"),
-  ...stamps,
-});
+export const payments = pgTable(
+  "payments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "set null" }),
+    giftCardId: uuid("gift_card_id"),
+    /**
+     * A membership pack sale. Plain uuid rather than a foreign key, like
+     * gift_card_id above: a receipt must outlive the thing it paid for.
+     */
+    customerPackId: uuid("customer_pack_id"),
+    provider: text("provider"), // moyasar | tap | manual
+    providerRef: text("provider_ref"),
+    method: paymentMethod("method"),
+    amountHalalas: integer("amount_halalas").notNull(),
+    status: paymentStatus("status").notNull().default("pending"),
+    raw: jsonb("raw"),
+    ...stamps,
+  },
+  (t) => ({
+    /**
+     * One live attempt per booking.
+     *
+     * confirmBookingPayment decided whether a party could be charged by reading
+     * every member's status, and then wrote — with a call to the gateway in
+     * between. Two taps arriving together both read "pending", both charged the
+     * card and both confirmed: the customer paid exactly double. A group lost
+     * every time, its transaction being slow enough for the reads to interleave;
+     * a solo booking survived on timing alone. A check that reads before it
+     * writes cannot close that. This can.
+     *
+     * The rows go in before the charge, so the loser of the race is refused
+     * here — before any money moves — rather than after.
+     *
+     * `failed` is outside the predicate on purpose: a declined card has to leave
+     * the booking payable, and the retry writes a fresh row beside the dead one.
+     * Gift card and pack sales carry no booking_id and are untouched.
+     */
+    oneLiveAttempt: uniqueIndex("payments_booking_live_unique")
+      .on(t.bookingId)
+      .where(sql`${t.bookingId} is not null and ${t.status} in ('pending', 'paid')`),
+  }),
+);
 
 export const refunds = pgTable("refunds", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -776,6 +824,138 @@ export const loyaltyTxns = pgTable(
     // The only query is "this customer's ledger". The join to bookings drives
     // through the bookings primary key, so booking_id needs no index of its own.
     byCustomer: index("loyalty_txns_customer_idx").on(t.customerId, t.createdAt),
+  }),
+);
+
+// ------------------------------------------------------- membership packs ---
+//
+// A bundle of services bought at one price and spent over three months. The
+// client's word for it is "membership", but there is no subscription behind it:
+// it is prepaid credit, and nothing recurs.
+//
+// Four tables and no wallet column, following gift_card_txns and loyalty_txns
+// above for the reason written out at loyalty_txns: what a customer has left is
+// SUM(delta), and a stored balance is a second copy of a fact that can drift
+// from the rows it was derived from.
+
+export const packs = pgTable("packs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: localized("name").notNull(),
+  description: localized("description"),
+  priceHalalas: integer("price_halalas").notNull(),
+  /**
+   * How long a purchase lasts. Three months is what the client asked for; it is
+   * a column rather than a constant so a seasonal pack can differ without a
+   * deploy, and it is snapshotted onto the purchase so changing it never moves
+   * a deadline somebody already paid for.
+   */
+  validDays: integer("valid_days").notNull().default(90),
+  image: text("image"),
+  sort: integer("sort").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+  ...stamps,
+});
+
+/**
+ * What is in a pack, and how many of each.
+ *
+ * A quantity per service rather than one pool of uses across a menu: three gel
+ * polishes and one manicure is three gel polishes and one manicure, and cannot
+ * become four gel polishes. That is the salon's decision to be able to make —
+ * the services in a pack are not interchangeable to whoever priced it.
+ */
+export const packServices = pgTable(
+  "pack_services",
+  {
+    packId: uuid("pack_id")
+      .notNull()
+      .references(() => packs.id, { onDelete: "cascade" }),
+    serviceId: uuid("service_id")
+      .notNull()
+      .references(() => services.id, { onDelete: "restrict" }),
+    quantity: integer("quantity").notNull().default(1),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.packId, t.serviceId] }) }),
+);
+
+/**
+ * One purchase. Snapshotted like gift_cards: raising a pack's price or changing
+ * what is in it must not rewrite what this customer bought.
+ *
+ * What she actually has left is not here — it is the ledger below.
+ */
+export const customerPacks = pgTable(
+  "customer_packs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    // Kept for the admin's "who bought which pack", and deliberately not read
+    // when spending: everything spending needs was snapshotted at purchase.
+    packId: uuid("pack_id").references(() => packs.id, { onDelete: "set null" }),
+    name: localized("name").notNull(),
+    priceHalalas: integer("price_halalas").notNull(),
+    purchasedAt: timestamp("purchased_at", { withTimezone: true }).defaultNow().notNull(),
+    /** The deadline, fixed at purchase. Credits are dead after it, never before. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ...stamps,
+  },
+  (t) => ({ byCustomer: index("customer_packs_customer_idx").on(t.customerId, t.expiresAt) }),
+);
+
+/**
+ * Every movement of every credit, per service.
+ *
+ * The grant is a movement too: buying a pack writes one `+quantity` row per
+ * service in it, which is how the purchase snapshots what was bought without a
+ * second table to hold the lines. Redeeming writes `-1`, cancelling in time
+ * writes `+1`, and the balance for a service is the sum of its rows.
+ */
+export const packTxns = pgTable(
+  "pack_txns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerPackId: uuid("customer_pack_id")
+      .notNull()
+      .references(() => customerPacks.id, { onDelete: "cascade" }),
+    /** Which service's credits moved. Never null — a credit is always for one. */
+    serviceId: uuid("service_id")
+      .notNull()
+      .references(() => services.id, { onDelete: "restrict" }),
+    /** +n on purchase or a return, -1 on a redemption. */
+    delta: integer("delta").notNull(),
+    bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "set null" }),
+    reason: text("reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    byPack: index("pack_txns_pack_idx").on(t.customerPackId, t.serviceId),
+    /**
+     * One redemption per booking per service. A booking is one service, so a
+     * second `-1` against it is a double spend — from a retried request or two
+     * tabs — and this is what refuses it rather than a check that can be raced.
+     */
+    oneSpendPerBooking: uniqueIndex("pack_txns_booking_unique")
+      .on(t.bookingId, t.serviceId)
+      .where(sql`${t.bookingId} is not null and ${t.delta} < 0`),
+    /**
+     * And one return per booking per service, for the same reason in reverse.
+     *
+     * returnPackCredits used to decide this by reading the ledger and looking
+     * for an existing `+1`, which is a check before a write and can be raced
+     * exactly as the spend could: two receptionists cancelling the same
+     * appointment, or one cancel button pressed twice, both read nothing and
+     * both write. The customer's own cancel route never hit it only by luck —
+     * its update is guarded on the old status, so the second tap cancels nothing
+     * and returns nothing — and the desk's cancellation has no such guard.
+     *
+     * A second `+1` is a credit she was never sold, which is the same bug as a
+     * lost credit with the sign flipped.
+     */
+    oneReturnPerBooking: uniqueIndex("pack_txns_return_unique")
+      .on(t.bookingId, t.serviceId)
+      .where(sql`${t.bookingId} is not null and ${t.delta} > 0`),
   }),
 );
 

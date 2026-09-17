@@ -114,8 +114,16 @@ async function loadContext(branchId: string, from: Date, to: Date): Promise<Cont
       .where(
         and(
           eq(bookings.branchId, branchId),
-          gte(bookings.startsAt, from),
+          // Overlapping the window, not starting inside it.
+          //
+          // `startsAt >= from` dropped an appointment that began before the
+          // window and was still running inside it — so a chair the reservation
+          // lock knows is busy read as free here, and reserveStations' comment
+          // that the two predicates must match "character for character" was
+          // quietly untrue at every day boundary. The customer was shown a slot
+          // and then refused it as `slot-taken`.
           lt(bookings.startsAt, to),
+          gt(bookings.endsAt, from),
           // Cancelled and no-show slots are free again.
           ne(bookings.status, "cancelled"),
           ne(bookings.status, "no_show"),
@@ -264,7 +272,7 @@ function computeDay(
  * `guests` is how many chairs must be free at once — 2 for a group booking, so a
  * slot with only one chair left is correctly shown as unavailable.
  *
- * When two guests have different durations, ask for the longer one: the booking
+ * When guests sharing a slot have different durations, ask for the longer one: the booking
  * then claims a strict subset of what was checked, so a slot shown as free can
  * never fail on confirm.
  *
@@ -342,6 +350,12 @@ export async function getMonthAvailability(
  * rescheduled must not see itself as the thing blocking its own move, and a
  * group being moved must not see its other half either.
  *
+ * `excludeStationIds` holds back chairs this same transaction has already
+ * promised to somebody. A party whose guests booked their own times is reserved
+ * one guest at a time, and the rows are not inserted until every guest has a
+ * chair — so the conflict scan below cannot yet see the earlier guests, and
+ * without this the same chair is handed out twice.
+ *
  * `onlyStationId` narrows the search to one chair, for the station QR add-on
  * (brief §2.7): that flow is not asking for *a* chair, it is asking whether
  * *this* chair — the one the customer is already sitting in — is still free.
@@ -350,6 +364,7 @@ export async function getMonthAvailability(
  */
 export type ReserveOptions = {
   ignoreBookingIds?: string[];
+  excludeStationIds?: string[];
   onlyStationId?: string;
 };
 
@@ -359,7 +374,7 @@ export async function reserveStations(
   startsAt: Date,
   endsAt: Date,
   count: number,
-  { ignoreBookingIds, onlyStationId }: ReserveOptions = {},
+  { ignoreBookingIds, excludeStationIds, onlyStationId }: ReserveOptions = {},
 ): Promise<string[] | null> {
   const stationRows = await tx
     .select({ id: stations.id })
@@ -397,6 +412,8 @@ export async function reserveStations(
       .map((b) => b.stationId)
       .filter(Boolean) as string[],
   );
+
+  for (const id of excludeStationIds ?? []) taken.add(id);
 
   const free = stationRows.filter((s) => !taken.has(s.id)).map((s) => s.id);
   return free.length >= count ? free.slice(0, count) : null;

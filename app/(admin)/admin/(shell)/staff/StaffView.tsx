@@ -3,9 +3,36 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { IdCard, Plus, Trash2 } from "lucide-react";
-import { Badge, Button, Card, EmptyState, Field, Input, PageHeader } from "@/components/admin/ui";
-import { Drawer } from "@/components/admin/overlays";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  FormErrors,
+  Input,
+  invalidRing,
+  PageHeader,
+  touchTargetSm,
+  touchTargetSwitch,
+} from "@/components/admin/ui";
+import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import TextField from "@/components/admin/TextField";
+import { dayRange, formatDateKey, riyadhDateKey } from "@/lib/time";
+import {
+  checkStaff,
+  checkTimeOff,
+  collect,
+  EMAIL_MAX,
+  EMAIL_TEXT,
+  focusFirstInvalid,
+  hasErrors,
+  PASSWORD_MAX,
+  PERSON_NAME_MAX,
+  PERSON_TEXT,
+  typedPhone,
+} from "@/lib/admin/validate";
 import { mustHaveBranch, ROLE_LABELS } from "@/lib/auth/rbac";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
@@ -51,6 +78,7 @@ export default function StaffView({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
+  const [doomed, setDoomed] = useState<StaffRow | null>(null);
 
   const messageFor = (code: string) =>
     code === "cannot-escalate"
@@ -63,6 +91,8 @@ export default function StaffView({
             ? t.staff.passwordRequired
             : code === "bad-range"
               ? t.staff.badRange
+              : code === "past-date"
+                ? t.staff.dayOffPast(t.staff.from, riyadhDateKey())
               : code === "branch-required"
                 ? t.staff.branchRequired
                 : t.common.error;
@@ -142,6 +172,7 @@ export default function StaffView({
                     onClick={() => run(() => setStaffActive(s.id, !s.active))}
                     className={cn(
                       "relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-30",
+                      touchTargetSwitch,
                       s.active ? "bg-[#1f7a4d]" : "bg-black/15",
                     )}
                   >
@@ -155,10 +186,8 @@ export default function StaffView({
 
                   <button
                     disabled={locked || s.id === currentUserId}
-                    onClick={() => {
-                      if (window.confirm(t.staff.deleteConfirm)) run(() => deleteStaff(s.id));
-                    }}
-                    className="grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red disabled:opacity-25 disabled:hover:bg-transparent"
+                    onClick={() => setDoomed(s)}
+                    className={`relative grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red disabled:opacity-25 disabled:hover:bg-transparent ${touchTargetSm}`}
                     aria-label={t.catalog.delete}
                   >
                     <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -169,6 +198,18 @@ export default function StaffView({
           </ul>
         )}
       </Card>
+
+      <ConfirmDialog
+        open={!!doomed}
+        title={t.staff.deleteConfirm}
+        body={doomed ? `${doomed.name}, ${doomed.email}. ${t.common.cannotUndo}` : undefined}
+        cancelLabel={t.common.cancel}
+        onConfirm={() => {
+          if (doomed) run(() => deleteStaff(doomed.id));
+          setDoomed(null);
+        }}
+        onClose={() => setDoomed(null)}
+      />
 
       <StaffDrawer
         member={editing}
@@ -184,7 +225,7 @@ export default function StaffView({
           setEditing(null);
           router.refresh();
         }}
-        onError={(code) => setError(messageFor(code))}
+        messageFor={messageFor}
       />
     </>
   );
@@ -197,7 +238,7 @@ function StaffDrawer({
   currentRole,
   onClose,
   onSaved,
-  onError,
+  messageFor,
 }: {
   member: StaffRow | null;
   open: boolean;
@@ -205,7 +246,8 @@ function StaffDrawer({
   currentRole: StaffRole;
   onClose: () => void;
   onSaved: () => void;
-  onError: (code: string) => void;
+  /** Server refusal code → sentence. Shown inside the drawer, not behind it. */
+  messageFor: (code: string) => string;
 }) {
   const { t, lang } = useAdminI18n();
   const [pending, startTransition] = useTransition();
@@ -218,6 +260,8 @@ function StaffDrawer({
   const [branchId, setBranchId] = useState("");
   const [password, setPassword] = useState("");
   const [active, setActive] = useState(true);
+  const [tried, setTried] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const key = member?.id ?? "new";
   if (open && loadedKey !== key) {
@@ -229,6 +273,8 @@ function StaffDrawer({
     setBranchId(member?.branchId ?? "");
     setPassword("");
     setActive(member?.active ?? true);
+    setTried(false);
+    setError(null);
   }
   if (!open && loadedKey !== null) setLoadedKey(null);
 
@@ -242,6 +288,31 @@ function StaffDrawer({
   // Same rule the server refuses on — see mustHaveBranch.
   const needsBranch = mustHaveBranch(role);
 
+  const check = () => ({
+    ...checkStaff(t, { name, email, phone, password, isNew: !member }),
+    ...collect({ branchId: needsBranch && !branchId && t.staff.branchRequired }),
+  });
+  const errors = tried ? check() : {};
+
+  const submit = () =>
+    startTransition(async () => {
+      setError(null);
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
+      const res = await saveStaff({
+        id: member?.id,
+        name: name.trim(),
+        email: email.trim(),
+        phone,
+        role,
+        branchId: branchId || null,
+        password: password || "",
+        active,
+      });
+      if (res.ok) onSaved();
+      else setError(messageFor(res.error));
+    });
+
   return (
     <Drawer
       open
@@ -252,48 +323,41 @@ function StaffDrawer({
           <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
             {t.common.cancel}
           </Button>
-          <Button
-            size="sm"
-            disabled={pending || !name.trim() || !email.trim() || (needsBranch && !branchId)}
-            onClick={() =>
-              startTransition(async () => {
-                const res = await saveStaff({
-                  id: member?.id,
-                  name,
-                  email,
-                  phone,
-                  role,
-                  branchId: branchId || null,
-                  password: password || "",
-                  active,
-                });
-                if (res.ok) onSaved();
-                else onError(res.error);
-              })
-            }
-          >
+          <Button size="sm" disabled={pending} onClick={submit}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>
       }
     >
       <div className="space-y-5">
-        <Field label={t.staff.name}>
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
+        <TextField
+          label={t.staff.name}
+          {...PERSON_TEXT}
+          max={PERSON_NAME_MAX}
+          error={errors.name}
+          value={name}
+          onChange={setName}
+        />
 
-        <Field label={t.staff.email}>
+        <TextField
+          label={t.staff.email}
+          {...EMAIL_TEXT}
+          max={EMAIL_MAX}
+          error={errors.email}
+          value={email}
+          onChange={setEmail}
+        />
+
+        <Field label={t.staff.phone} error={errors.phone}>
           <Input
-            type="email"
+            inputMode="tel"
             dir="ltr"
-            className="text-left"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            className="text-left tabular-nums"
+            placeholder="05XXXXXXXX"
+            aria-invalid={!!errors.phone}
+            value={phone}
+            onChange={(e) => setPhone(typedPhone(e.target.value))}
           />
-        </Field>
-
-        <Field label={t.staff.phone}>
-          <Input dir="ltr" className="text-left" value={phone} onChange={(e) => setPhone(e.target.value)} />
         </Field>
 
         <div className="grid gap-3 sm:grid-cols-2">
@@ -311,11 +375,15 @@ function StaffDrawer({
             </select>
           </Field>
 
-          <Field label={t.staff.branch}>
+          <Field label={t.staff.branch} error={errors.branchId}>
             <select
               value={branchId}
+              aria-invalid={!!errors.branchId}
               onChange={(e) => setBranchId(e.target.value)}
-              className="h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink outline-none focus:border-sky"
+              className={cn(
+                "h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink outline-none focus:border-sky",
+                invalidRing,
+              )}
             >
               <option value="" disabled={needsBranch}>
                 {needsBranch ? t.staff.pickBranch : t.staff.allBranches}
@@ -331,12 +399,15 @@ function StaffDrawer({
 
         <Field
           label={t.staff.password}
-          hint={member ? t.staff.passwordHint : t.staff.passwordRequired}
+          hint={member ? t.staff.passwordHint : t.staff.passwordRule}
+          error={errors.password}
         >
           <Input
             type="password"
             dir="ltr"
             className="text-left"
+            maxLength={PASSWORD_MAX}
+            aria-invalid={!!errors.password}
             autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -355,7 +426,11 @@ function StaffDrawer({
 
         {/* Only for the people the assignment run actually deals work to.
             A receptionist's day off changes nothing any code reads. */}
-        {member && role === "technician" && <DaysOff member={member} onError={onError} />}
+        {member && role === "technician" && (
+          <DaysOff member={member} onError={(code) => setError(messageFor(code))} />
+        )}
+
+        <FormErrors errors={errors} summary={t.validation.summary} server={error} />
       </div>
     </Drawer>
   );
@@ -373,32 +448,51 @@ function StaffDrawer({
  * would be the confusing behaviour.
  */
 function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string) => void }) {
-  const { t } = useAdminI18n();
+  const { t, lang } = useAdminI18n();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [tried, setTried] = useState(false);
+
+  const today = riyadhDateKey();
+  const check = () => checkTimeOff(t, { from, to }, today, (k) => formatDateKey(k, lang));
+  const errors = tried ? check() : {};
 
   const add = () =>
     startTransition(async () => {
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
       // An empty end means a single day, which is the common case — typing the
       // same date twice to book one day off is a small daily annoyance.
       const res = await addTimeOff({ staffId: member.id, startsOn: from, endsOn: to || from });
       if (!res.ok) return onError(res.error);
       setFrom("");
       setTo("");
+      setTried(false);
       router.refresh();
     });
 
-  const drop = (id: string) =>
+  const [doomed, setDoomed] = useState<TimeOffRow | null>(null);
+  const drop = () =>
     startTransition(async () => {
-      const res = await removeTimeOff(id);
+      if (!doomed) return;
+      const res = await removeTimeOff(doomed.id);
+      setDoomed(null);
       if (!res.ok) return onError(res.error);
       router.refresh();
     });
 
   return (
     <div className="border-t border-black/[0.06] pt-5">
+      <ConfirmDialog
+        open={!!doomed}
+        title={t.common.deleteNamed(doomed ? dayRange(doomed.startsOn, doomed.endsOn) : "")}
+        body={t.common.dayOffDeleteBody}
+        pending={pending}
+        onClose={() => setDoomed(null)}
+        onConfirm={drop}
+      />
       <p className="text-sm font-semibold text-ink">{t.staff.daysOff}</p>
       <p className="mt-1 text-xs text-ink/50">{t.staff.daysOffHint}</p>
 
@@ -416,7 +510,7 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
               </span>
               <button
                 type="button"
-                onClick={() => drop(r.id)}
+                onClick={() => setDoomed(r)}
                 disabled={pending}
                 className="text-ink/40 transition-colors hover:text-red disabled:opacity-40"
                 aria-label={t.staff.removeDayOff}
@@ -428,23 +522,42 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
         </ul>
       )}
 
-      <div className="mt-3 flex items-end gap-2">
-        <Field label={t.staff.from}>
-          <Input type="date" dir="ltr" value={from} onChange={(e) => setFrom(e.target.value)} />
-        </Field>
-        <Field label={t.staff.to}>
+      {/* Two native date inputs and a button will not share one row inside a
+          448px drawer: the inputs have a wide intrinsic size and the button,
+          last and shrinkable, is the one that gives — down to its min-content
+          width, which broke "Add days off" across three lines. The dates keep
+          the row; the button takes the one below and the full width of it. */}
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <Field label={t.staff.from} error={errors.from}>
           <Input
             type="date"
             dir="ltr"
-            min={from}
+            min={today}
+            aria-invalid={!!errors.from}
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+          />
+        </Field>
+        <Field label={t.staff.to} error={errors.to}>
+          <Input
+            type="date"
+            dir="ltr"
+            aria-invalid={!!errors.to}
+            min={from || today}
             value={to}
             onChange={(e) => setTo(e.target.value)}
           />
         </Field>
-        <Button size="sm" variant="secondary" disabled={pending || !from} onClick={add}>
-          {t.staff.addDayOff}
-        </Button>
       </div>
+      <Button
+        size="sm"
+        variant="secondary"
+        className="mt-2 w-full"
+        disabled={pending}
+        onClick={add}
+      >
+        {t.staff.addDayOff}
+      </Button>
     </div>
   );
 }

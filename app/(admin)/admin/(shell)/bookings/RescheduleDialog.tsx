@@ -146,7 +146,7 @@ export default function RescheduleDialog({
         // times don't jump under the cursor as they arrive.
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
           {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="h-11 animate-pulse rounded-xl bg-black/[0.05]" />
+            <div key={i} className="h-12 animate-pulse rounded-xl bg-black/[0.05] sm:h-11" />
           ))}
         </div>
       ) : free.length === 0 ? (
@@ -161,7 +161,7 @@ export default function RescheduleDialog({
               variant="secondary"
               disabled={saving !== null}
               onClick={() => void move(s.startsAt)}
-              className="h-11 tabular-nums"
+              className="h-12 tabular-nums sm:h-11"
             >
               <span dir="ltr">{s.time}</span>
             </Button>

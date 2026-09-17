@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
-import BookingCard, { RefillDialog } from "@/components/booking/BookingCard";
+import BookingCard, { RefillDialog, partyOf } from "@/components/booking/BookingCard";
 import { useI18n } from "@/lib/i18n";
 import type { BookingSummary } from "@/lib/booking";
 
@@ -144,6 +144,7 @@ export default function MyBookingsView() {
               <BookingCard
                 key={r.code}
                 row={r}
+                party={partyOf(rows, r)}
                 lang={lang}
                 onOpenRefill={() => setVerifying(r.code)}
                 // Re-runs the same lookup rather than patching the row in place:

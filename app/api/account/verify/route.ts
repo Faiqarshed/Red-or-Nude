@@ -16,6 +16,7 @@
 import { NextResponse } from "next/server";
 import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
+import { emailField } from "@/lib/account/fields";
 import { db } from "@/lib/db";
 import { customers } from "@/lib/db/schema";
 import { OTP_LENGTH, emailSubject, verifyOtp } from "@/lib/otp";
@@ -25,7 +26,7 @@ import { clientIp, throttled } from "@/lib/throttle";
 export const dynamic = "force-dynamic";
 
 const body = z.object({
-  email: z.string().trim().email().max(200),
+  email: emailField,
   code: z.string().trim().length(OTP_LENGTH),
 });
 

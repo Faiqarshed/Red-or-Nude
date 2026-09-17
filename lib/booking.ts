@@ -13,8 +13,63 @@
 import type { Content } from "./dictionary";
 import type { bookingStatus } from "@/lib/db/schema";
 import type { Localized } from "@/lib/localized";
+import { riyadhDateKey } from "@/lib/time";
 
 type DateStrings = Content["date"];
+
+/** An hour another guest of the same party has already taken at one branch. */
+export type PartyHold = { startsAt: string; durationMin: number };
+
+/** What subtractPartyHolds needs of a slot. /api/availability returns all four. */
+export type HoldableSlot = {
+  startsAt: string;
+  available: boolean;
+  blockedBy: "closed" | "past" | "full" | "too-soon" | null;
+  /** Chairs free for the whole duration. What the holds are subtracted from. */
+  freeCount: number;
+};
+
+/**
+ * Strike out the hours this guest's own friends have already filled.
+ *
+ * A group is one bill but not one row: each guest picks her own branch and her
+ * own hour, and **none of it is written down until somebody pays**. So the
+ * server answering one guest's availability question cannot see the other three
+ * standing next to her. It says the branch's last chair is free — truthfully —
+ * and says the same to all four. They each pick it, and createBookings then
+ * refuses the whole party at the moment of payment, which is the worst possible
+ * place to find out.
+ *
+ * The screen is the only place that knows the party exists, so the screen is
+ * where the subtraction has to happen.
+ *
+ * Only *overlapping* holds count against her. A friend booked at 11:00 is not
+ * competing for a 14:00 chair, and the freedom to spread a party across the day
+ * is the whole point of the group page — a blunter rule that counted every
+ * friend on the day would hide hours that are genuinely bookable.
+ *
+ * Marked `full` rather than filtered out: a struck-through hour tells her it is
+ * taken, and a missing one just looks like the salon closes early.
+ */
+export function subtractPartyHolds<T extends HoldableSlot>(
+  slots: T[],
+  durationMin: number,
+  partyHolds: PartyHold[],
+): T[] {
+  if (partyHolds.length === 0) return slots;
+  return slots.map((s) => {
+    if (!s.available) return s;
+    const start = Date.parse(s.startsAt);
+    const end = start + durationMin * 60_000;
+    const taken = partyHolds.filter((h) => {
+      const from = Date.parse(h.startsAt);
+      return start < from + h.durationMin * 60_000 && from < end;
+    }).length;
+    return taken > 0 && s.freeCount - taken < 1
+      ? { ...s, available: false, blockedBy: "full" as const }
+      : s;
+  });
+}
 
 /** One guest's choices. A solo booking is simply a members array of length 1. */
 export type MemberSelection = {
@@ -34,16 +89,68 @@ export type MemberSelection = {
 
   /** SAR, before any group discount — shown as this guest's own line. */
   price: number;
+  /**
+   * How long her chair is needed, as it was when her time was picked. Kept so a
+   * return from checkout can tell the salon changed a length (or retired an
+   * add-on) since, and ask her to pick again rather than keep a stale time.
+   */
+  durationMin?: number;
+
+  /**
+   * Where and when this guest sits, when it is not where and when the party
+   * does. Null means "the party's", which is every solo booking and every group
+   * that chose one branch and one slot together.
+   */
+  branchId?: string | null;
+  startsAt?: string | null;
+  /**
+   * The pack purchase paying for this guest's service line, if she chose to
+   * spend one. Display-only in the sense that matters: the server re-reads her
+   * ledger and decides for itself whether a credit exists.
+   */
+  customerPackId?: string | null;
+  /**
+   * What that credit took off, and which membership it came from.
+   *
+   * `price` above already has it deducted, which is what the server is asked to
+   * charge — but a number that arrives pre-reduced cannot be shown as a
+   * reduction. Without these the checkout lists a service and a total of zero
+   * with nothing joining them, and the customer is left to guess that the
+   * membership she bought is what happened. Every other thing that lowers a
+   * bill — the group discount, a promo code, a loyalty rung — gets its own
+   * line; this is how the credit gets one too.
+   *
+   * Display only. The server re-reads her ledger and prices it again.
+   */
+  creditSar?: number | null;
+  packName?: string | null;
+  /** Her own labels, captured in the language she booked in. */
+  branch?: string | null;
+  dateLabel?: string | null;
+  timeLabel?: string | null;
 };
 
 export type BookingSelection = {
+  /** The party's branch and start. A member may hold her own of either. */
   branchId: string | null;
-  startsAt: string | null; // ISO UTC — shared by every member
+  startsAt: string | null; // ISO UTC
   members: MemberSelection[];
 
   branch: string | null;
   dateLabel: string | null;
   timeLabel: string | null;
+
+  /**
+   * The upsells offered on the payment page — the coffee and cookie. What is on
+   * offer, not what was taken: the payment page is a client component with no
+   * server shell, so the catalogue reaches it through here rather than through a
+   * new API route. Absent on the station-QR and gift-card flows, which simply
+   * never offer it.
+   *
+   * The name stays bilingual, unlike the display labels above: this one is
+   * rendered on the payment page, where the customer can still toggle language.
+   */
+  checkoutAddons?: { id: string; name: Localized; price: number; img: string | null }[];
 
   /** SAR before the group discount. */
   grossTotal: number;
@@ -102,6 +209,125 @@ export function loadBooking(): BookingSelection | null {
 export function clearBooking() {
   if (typeof window === "undefined") return;
   sessionStorage.removeItem(KEY);
+  sessionStorage.removeItem(CHECKOUT_KEY);
+  saveHeld(null);
+}
+
+/**
+ * What she chose on the payment page itself, so going back to change a service
+ * and coming forward again does not lose it. Kept apart from the selection:
+ * the booking pages rewrite that whole on every proceed, and know nothing of
+ * these.
+ */
+export type CheckoutChoices = {
+  /** `"<member index>:<add-on id>"`, as the payment page keys them. */
+  treats: string[];
+  promo: string | null;
+  redeemPoints: number | null;
+  /** The unpaid hold a declined card left behind, and whose it is. */
+  held: { code: string; email: string } | null;
+};
+
+const CHECKOUT_KEY = "ron-checkout";
+
+/**
+ * The hold lives in localStorage while everything else here stays per-tab.
+ *
+ * sessionStorage is per-tab, so two tabs each made a hold and neither could
+ * release the other's — paying in both charged her twice, and nothing catches it
+ * server-side (`payments_booking_live_unique` is keyed on a booking, and these
+ * are two). One hold per browser; the rest of the choices stay per-tab.
+ */
+const HELD_KEY = "ron-held";
+
+function saveHeld(held: CheckoutChoices["held"]) {
+  try {
+    if (held) localStorage.setItem(HELD_KEY, JSON.stringify(held));
+    else localStorage.removeItem(HELD_KEY);
+  } catch {
+    /* private mode, or storage refused: the hold expires on its own */
+  }
+}
+
+function loadHeld(): CheckoutChoices["held"] {
+  try {
+    return JSON.parse(localStorage.getItem(HELD_KEY) ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+export function saveCheckout(choices: CheckoutChoices) {
+  if (typeof window === "undefined") return;
+  const { held, ...perTab } = choices;
+  sessionStorage.setItem(CHECKOUT_KEY, JSON.stringify(perTab));
+  saveHeld(held);
+}
+
+export function loadCheckout(): CheckoutChoices | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const perTab = JSON.parse(sessionStorage.getItem(CHECKOUT_KEY) ?? "null");
+    // A hold with no choices beside it is the second tab's case, and releaseHold
+    // still has to see it.
+    const held = loadHeld();
+    return perTab || held ? { treats: [], promo: null, redeemPoints: null, ...perTab, held } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Let go of her own unpaid hold, if checkout left one. Called wherever a new
+ * one might be made — the booking pages and checkout itself — so her old hold
+ * never shows her own time as taken. Resolves once the server has answered.
+ */
+export async function releaseHold(): Promise<void> {
+  const saved = loadCheckout();
+  if (!saved?.held) return;
+  saveCheckout({ ...saved, held: null });
+  await fetch("/api/bookings/release", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(saved.held),
+  }).catch(() => {
+    /* the hold expires on its own; this only brings that forward */
+  });
+}
+
+/** Why a time restored from checkout can't be kept, or null when it still can. */
+export type HeldTimeProblem = "passed" | "changed" | "taken";
+
+/**
+ * Re-check a restored time before showing it as hers.
+ *
+ * `changed`: the appointment is not the length the time was picked for — the
+ * salon edited a duration or retired an add-on while she was away. `taken`: the
+ * calendar no longer offers it. Call after releaseHold, or her own hold is what
+ * makes it look taken.
+ *
+ * ponytail: checks each guest alone, not against her own party's other picks;
+ * those were valid together when chosen, and the hold re-checks all of it.
+ */
+export async function heldTimeProblem(
+  branchId: string,
+  startsAt: string,
+  durationMin: number,
+  checkedMin: number | undefined,
+): Promise<HeldTimeProblem | null> {
+  if (Date.parse(startsAt) <= Date.now()) return "passed";
+  if (durationMin !== checkedMin) return "changed";
+  const day = await fetch(
+    `/api/availability?branchId=${branchId}&date=${riyadhDateKey(new Date(startsAt))}&duration=${durationMin}`,
+  )
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  // Unanswered is not refused: the time stays, and the hold checks it anyway.
+  if (!day) return null;
+  const slot = (day.slots as HoldableSlot[] | undefined)?.find(
+    (s) => Date.parse(s.startsAt) === Date.parse(startsAt),
+  );
+  return slot?.available ? null : "taken";
 }
 
 // ---- display helpers --------------------------------------------------------
@@ -169,6 +395,15 @@ export type BookingSummary = {
    * to be handed.
    */
   groupSize: number;
+  /**
+   * Which party this belongs to, so a screen can put the members of one group
+   * booking side by side. Null for a solo booking.
+   *
+   * An opaque id, not a credential — nothing accepts it — and it adds no one to
+   * the list: the members already come back together, on the same reference or
+   * the same account. It only says which of them belong to each other.
+   */
+  groupId: string | null;
   startsAt: string;
   status: (typeof bookingStatus.enumValues)[number];
   ticketNo: string | null;

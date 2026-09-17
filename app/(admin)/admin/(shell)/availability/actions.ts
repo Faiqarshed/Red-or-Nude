@@ -7,6 +7,9 @@ import { db } from "@/lib/db";
 import { branchHours, closures, stations } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
+import { adminStrings } from "@/lib/admin/strings";
+import { checkChairLabel, checkClosure, CLOSURE_LIMITS, hasErrors } from "@/lib/admin/validate";
+import { closureDays, dayRange, riyadhDateKey } from "@/lib/time";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
@@ -63,15 +66,23 @@ export async function saveBranchHours(input: z.input<typeof hoursSchema>): Promi
 
 export async function addStation(branchId: string, label: string): Promise<Result> {
   const actor = await requireCan("availability.manage");
-  const clean = label.trim().slice(0, 40);
-  if (!clean) return { ok: false, error: "invalid" };
+  const clean = label.trim();
+  if (!z.string().uuid().safeParse(branchId).success) return { ok: false, error: "invalid" };
+
+  const taken = await db
+    .select({ label: stations.label })
+    .from(stations)
+    .where(eq(stations.branchId, branchId));
+  if (checkChairLabel(adminStrings.en, clean, taken.map((s) => s.label))) {
+    return { ok: false, error: "invalid-station" };
+  }
 
   const [row] = await db
     .insert(stations)
     .values({ branchId, label: clean, sort: 99 })
     .returning({ id: stations.id });
 
-  await recordAudit(actor, { action: "create", entity: "stations", entityId: row.id });
+  await recordAudit(actor, { action: "create", entity: "stations", entityId: row.id, label: clean });
   revalidate();
   return { ok: true };
 }
@@ -91,14 +102,15 @@ export async function setStationActive(id: string, active: boolean): Promise<Res
 
 export async function deleteStation(id: string): Promise<Result> {
   const actor = await requireCan("availability.manage");
+  let gone: { label: string } | undefined;
   try {
-    await db.delete(stations).where(eq(stations.id, id));
+    [gone] = await db.delete(stations).where(eq(stations.id, id)).returning({ label: stations.label });
   } catch {
     // Bookings reference stations with onDelete: set null, so this normally
     // succeeds; if a constraint ever blocks it, deactivating is the fallback.
     return { ok: false, error: "in-use" };
   }
-  await recordAudit(actor, { action: "delete", entity: "stations", entityId: id });
+  await recordAudit(actor, { action: "delete", entity: "stations", entityId: id, label: gone?.label });
   revalidate();
   return { ok: true };
 }
@@ -107,8 +119,8 @@ const closureSchema = z.object({
   branchId: z.string().uuid().nullable(),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  reasonAr: z.string().max(120).optional(),
-  reasonEn: z.string().max(120).optional(),
+  reasonAr: z.string().trim().max(CLOSURE_LIMITS.reasonMax).optional(),
+  reasonEn: z.string().trim().max(CLOSURE_LIMITS.reasonMax).optional(),
 });
 
 export async function addClosure(input: z.input<typeof closureSchema>): Promise<Result> {
@@ -117,6 +129,9 @@ export async function addClosure(input: z.input<typeof closureSchema>): Promise<
   if (!parsed.success) return { ok: false, error: "invalid" };
   const d = parsed.data;
   if (d.to < d.from) return { ok: false, error: "to-before-from" };
+  // Date window, length and reason — the same check the form ran.
+  const bad = checkClosure(adminStrings.en, { from: d.from, to: d.to, reason: d.reasonAr ?? "" }, riyadhDateKey());
+  if (hasErrors(bad)) return { ok: false, error: "invalid-closure" };
 
   // Riyadh is UTC+3 with no DST; a closure covers whole local days.
   const startsAt = new Date(`${d.from}T00:00:00+03:00`);
@@ -133,15 +148,28 @@ export async function addClosure(input: z.input<typeof closureSchema>): Promise<
     })
     .returning({ id: closures.id });
 
-  await recordAudit(actor, { action: "create", entity: "closures", entityId: row.id });
+  await recordAudit(actor, {
+    action: "create",
+    entity: "closures",
+    entityId: row.id,
+    label: dayRange(d.from, d.to),
+    diff: { reason: { from: null, to: d.reasonAr ?? null } },
+  });
   revalidate();
   return { ok: true };
 }
 
 export async function deleteClosure(id: string): Promise<Result> {
   const actor = await requireCan("availability.manage");
-  await db.delete(closures).where(eq(closures.id, id));
-  await recordAudit(actor, { action: "delete", entity: "closures", entityId: id });
+  const [gone] = await db.delete(closures).where(eq(closures.id, id)).returning();
+  const days = gone && closureDays(gone.startsAt, gone.endsAt);
+  await recordAudit(actor, {
+    action: "delete",
+    entity: "closures",
+    entityId: id,
+    label: days && dayRange(days.from, days.to),
+    diff: gone?.reason?.ar ? { reason: { from: gone.reason.ar, to: null } } : undefined,
+  });
   revalidate();
   return { ok: true };
 }

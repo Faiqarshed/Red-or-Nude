@@ -19,14 +19,15 @@
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { emailSubject, issueOtp, maskEmail } from "@/lib/otp";
+import { emailField } from "@/lib/account/fields";
+import { ACCOUNT_OTP_TTL_MS, emailSubject, issueOtp, maskEmail } from "@/lib/otp";
 import { sendOtpEmail } from "@/lib/otp-email";
 import { clientIp, throttled } from "@/lib/throttle";
 
 export const dynamic = "force-dynamic";
 
 const body = z.object({
-  email: z.string().trim().email().max(200),
+  email: emailField,
   lang: z.enum(["ar", "en"]).optional(),
 });
 
@@ -55,11 +56,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ sent: true, sentTo: maskEmail(email), throttled: true });
   }
 
-  const code = await issueOtp(emailSubject(email));
+  const code = await issueOtp(emailSubject(email), ACCOUNT_OTP_TTL_MS);
   const mail = await sendOtpEmail({
     to: email,
     code,
     lang: parsed.data.lang ?? "ar",
+    ttlMs: ACCOUNT_OTP_TTL_MS,
   });
 
   if (!mail.ok) {

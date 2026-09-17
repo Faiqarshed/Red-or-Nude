@@ -3,6 +3,7 @@
 import { Star } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Badge, BranchFilter, Card, EmptyState, PageHeader, StatCard, scoreTone } from "@/components/admin/ui";
+import { AdminTable } from "@/components/admin/Table";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { formatDateTime } from "@/lib/time";
@@ -87,56 +88,55 @@ export default function ReviewsView({
             icon={<Star className="h-8 w-8" strokeWidth={1.25} />}
           />
         ) : (
-          // Tables can exceed the viewport in either direction — scroll the
-          // container, never the page body.
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[840px] border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                  {[r.when, r.service, r.technician, r.serviceScore, r.techScore, r.comment].map(
-                    (h) => (
-                      <th
-                        key={h}
-                        className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45"
-                      >
-                        {h}
-                      </th>
-                    ),
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={row.id}
-                    className="border-b border-black/[0.04] last:border-0 hover:bg-black/[0.015]"
-                  >
-                    <td className="whitespace-nowrap px-4 py-3 text-start text-xs tabular-nums text-ink/60">
-                      {formatDateTime(new Date(row.startsAt), lang)}
-                      <span className="block text-[11px] text-ink/35" dir="ltr">
-                        {row.bookingCode}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-start text-ink">
-                      {pick(row.serviceName, lang) || "—"}
-                    </td>
-                    <td className="px-4 py-3 text-start text-ink/70">
-                      {row.technicianName ?? <span className="text-ink/30">—</span>}
-                    </td>
-                    <td className="px-4 py-3 text-start">
-                      <Score value={row.serviceRating} pending={r.pending} />
-                    </td>
-                    <td className="px-4 py-3 text-start">
-                      <Score value={row.techRating} pending={r.skipped} />
-                    </td>
-                    <td className="max-w-[280px] px-4 py-3 text-start text-xs text-ink/60">
-                      {row.comment ?? <span className="text-ink/30">{t.common.none}</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <AdminTable
+            rows={rows}
+            rowKey={(row) => row.id}
+            minWidth="min-w-[840px]"
+            columns={[
+              {
+                key: "when",
+                header: r.when,
+                primary: true,
+                className: "whitespace-nowrap text-xs tabular-nums text-ink/60",
+                cell: (row) => (
+                  <>
+                    {formatDateTime(new Date(row.startsAt), lang)}
+                    <span className="block text-[11px] text-ink/35" dir="ltr">
+                      {row.bookingCode}
+                    </span>
+                  </>
+                ),
+              },
+              {
+                key: "service",
+                header: r.service,
+                className: "text-ink",
+                cell: (row) => pick(row.serviceName, lang) || "—",
+              },
+              {
+                key: "technician",
+                header: r.technician,
+                className: "text-ink/70",
+                cell: (row) => row.technicianName ?? <span className="text-ink/30">—</span>,
+              },
+              {
+                key: "serviceScore",
+                header: r.serviceScore,
+                cell: (row) => <Score value={row.serviceRating} pending={r.pending} />,
+              },
+              {
+                key: "techScore",
+                header: r.techScore,
+                cell: (row) => <Score value={row.techRating} pending={r.skipped} />,
+              },
+              {
+                key: "comment",
+                header: r.comment,
+                className: "max-w-[280px] text-xs text-ink/60",
+                cell: (row) => row.comment ?? <span className="text-ink/30">{t.common.none}</span>,
+              },
+            ]}
+          />
         )}
       </Card>
     </>

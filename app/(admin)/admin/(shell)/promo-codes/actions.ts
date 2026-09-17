@@ -61,6 +61,30 @@ export async function savePromoCode(input: PromoInput): Promise<Result> {
   // A window that closes before it opens accepts nothing — better refused here
   // than debugged later as "the code doesn't work".
   if (startsAt && endsAt && endsAt <= startsAt) return { ok: false, error: "bad-window" };
+  // Same reason as setPromoActive: a code whose end has passed stays off.
+  if (d.active && endsAt && endsAt <= new Date()) return { ok: false, error: "expired" };
+
+  // Neither date may be set in the past: a start there means nothing, and an
+  // end there makes a code that can never be used. Only refused when the date
+  // is being set; an old code that started or ran out can still be edited.
+  const now = new Date();
+  if ((startsAt && startsAt <= now) || (endsAt && endsAt <= now)) {
+    const stored = d.id
+      ? (
+          await db
+            .select({ startsAt: promoCodes.startsAt, endsAt: promoCodes.endsAt })
+            .from(promoCodes)
+            .where(eq(promoCodes.id, d.id))
+            .limit(1)
+        )[0]
+      : undefined;
+    if (startsAt && startsAt <= now && stored?.startsAt?.getTime() !== startsAt.getTime()) {
+      return { ok: false, error: "starts-past" };
+    }
+    if (endsAt && endsAt <= now && stored?.endsAt?.getTime() !== endsAt.getTime()) {
+      return { ok: false, error: "ends-past" };
+    }
+  }
 
   const values = {
     code: normalizePromoCode(d.code),
@@ -128,6 +152,12 @@ export async function savePromoCode(input: PromoInput): Promise<Result> {
  */
 export async function setPromoActive(id: string, active: boolean): Promise<Result> {
   const actor = await requireCan("marketing.manage");
+
+  const [current] = await db.select({ endsAt: promoCodes.endsAt }).from(promoCodes).where(eq(promoCodes.id, id)).limit(1);
+  if (!current) return { ok: false, error: "not-found" };
+  // An ended code switched back on would only switch itself off again. Its end
+  // date is what has to move, in the edit drawer.
+  if (active && current.endsAt && current.endsAt <= new Date()) return { ok: false, error: "expired" };
 
   const [row] = await db
     .update(promoCodes)

@@ -108,7 +108,10 @@ export function DayCounts({ rows }: { rows: FloorBooking[] }) {
   ];
 
   return (
-    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums">
+    // Always its own line on a phone. Sharing the row, it fitted beside a short
+    // name and wrapped beside a long one, so a column of otherwise identical
+    // cards came out at two different heights.
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums max-sm:w-full">
       {chips
         .filter(([, , , show]) => show)
         .map(([label, n, tone]) => (
@@ -136,10 +139,15 @@ export default function TechnicianDay({ rows, now }: { rows: FloorBooking[]; now
   }
 
   return (
-    // The row is wide and phones are not. Scrolling it inside its own box beats
-    // wrapping every cell, which turns a scannable list into paragraphs.
-    <div className="overflow-x-auto border-t border-black/[0.06]">
-      <ul className="min-w-[600px] divide-y divide-black/[0.04]">
+    // The row is 600px wide and a phone is not. It used to scroll sideways
+    // inside its own box, on the grounds that wrapping every cell turns a
+    // scannable list into paragraphs — true, but this list sits inside a card
+    // the reader has just tapped open, and sending them sideways to read what
+    // they opened is worse. Below `sm` the row becomes two lines instead: the
+    // ticket and the clock on top, the name and what she is having under it.
+    // `sm:min-w-[600px]` puts the scrolling row back for the desk.
+    <div className="border-t border-black/[0.06] sm:overflow-x-auto">
+      <ul className="divide-y divide-black/[0.04] sm:min-w-[600px]">
         {rows.map((b) => {
           // Finished is settled; running counts up off the same `now` the whole
           // screen shares, so nothing here starts its own interval.
@@ -152,14 +160,19 @@ export default function TechnicianDay({ rows, now }: { rows: FloorBooking[]; now
           const over = b.durationMin ? (tookMs ?? runningMs ?? 0) > b.durationMin * 60_000 : false;
 
           return (
-            <li key={b.id} className="flex items-center gap-3 px-4 py-2.5 text-start">
+            <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-start sm:flex-nowrap" key={b.id}>
               <span className="w-12 shrink-0 font-display text-sm font-extrabold text-red">
                 {b.ticketNo ?? "—"}
               </span>
               <span className="w-24 shrink-0 text-xs tabular-nums text-ink/50" dir="ltr">
                 {localTime(b.startsAt)}–{localTime(b.endsAt)}
               </span>
-              <span className="min-w-0 flex-1">
+              {/* Source order is the desk's order, untouched. The name simply
+                  sorts last below `sm` and takes the full width there, so the
+                  top line is ticket, clock, duration and status, and the thing
+                  the list is actually read for gets a line to itself instead of
+                  being the one thing truncated. */}
+              <span className="min-w-0 flex-1 max-sm:order-1 max-sm:w-full max-sm:flex-none">
                 <span className="block truncate text-sm text-ink">{b.customerName ?? "—"}</span>
                 <span className="block truncate text-xs text-ink/50">
                   {[pick(b.serviceName, lang), b.stationLabel].filter(Boolean).join(" · ")}
@@ -167,11 +180,9 @@ export default function TechnicianDay({ rows, now }: { rows: FloorBooking[]; now
               </span>
               {/* The number that matters once the service is over. Red when it
                   ran past the duration the service is sold as. */}
-              <span className="w-28 shrink-0 text-end text-xs tabular-nums">
+              <span className="shrink-0 text-end text-xs tabular-nums max-sm:ms-auto sm:w-28">
                 {tookMs !== null ? (
-                  <span
-                    className={cn("font-semibold", over ? "text-red" : "text-ink/60")}
-                  >
+                  <span className={cn("font-semibold", over ? "text-red" : "text-ink/60")}>
                     {t.frontDesk.took} {formatDuration(tookMs, lang)}
                   </span>
                 ) : runningMs !== null ? (

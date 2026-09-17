@@ -74,7 +74,28 @@ export function toMemberSelection(
     addons: addons.map((a) => pick(a.name, lang)),
     removal: removal ? pick(removal.name, lang) : null,
     design: g.design,
-    price: guestTotals(catalog, g).price,
+    ...guestTotals(catalog, g),
+  };
+}
+
+/**
+ * toMemberSelection backwards: a guest saved for checkout, as picker state
+ * again. Anything the catalogue no longer offers is dropped, and her service
+ * index is null if the service itself is gone.
+ */
+export function guestFromMember(
+  catalog: PublicCatalog,
+  m: MemberSelection,
+  lang: "ar" | "en",
+): GuestState {
+  const service = catalog.services.findIndex((s) => s.id === m.serviceId);
+  const design = catalog.designs.find((d) => d.id === m.designId);
+  return {
+    name: m.guestName ?? undefined,
+    service: service >= 0 ? service : null,
+    addons: m.addonIds.map((id) => catalog.addons.findIndex((a) => a.id === id)).filter((i) => i >= 0),
+    removal: catalog.removals.some((r) => r.id === m.removalTypeId) ? m.removalTypeId : null,
+    design: design ? pick(design.name, lang) : null,
   };
 }
 
@@ -247,7 +268,10 @@ export default function GuestPicker({
           onClose={() => setModal(null)}
         />
       )}
-      {modal === "designs" && (
+      {/* Waits for the add-on to actually be on: the booking page can hold a
+          change back behind a "pick your time again?" question, and the designs
+          must not open over it for an add-on she may yet decline. */}
+      {modal === "designs" && value.addons.some((i) => addons[i].id === designsFor) && (
         <DesignsModal
           designs={designs.filter((d) => d.addonId === designsFor)}
           initialDesign={value.design}

@@ -1,17 +1,22 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookings, loyaltyTxns, payments, reviews } from "@/lib/db/schema";
+import { bookings, customers, loyaltyTxns, packTxns, payments, reviews } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
+import { inBranchScope } from "@/lib/admin/branch-scope";
 import { can } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
+import { returnPackCredits } from "@/lib/packs";
 import { createBooking, rescheduleBooking as moveBooking } from "@/lib/bookings";
 import { inviteReview } from "@/lib/reviews/invite";
 import { assignIfToday, notifyTechnician, pickTechnician } from "@/lib/assign";
 import { getSettings } from "@/lib/settings";
+import { adminStrings } from "@/lib/admin/strings";
+import { CANCEL_REASON_MAX, checkEmail, checkNote, checkPersonName, NO_SHOW_NOTE_MAX } from "@/lib/admin/validate";
+import { validateSaudiMobile } from "@/lib/phone";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
@@ -37,6 +42,13 @@ export async function setBookingStatus(
 ): Promise<Result> {
   const actor = await requireCan("bookings.manage");
 
+  // Optional, but a real one when given, and never an unbounded string written
+  // straight into the row.
+  const why = reason?.trim() || undefined;
+  if (why && checkNote(adminStrings.en.validation, "Reason", why, { required: false, max: CANCEL_REASON_MAX })) {
+    return { ok: false, error: "invalid" };
+  }
+
   // The desk's two moves are the desk's: check-in is what the no-show rule
   // measures, and closing a ticket is what sends the rating invitation. Every
   // other status is a correction to the record — cancelling, marking someone
@@ -52,6 +64,9 @@ export async function setBookingStatus(
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  // A pinned role acts on their own front desk only. The lists are already
+  // filtered; this is the half that an id in a request could otherwise walk past.
+  if (!inBranchScope(actor, before.branchId)) return { ok: false, error: "wrong-branch" };
 
   // Entering a status stamps its moment (brief §3.2). Guarded on the transition
   // so re-saving the same status doesn't reset a clock the commission figures
@@ -93,10 +108,29 @@ export async function setBookingStatus(
       // Stamping it here is what stops the reminder job sending a second one.
       techNotifiedAt: entering("checked_in") ? now : before.techNotifiedAt,
       startedAt: entering("in_progress") ? now : before.startedAt,
-      cancelReason: status === "cancelled" ? (reason ?? null) : before.cancelReason,
+      cancelReason: status === "cancelled" ? (why ?? null) : before.cancelReason,
       updatedAt: now,
     })
     .where(eq(bookings.id, id));
+
+  // Unconditionally, unlike the self-service button. `cancel_cutoff_hours`
+  // governs that one because cancelling late is her choice; none of it applies
+  // when the desk cancels — technician off sick, branch shut — and she should
+  // not lose an appointment she paid for over a decision that was not hers.
+  //
+  // Not resolveNoShow, which also ends at `cancelled`: she did not come, and the
+  // credit goes the way the money goes.
+  // Never allowed to fail the cancellation, the same bargain the customer's
+  // route strikes and inviteReview below: the chair is already released, and a
+  // credit that did not come back is a support ticket, not a reason to throw
+  // away the audit row and tell the desk an appointment is still standing.
+  if (entering("cancelled")) {
+    try {
+      await returnPackCredits([id], "salon-cancelled");
+    } catch (err) {
+      console.error("[bookings] could not return pack credits", err);
+    }
+  }
 
   await recordAudit(actor, {
     action: status === "cancelled" ? "cancel" : "update",
@@ -158,6 +192,7 @@ export async function rescheduleBooking(input: {
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, parsed.data.id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  if (!inBranchScope(actor, before.branchId)) return { ok: false, error: "wrong-branch" };
 
   // Only an appointment that has not started yet.
   //
@@ -219,13 +254,17 @@ export async function resolveNoShow(input: {
   if (!parsed.success) return { ok: false, error: "invalid" };
 
   const note = parsed.data.note?.trim() || null;
+  if (note && checkNote(adminStrings.en.validation, "Note", note, { max: NO_SHOW_NOTE_MAX })) {
+    return { ok: false, error: "invalid" };
+  }
 
   const [before] = await db
-    .select({ status: bookings.status })
+    .select({ status: bookings.status, branchId: bookings.branchId })
     .from(bookings)
     .where(eq(bookings.id, parsed.data.id))
     .limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  if (!inBranchScope(actor, before.branchId)) return { ok: false, error: "wrong-branch" };
 
   // Closing the flag with a reason *is* the cancellation: she did not come, the
   // chair was given back hours ago, and leaving the row reading `no_show`
@@ -274,6 +313,7 @@ const walkInSchema = z.object({
   startsAt: z.string().datetime(),
   name: z.string().trim().max(120).optional(),
   phone: z.string().trim().min(6).max(20),
+  email: z.string().trim().optional(),
   notes: z.string().max(500).optional(),
 });
 
@@ -286,13 +326,38 @@ export async function createWalkIn(input: WalkInInput): Promise<Result & { code?
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.path.join(".") ?? "invalid" };
 
   const data = parsed.data;
+
+  // The branch to seat her at came out of the request. A pinned receptionist
+  // may only seat someone at her own front desk.
+  if (!inBranchScope(actor, data.branchId)) return { ok: false, error: "wrong-branch" };
+  // The same name and mobile rules as the drawer: a person's name if one is
+  // given, and a Saudi mobile, which is what a returning customer is matched on.
+  if (data.name && checkPersonName(adminStrings.en.validation, "Name", data.name, { required: false })) {
+    return { ok: false, error: "name" };
+  }
+  if (validateSaudiMobile(data.phone)) return { ok: false, error: "phone" };
+  const email = data.email?.toLowerCase() || null;
+  if (email && checkEmail(adminStrings.en.validation, "Email", email)) return { ok: false, error: "email" };
+
+  // An account is found by its email, never its phone (see customers_guest_phone_unique).
+  // She is standing at the desk, so the visit and its points go to her account;
+  // with no match it is a guest booking that keeps the address on file.
+  const [account] = email
+    ? await db
+        .select({ id: customers.id })
+        .from(customers)
+        .where(and(sql`lower(${customers.email}) = ${email}`, isNotNull(customers.emailVerifiedAt)))
+        .limit(1)
+    : [];
+
   const result = await createBooking({
     branchId: data.branchId,
     serviceId: data.serviceId,
     addonIds: data.addonIds,
     removalTypeId: data.removalTypeId ?? null,
     startsAt: data.startsAt,
-    customer: { name: data.name, phone: data.phone },
+    customer: { name: data.name, phone: data.phone, email },
+    customerId: account?.id,
     source: "walk_in",
     notes: data.notes,
   });
@@ -335,6 +400,7 @@ export async function rescheduleNoShow(input: {
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, parsed.data.id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  if (!inBranchScope(actor, before.branchId)) return { ok: false, error: "wrong-branch" };
   if (!before.noShowAt || before.noShowResolvedAt) {
     return { ok: false, error: "already-resolved" };
   }
@@ -410,6 +476,7 @@ export async function deleteBooking(id: string): Promise<Result> {
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  if (!inBranchScope(actor, before.branchId)) return { ok: false, error: "wrong-branch" };
 
   // The whole party, so a group is never half-deleted.
   const members = before.groupId
@@ -417,7 +484,7 @@ export async function deleteBooking(id: string): Promise<Result> {
     : [before];
   const ids = members.map((m) => m.id);
 
-  const [paid, reviewed, points] = await Promise.all([
+  const [paid, reviewed, points, credits] = await Promise.all([
     db
       .select({ id: payments.id })
       .from(payments)
@@ -429,11 +496,18 @@ export async function deleteBooking(id: string): Promise<Result> {
       .where(and(inArray(reviews.bookingId, ids), isNotNull(reviews.submittedAt)))
       .limit(1),
     db.select({ id: loyaltyTxns.id }).from(loyaltyTxns).where(inArray(loyaltyTxns.bookingId, ids)).limit(1),
+    // A spent pack credit, for exactly the reason points are refused above — it
+    // is the customer's balance, not a log beside it. And worse here than there:
+    // pack_txns.booking_id is `set null`, so the -1 would survive the delete
+    // pointing at nothing, and returnPackCredits matches by booking. The credit
+    // could then never come back to her by any path at all.
+    db.select({ id: packTxns.id }).from(packTxns).where(inArray(packTxns.bookingId, ids)).limit(1),
   ]);
 
   if (paid.length) return { ok: false, error: "has-payment" };
   if (reviewed.length) return { ok: false, error: "has-review" };
   if (points.length) return { ok: false, error: "has-points" };
+  if (credits.length) return { ok: false, error: "has-pack-credit" };
 
   for (const m of members) {
     await recordAudit(actor, {

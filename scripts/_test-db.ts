@@ -33,8 +33,11 @@ function refuse(why: string): never {
       "  Scripts under scripts/ delete whole tables to build their fixtures, so",
       "  they only ever run against a local, throwaway database.",
       "",
-      "  Set this in .env.local:",
+      "  It must be a *different* database from DATABASE_URL. Two entries in",
+      "  .env.local, two databases — the app keeps one, the scripts empty the",
+      "  other:",
       "",
+      "    DATABASE_URL=postgresql://postgres:<password>@localhost:5432/red_or_nude",
       "    TEST_DATABASE_URL=postgresql://postgres:<password>@localhost:5432/red_or_nude_test",
       "",
       "  Then create and migrate it:",
@@ -68,6 +71,28 @@ if (!["localhost", "127.0.0.1", "::1"].includes(parsed.hostname)) {
 const name = parsed.pathname.replace(/^\//, "");
 if (!name.endsWith("_test")) {
   refuse(`database "${name}" is not named *_test`);
+}
+
+// And not the one the app is running on.
+//
+// The two checks above both pass for a `*_test` database on localhost that
+// `DATABASE_URL` also points at — which is the setup a developer ends up with by
+// pointing both variables at the one database they created. Everything then
+// looks right: the name says test, the host says this machine, the gate says
+// yes, and `npm run check` deletes every booking the dev site has made.
+//
+// That is not a hypothetical. It happened here on 2026-09-11: a customer's
+// booking, made minutes earlier through the running site, was destroyed by a
+// check run that this gate had already approved. Same signature as 2026-09-01 —
+// bookings gone, `payments` rows left standing because they do not cascade.
+//
+// A throwaway database is one nothing else is using. If the app is pointed at
+// it, it is not a throwaway.
+if (process.env.DATABASE_URL && process.env.DATABASE_URL === url) {
+  refuse(
+    `TEST_DATABASE_URL is the same database the app runs on (${name}) — ` +
+      "these scripts would delete the data you are looking at in the browser",
+  );
 }
 
 // Everything downstream — lib/db, drizzle, the app's own modules — reads

@@ -9,13 +9,16 @@
 // "did they mean 05…, 5…, +9665… or 009665…" ambiguity at the source.
 //
 // **Stored form is `05XXXXXXXX`.** That is deliberate and load-bearing:
-// `customers.phone` is the unique key a returning customer is matched on, and
+// `customers.phone` is the key a returning *guest* is matched on, and
 // existing rows are in that format. Submitting +966 instead would fail to match
 // them and quietly create a second customer for the same person, splitting their
 // history. So the prefix is presentation; the wire format is unchanged.
 
 /** Shown, fixed, in the UI. Never typed and never submitted. */
 export const SAUDI_DIALLING_CODE = "+966";
+
+/** Arabic-Indic ٠-٩ as 0-9, so a number typed on an Arabic keyboard still reads. */
+export const latinDigits = (raw: string) => raw.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x660));
 
 /** Digits after the country code. 5XXXXXXXX. */
 export const NATIONAL_LENGTH = 9;
@@ -27,7 +30,7 @@ export const NATIONAL_LENGTH = 9;
  * and dashes. Trailing digits past 9 are dropped rather than silently reordered.
  */
 export function toNationalDigits(input: string): string {
-  let d = input.replace(/\D/g, "");
+  let d = latinDigits(input).replace(/\D/g, "");
   if (d.startsWith("00966")) d = d.slice(5);
   else if (d.startsWith("966")) d = d.slice(3);
   // A single leading zero is the national trunk prefix, not part of the number.

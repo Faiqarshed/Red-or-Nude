@@ -7,6 +7,7 @@ import {
   Clock,
   FileText,
   Gift,
+  Package,
   IdCard,
   Images,
   LayoutDashboard,
@@ -40,6 +41,7 @@ const ICONS: Record<string, LucideIcon> = {
   Sparkles,
   Palette,
   Gift,
+  Package,
   Images,
   Users,
   IdCard,
@@ -56,35 +58,55 @@ const ICONS: Record<string, LucideIcon> = {
   UsersRound,
 };
 
-export default function Sidebar({
+/**
+ * The brand row. Split out so the rail and the mobile drawer show the same
+ * mark; the drawer passes `action` to hang its close button off the end.
+ */
+export function SidebarBrand({
+  collapsed = false,
+  action,
+}: {
+  collapsed?: boolean;
+  action?: React.ReactNode;
+}) {
+  const { t } = useAdminI18n();
+
+  return (
+    <div className="flex h-14 shrink-0 items-center gap-2 border-b border-black/[0.06] px-4">
+      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-red-grad text-[11px] font-bold text-white">
+        R
+      </span>
+      {!collapsed && (
+        <span className="truncate font-display text-sm font-bold text-ink">{t.panel}</span>
+      )}
+      {action}
+    </div>
+  );
+}
+
+/**
+ * The nav itself, with no shell around it — the desktop rail and the mobile
+ * drawer (`MobileNav`) each wrap it in their own frame, so the two can never
+ * drift apart in what they list or which item they call active.
+ *
+ * `collapsed` is the rail's icon-only mode and is never passed by the drawer:
+ * a drawer wide enough to open is wide enough for labels.
+ */
+export function SidebarNav({
   role,
-  collapsed,
-  onToggle,
+  collapsed = false,
+  onNavigate,
 }: {
   role: StaffRole;
-  collapsed: boolean;
-  onToggle: () => void;
+  collapsed?: boolean;
+  /** Called when an item is followed — the drawer closes itself on it. */
+  onNavigate?: () => void;
 }) {
   const { t } = useAdminI18n();
   const pathname = usePathname();
 
   return (
-    <aside
-      className={cn(
-        "sticky top-0 flex h-screen shrink-0 flex-col border-e border-black/[0.06] bg-white transition-[width]",
-        collapsed ? "w-16" : "w-60",
-      )}
-    >
-      <div className="flex h-14 items-center gap-2 border-b border-black/[0.06] px-4">
-        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-red-grad text-[11px] font-bold text-white">
-          R
-        </span>
-        {!collapsed && (
-          <span className="truncate font-display text-sm font-bold text-ink">{t.panel}</span>
-        )}
-      </div>
-
-      <nav className="flex-1 overflow-y-auto px-2 py-3">
+    <nav className="flex-1 overflow-y-auto px-2 py-3">
         {NAV.map((group) => {
           // Hide a whole group when the role can't reach any item in it.
           const visible = group.items.filter((item) => !item.cap || can(role, item.cap));
@@ -118,8 +140,11 @@ export default function Sidebar({
                     </>
                   );
 
+                  // `min-h-[48px]` is for the drawer, where these are thumb
+                  // targets; the rail only ever renders at `lg`, where the
+                  // override drops it back to the mouse-sized row.
                   const base =
-                    "flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm transition-colors";
+                    "flex min-h-[48px] items-center gap-2.5 rounded-xl px-3 py-2 text-sm transition-colors lg:min-h-0";
 
                   return (
                     <li key={item.key}>
@@ -134,6 +159,7 @@ export default function Sidebar({
                       ) : (
                         <Link
                           href={item.href}
+                          onClick={onNavigate}
                           title={collapsed ? label : undefined}
                           aria-current={active ? "page" : undefined}
                           className={cn(
@@ -152,11 +178,39 @@ export default function Sidebar({
               </ul>
             </div>
           );
-        })}
-      </nav>
+      })}
+    </nav>
+  );
+}
+
+/**
+ * The desktop rail. Hidden below `lg`, where `MobileNav` takes over: a 240px
+ * column on a 375px screen is not a narrower rail, it is the whole screen.
+ */
+export default function Sidebar({
+  role,
+  collapsed,
+  onToggle,
+}: {
+  role: StaffRole;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useAdminI18n();
+
+  return (
+    <aside
+      className={cn(
+        "sticky top-0 hidden h-screen shrink-0 flex-col border-e border-black/[0.06] bg-white transition-[width] lg:flex",
+        collapsed ? "w-16" : "w-60",
+      )}
+    >
+      <SidebarBrand collapsed={collapsed} />
+      <SidebarNav role={role} collapsed={collapsed} />
 
       <button
         onClick={onToggle}
+        aria-label={collapsed ? t.topbar.expandNav : t.topbar.collapseNav}
         className="flex h-11 items-center gap-2.5 border-t border-black/[0.06] px-4 text-xs text-ink/50 transition-colors hover:bg-black/[0.03] hover:text-ink"
       >
         {/* Logical icon: the panel sits on the reading-start side in both dirs. */}

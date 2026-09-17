@@ -5,18 +5,19 @@
 // would record that an address was proved on a day it wasn't.
 
 import { NextResponse } from "next/server";
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { emailField } from "@/lib/account/fields";
 import { db } from "@/lib/db";
 import { customers } from "@/lib/db/schema";
 import { OTP_LENGTH, emailSubject, verifyOtp } from "@/lib/otp";
-import { currentCustomer } from "@/lib/account/guard";
+import { currentCustomer, emailUsedByOther } from "@/lib/account/guard";
 import { clientIp, throttled } from "@/lib/throttle";
 
 export const dynamic = "force-dynamic";
 
 const body = z.object({
-  email: z.string().trim().email().max(200),
+  email: emailField,
   code: z.string().trim().length(OTP_LENGTH),
 });
 
@@ -45,12 +46,9 @@ export async function POST(request: Request) {
 
   // Re-checked after the code, not only before it: someone else may have
   // finished claiming this address while the customer was reading their inbox.
-  const [taken] = await db
-    .select({ id: customers.id })
-    .from(customers)
-    .where(and(sql`lower(${customers.email}) = ${email}`, isNotNull(customers.emailVerifiedAt)))
-    .limit(1);
-  if (taken) return NextResponse.json({ error: "already-registered" }, { status: 409 });
+  if (await emailUsedByOther(email, customer.id)) {
+    return NextResponse.json({ error: "email-in-use" }, { status: 409 });
+  }
 
   try {
     await db
@@ -60,7 +58,7 @@ export async function POST(request: Request) {
   } catch (err) {
     // The partial unique index caught a race the check above just missed.
     console.error("[account] could not change the address", err);
-    return NextResponse.json({ error: "already-registered" }, { status: 409 });
+    return NextResponse.json({ error: "email-in-use" }, { status: 409 });
   }
 
   // The session cookie carries the customer id, not the address, so it survives

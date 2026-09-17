@@ -3,7 +3,8 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { HardDrive, ImageIcon, Loader2, Trash2, Upload } from "lucide-react";
-import { Badge, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import { Badge, Button, Card, EmptyState, PageHeader, touchTargetSm } from "@/components/admin/ui";
+import { ConfirmDialog } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { ALLOWED_TYPES, MAX_UPLOAD_BYTES, type MediaItem } from "@/lib/media";
 import { deleteMedia, uploadMedia } from "./actions";
@@ -62,13 +63,18 @@ export default function MediaView({
     });
   };
 
-  const remove = (id: string) => {
-    if (!window.confirm(t.media.deleteConfirm)) return;
-    startTransition(async () => {
-      await deleteMedia(id);
+  const [doomed, setDoomed] = useState<MediaItem | null>(null);
+  const [deleting, startDelete] = useTransition();
+
+  const remove = () =>
+    startDelete(async () => {
+      if (!doomed) return;
+      setError(null);
+      const res = await deleteMedia(doomed.id);
+      if (!res.ok) setError(t.common.error);
+      setDoomed(null);
       router.refresh();
     });
-  };
 
   return (
     <>
@@ -136,8 +142,8 @@ export default function MediaView({
                     />
                   ) : null}
                   <button
-                    onClick={() => remove(item.id)}
-                    className="absolute top-2 end-2 grid h-7 w-7 place-items-center rounded-lg bg-white/90 text-ink/50 opacity-0 shadow-sm transition-all hover:text-red group-hover:opacity-100"
+                    onClick={() => setDoomed(item)}
+                    className={`absolute top-2 end-2 grid h-7 w-7 place-items-center rounded-lg bg-white/90 text-ink/50 opacity-0 shadow-sm transition-all hover:text-red group-hover:opacity-100 ${touchTargetSm}`}
                     aria-label={t.media.deleteConfirm}
                   >
                     <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -162,6 +168,26 @@ export default function MediaView({
           </ul>
         )}
       </Card>
+
+      <ConfirmDialog
+        open={!!doomed}
+        title={t.media.deleteConfirm}
+        body={t.media.deleteBody}
+        cancelLabel={t.common.cancel}
+        pending={deleting}
+        onConfirm={remove}
+        onClose={() => setDoomed(null)}
+        preview={
+          doomed?.url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={doomed.url}
+              alt=""
+              className="mx-auto h-24 w-24 rounded-xl object-cover ring-1 ring-black/[0.06]"
+            />
+          ) : undefined
+        }
+      />
     </>
   );
 }

@@ -4,8 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { ChevronLeft, ChevronRight, UserX } from "lucide-react";
-import { Badge, BranchFilter, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import { Badge, BranchFilter, Button, Card, EmptyState, PageHeader, tabItem, tabTone} from "@/components/admin/ui";
 import { Dialog } from "@/components/admin/overlays";
+import { AdminTable } from "@/components/admin/Table";
+import TextField from "@/components/admin/TextField";
+import { checkNote, NO_SHOW_NOTE_MAX, NOTES_TEXT } from "@/lib/admin/validate";
 import RescheduleDialog from "../bookings/RescheduleDialog";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
@@ -81,16 +84,29 @@ export default function NoShowsView({
     setChosen(null);
     setMode("choose");
     setReason("");
+    setReasonTried(false);
+    setResolveError(null);
   };
 
+  const [reasonTried, setReasonTried] = useState(false);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+  const reasonError = reasonTried
+    ? checkNote(t.validation, b.noShowReasonLabel, reason, { max: NO_SHOW_NOTE_MAX })
+    : undefined;
+
   const cancelIt = () => {
-    if (!chosen || !reason.trim()) return;
+    if (!chosen) return;
+    setReasonTried(true);
+    if (checkNote(t.validation, b.noShowReasonLabel, reason, { max: NO_SHOW_NOTE_MAX })) return;
     setBusy(chosen.id);
+    setResolveError(null);
     startTransition(async () => {
-      const res = await resolveNoShow({ id: chosen.id, note: reason });
+      const res = await resolveNoShow({ id: chosen.id, note: reason.trim() });
       setBusy(null);
+      // A refusal used to close the dialog as if it had worked.
+      if (!res.ok) return setResolveError(t.common.error);
       closeResolve();
-      if (res.ok) router.refresh();
+      router.refresh();
     });
   };
 
@@ -134,8 +150,9 @@ export default function NoShowsView({
               key={k}
               href={noShowHref(k, branchId)}
               className={cn(
-                "flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                tab === k ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]",
+                tabItem,
+                "flex items-center gap-2",
+                tabTone(tab === k),
               )}
             >
               {k === "open" ? b.noShowTabOpen : b.noShowTabResolved}
@@ -163,73 +180,79 @@ export default function NoShowsView({
             icon={<UserX className="h-8 w-8" strokeWidth={1.25} />}
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] text-sm">
-              <thead>
-                <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                  {[b.date, b.customer, b.service, b.status].map((h) => (
-                    <th
-                      key={h}
-                      className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45"
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id} className="border-b border-black/[0.04] last:border-0">
-                    <td
-                      className="whitespace-nowrap px-4 py-3 align-top text-start tabular-nums text-ink"
-                      dir="ltr"
-                    >
-                      {riyadhDateKey(new Date(r.startsAt))}{" "}
-                      <span className="text-ink/50">{localTime(r.startsAt)}</span>
-                    </td>
-                    <td className="px-4 py-3 align-top text-start">
-                      <span className="block text-ink">{r.customerName || "—"}</span>
-                      <span className="block text-[11px] text-ink/45" dir="ltr">
-                        {r.customerPhone}
+          <AdminTable
+            rows={rows}
+            rowKey={(r) => r.id}
+            minWidth="min-w-[720px]"
+            rowClassName="border-b border-black/[0.04] last:border-0"
+            columns={[
+              {
+                key: "date",
+                header: b.date,
+                className: "whitespace-nowrap align-top tabular-nums text-ink",
+                dir: "ltr",
+                cell: (r) => (
+                  <>
+                    {riyadhDateKey(new Date(r.startsAt))}{" "}
+                    <span className="text-ink/50">{localTime(r.startsAt)}</span>
+                  </>
+                ),
+              },
+              {
+                key: "customer",
+                header: b.customer,
+                primary: true,
+                className: "align-top",
+                cell: (r) => (
+                  <>
+                    <span className="block text-ink">{r.customerName || "—"}</span>
+                    <span className="block text-[11px] text-ink/45" dir="ltr">
+                      {r.customerPhone}
+                    </span>
+                  </>
+                ),
+              },
+              {
+                key: "service",
+                header: b.service,
+                className: "align-top text-ink/70",
+                cell: (r) => pick(r.serviceName, lang),
+              },
+              {
+                key: "status",
+                header: b.status,
+                className: "align-top",
+                cell: (r) =>
+                  r.resolvedAt ? (
+                    <>
+                      <Badge tone="success">{b.noShowTabResolved}</Badge>
+                      {/* The reason is the point of the resolved tab: a list
+                          of green badges says nothing a count could not. */}
+                      {r.note ? (
+                        <span className="mt-1.5 block max-w-sm text-xs leading-relaxed text-ink/70">
+                          {r.note}
+                        </span>
+                      ) : null}
+                      <span className="mt-1 block text-[11px] tabular-nums text-ink/40" dir="ltr">
+                        {b.noShowResolvedOn} {riyadhDateKey(new Date(r.resolvedAt))}
                       </span>
-                    </td>
-                    <td className="px-4 py-3 align-top text-start text-ink/70">
-                      {pick(r.serviceName, lang)}
-                    </td>
-                    <td className="px-4 py-3 align-top text-start">
-                      {r.resolvedAt ? (
-                        <>
-                          <Badge tone="success">{b.noShowTabResolved}</Badge>
-                          {/* The reason is the point of the resolved tab: a list
-                              of green badges says nothing a count could not. */}
-                          {r.note ? (
-                            <span className="mt-1.5 block max-w-sm text-xs leading-relaxed text-ink/70">
-                              {r.note}
-                            </span>
-                          ) : null}
-                          <span className="mt-1 block text-[11px] tabular-nums text-ink/40" dir="ltr">
-                            {b.noShowResolvedOn} {riyadhDateKey(new Date(r.resolvedAt))}
-                          </span>
-                        </>
-                      ) : (
-                        <div className="flex items-center gap-3">
-                          <Badge tone="warning">{b.noShowTabOpen}</Badge>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => openResolve(r)}
-                            disabled={busy === r.id}
-                          >
-                            {b.noShowResolve}
-                          </Button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Badge tone="warning">{b.noShowTabOpen}</Badge>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => openResolve(r)}
+                        disabled={busy === r.id}
+                      >
+                        {b.noShowResolve}
+                      </Button>
+                    </div>
+                  ),
+              },
+            ]}
+          />
         )}
 
         {total > perPage ? (
@@ -297,25 +320,27 @@ export default function NoShowsView({
             {/* Required, not optional: the reason is the whole of what this
                 button records, and an empty one closes the flag saying nothing
                 about why the salon lost the hour. */}
-            <Button onClick={cancelIt} disabled={!reason.trim() || busy === chosen?.id}>
+            <Button onClick={cancelIt} disabled={busy === chosen?.id}>
               {b.noShowResolve}
             </Button>
           </>
         }
       >
-        <label className="block text-start">
-          <span className="mb-1.5 block text-xs font-medium text-ink/70">
-            {b.noShowReasonLabel}
-          </span>
-          <textarea
-            autoFocus
-            rows={3}
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-ink/35 focus:border-sky focus:ring-2 focus:ring-sky/20"
-          />
-        </label>
+        <TextField
+          label={b.noShowReasonLabel}
+          {...NOTES_TEXT}
+          rows={3}
+          max={NO_SHOW_NOTE_MAX}
+          error={reasonError}
+          value={reason}
+          onChange={setReason}
+        />
         <p className="mt-2 text-start text-xs text-ink/45">{b.noShowCancelHint}</p>
+        {resolveError ? (
+          <p role="alert" className="mt-3 rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
+            {resolveError}
+          </p>
+        ) : null}
       </Dialog>
 
       {/* The salon's own picker, pointed at the action that un-misses the

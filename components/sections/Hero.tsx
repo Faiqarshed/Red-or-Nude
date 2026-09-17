@@ -103,16 +103,26 @@ export default function Hero() {
         </div>
       </section>
 
-      {/* Three booking cards (Figma: 530×320, radius 36, gap 30) — below the fold */}
+      {/* The booking cards (Figma: 530×320, radius 36, gap 30) — below the fold.
+           Four now that packs are on sale: two across on a tablet, four on a wide
+           screen. Three-up was the Figma, and it left packs — the biggest thing
+           the salon has to sell — reachable only by typing the URL. */}
       <section className="mx-auto w-full max-w-page px-6 pb-16 pt-12 md:px-12 lg:px-16">
-        <div className="grid grid-cols-1 gap-[30px] md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-[30px] md:grid-cols-2 xl:grid-cols-4">
           {c.hero.cards.map((card) => (
             <Link
               key={card.title}
               href={card.href}
               // `group` so the capsule below can respond to a hover anywhere on
               // the card, not only on the capsule itself.
-              className="group relative block rounded-card bg-white px-[8.7%] py-[9%] text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] transition-shadow hover:shadow-[0_24px_60px_rgba(184,0,7,0.12)] md:aspect-[530/320]"
+              // A flex column rather than the Figma's fixed 530:320 box. The
+              // capsule used to be absolutely positioned against that box, which
+              // worked at three cards across and collided with the description at
+              // four — a narrower card wraps to more lines, and a fixed height
+              // has nowhere to put them. `mt-auto` pins the capsule to the
+              // bottom of whatever the text actually needs, and the grid row
+              // still levels every card to the tallest.
+              className="group flex flex-col rounded-card bg-white px-[8.7%] py-[9%] text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] transition-shadow hover:shadow-[0_24px_60px_rgba(184,0,7,0.12)] md:min-h-[260px]"
             >
               <p className="font-display text-[clamp(14px,1.0vw,19px)] font-light text-ink/70">
                 {card.kicker}
@@ -123,7 +133,7 @@ export default function Hero() {
               <p className="mt-[6%] font-display text-[clamp(14px,1.0vw,19px)] font-light leading-relaxed text-ink/70">
                 {card.desc}
               </p>
-              <div className="mt-6 md:absolute md:bottom-[12%] md:mt-0 md:ltr:left-[8.7%] md:rtl:right-[8.7%]">
+              <div className="mt-6 md:mt-auto md:pt-6">
                 <CardCta label={card.cta} />
               </div>
             </Link>

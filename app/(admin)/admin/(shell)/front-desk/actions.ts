@@ -11,6 +11,7 @@ import { and, eq, gte, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers, type Localized } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
+import { inBranchScope } from "@/lib/admin/branch-scope";
 import { recordAudit } from "@/lib/audit";
 import { riyadhDayRange } from "@/lib/time";
 import { getSettings } from "@/lib/settings";
@@ -52,7 +53,13 @@ export type LookupResult =
  * answers both and "not today" stays one honest message.
  */
 export async function findTicket(branchId: string, ticketNo: string): Promise<LookupResult> {
-  await requireCan("bookings.checkin");
+  const actor = await requireCan("bookings.checkin");
+
+  // The desk to search came in as an argument. A receptionist is pinned to one
+  // front desk, so hers is the only one she may look up tickets at — answered as
+  // "no such ticket" rather than "wrong branch", which is the same sentence the
+  // screen already shows and tells a caller nothing about the other branch.
+  if (!inBranchScope(actor, branchId)) return { ok: false, error: "not-found" };
 
   const code = ticketNo.trim().toUpperCase();
   if (!code) return { ok: false, error: "not-found" };
@@ -176,6 +183,7 @@ export async function assignTechnician(id: string, technicianId: string): Promis
 
   const [before] = await db.select().from(bookings).where(eq(bookings.id, id)).limit(1);
   if (!before) return { ok: false, error: "not-found" };
+  if (!inBranchScope(actor, before.branchId)) return { ok: false, error: "wrong-branch" };
   if (before.status === "no_show") return { ok: false, error: "no-show" };
   if (before.finishedAt || before.status === "completed" || before.status === "cancelled") {
     return { ok: false, error: "already-finished" };

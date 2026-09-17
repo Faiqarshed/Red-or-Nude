@@ -1,0 +1,16 @@
+-- One live payment attempt per booking. See the note on the index in
+-- lib/db/schema.ts for why a check in code could not do this.
+--
+-- This will refuse to create on a database where the bug has already charged
+-- somebody twice, because those rows are exactly what it forbids. That refusal
+-- is wanted: a duplicate here is real money taken from a real customer, and
+-- deciding what to do about it is a refund, not a migration. Find them with
+--
+--   SELECT booking_id, count(*), sum(amount_halalas)
+--   FROM payments
+--   WHERE booking_id IS NOT NULL AND status IN ('pending', 'paid')
+--   GROUP BY booking_id HAVING count(*) > 1;
+--
+-- Settle those — refund the extra charge and mark the row `failed` — and run
+-- the migration again.
+CREATE UNIQUE INDEX "payments_booking_live_unique" ON "payments" USING btree ("booking_id") WHERE "payments"."booking_id" is not null and "payments"."status" in ('pending', 'paid');

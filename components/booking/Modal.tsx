@@ -75,18 +75,30 @@ export default function Modal({
         } ${className}`}
       >
         {chrome && (
-          <div className="mb-5 flex items-center justify-between">
+          <div className="mb-5 flex items-center justify-between gap-3">
+            {/* The × keeps its 32px circle everywhere; the ::after grows the
+                *touch* area to 48px without moving a pixel of the design, so a
+                thumb aiming at the corner of a phone doesn't miss the only way
+                out. Dropped from `sm` up, where a pointer doesn't need it. */}
             <button
               type="button"
               aria-label={c.modals.close}
               onClick={onClose}
-              className="grid h-8 w-8 place-items-center rounded-full text-ink/50 transition-colors hover:bg-black/[0.05] hover:text-ink"
+              className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full text-ink/50 transition-colors after:absolute after:-inset-2 after:content-[''] hover:bg-black/[0.05] hover:text-ink sm:after:hidden"
+              /* Same idiom as the admin's `touchTarget`, written out because
+                 the public site does not import from components/admin. */
             >
               <svg viewBox="0 0 24 24" width={20} height={20} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
                 <path d="m6 6 12 12M18 6 6 18" />
               </svg>
             </button>
-            {title && <h3 className="font-display text-2xl font-extrabold text-ink">{title}</h3>}
+            {/* `min-w-0` so a long title wraps inside its share of the row
+                instead of pushing the × off the edge of a narrow screen. */}
+            {title && (
+              <h3 className="min-w-0 text-end font-display text-2xl font-extrabold leading-tight text-ink">
+                {title}
+              </h3>
+            )}
           </div>
         )}
         {children}

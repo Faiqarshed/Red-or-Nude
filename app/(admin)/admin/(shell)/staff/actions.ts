@@ -9,8 +9,13 @@ import { staff, staffTimeOff } from "@/lib/db/schema";
 import { requireCan, type SessionStaff } from "@/lib/auth/guard";
 import { mustHaveBranch } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
+import { assignDay } from "@/lib/assign";
 import type { StaffRole } from "@/lib/db/schema";
 import { issueMonthlyCode } from "@/lib/staff-codes";
+import { adminStrings } from "@/lib/admin/strings";
+import { checkStaff, hasErrors } from "@/lib/admin/validate";
+import { toStoredPhone } from "@/lib/phone";
+import { riyadhDateKey } from "@/lib/time";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
@@ -25,12 +30,12 @@ const RANK: Record<StaffRole, number> = {
 
 const saveSchema = z.object({
   id: z.string().uuid().optional(),
-  name: z.string().trim().min(1).max(120),
-  email: z.string().trim().email().max(200),
-  phone: z.string().trim().max(20).optional(),
+  name: z.string().trim(),
+  email: z.string().trim(),
+  phone: z.string().trim().optional(),
   role: z.enum(["ceo", "admin", "receptionist", "technician"]),
   branchId: z.string().uuid().nullable().optional(),
-  password: z.string().min(8).max(200).optional().or(z.literal("")),
+  password: z.string().optional(),
   active: z.boolean(),
 })
   // The drawer greys the option out; this is what enforces it. See
@@ -69,6 +74,17 @@ export async function saveStaff(input: StaffInput): Promise<Result> {
   }
   const d = parsed.data;
 
+  // Name, email, mobile and password: the same checks the drawer ran.
+  const fieldErrors = checkStaff(adminStrings.en, {
+    name: d.name,
+    email: d.email,
+    phone: d.phone ?? "",
+    password: d.password ?? "",
+    isNew: !d.id,
+  });
+  if (fieldErrors.password === adminStrings.en.staff.passwordRequired) return { ok: false, error: "password-required" };
+  if (hasErrors(fieldErrors)) return { ok: false, error: "invalid" };
+
   const existing = d.id
     ? (await db.select().from(staff).where(eq(staff.id, d.id)).limit(1))[0]
     : undefined;
@@ -87,13 +103,22 @@ export async function saveStaff(input: StaffInput): Promise<Result> {
   const values: Record<string, unknown> = {
     name: d.name,
     email: d.email.toLowerCase(),
-    phone: d.phone || null,
+    // Same 05XXXXXXXX shape as customers, whatever was typed.
+    phone: d.phone ? toStoredPhone(d.phone) : null,
     role: d.role,
     branchId: d.branchId ?? null,
     active: d.active,
     updatedAt: new Date(),
   };
   if (d.password) values.passwordHash = await hash(d.password, 10);
+
+  // Did this edit stop her being a technician on the floor she was on? Three
+  // different edits do it — a move, a switch-off, a change of role — and to her
+  // old branch they are the same fact.
+  const leftTheFloor =
+    existing?.role === "technician" &&
+    !!existing.branchId &&
+    (existing.branchId !== (d.branchId ?? null) || d.role !== "technician" || !d.active);
 
   try {
     if (d.id) {
@@ -135,6 +160,22 @@ export async function saveStaff(input: StaffInput): Promise<Result> {
     return { ok: false, error: "failed" };
   }
 
+  // Her old floor is holding bookings with her name on them. assignDay reclaims
+  // those on its own — but only when it next runs for that branch, which may be
+  // tomorrow morning, and until then they sit on nobody's day. So run it now.
+  //
+  // Deliberately after the save and deliberately swallowed: a technician's
+  // record must not fail to move because the floor could not be re-dealt.
+  if (leftTheFloor && existing?.branchId) {
+    try {
+      await assignDay(existing.branchId);
+      revalidatePath("/admin/my-day");
+      revalidatePath("/admin/front-desk");
+    } catch (err) {
+      console.error("[staff] could not re-deal the old branch", err);
+    }
+  }
+
   revalidatePath("/admin/staff");
   return { ok: true };
 }
@@ -162,6 +203,18 @@ export async function setStaffActive(id: string, active: boolean): Promise<Resul
     diff: { active: { from: !active, to: active } },
   });
 
+  // Switching a technician off leaves her holding today's bookings, exactly as
+  // moving her branch does. Same reclaim, same reason it is swallowed.
+  if (target.role === "technician" && target.branchId) {
+    try {
+      await assignDay(target.branchId);
+      revalidatePath("/admin/my-day");
+      revalidatePath("/admin/front-desk");
+    } catch (err) {
+      console.error("[staff] could not re-deal after an active change", err);
+    }
+  }
+
   revalidatePath("/admin/staff");
   return { ok: true };
 }
@@ -180,7 +233,7 @@ export async function deleteStaff(id: string): Promise<Result> {
   }
 
   await db.delete(staff).where(eq(staff.id, id));
-  await recordAudit(actor, { action: "delete", entity: "staff", entityId: id });
+  await recordAudit(actor, { action: "delete", entity: "staff", entityId: id, label: target.name });
 
   revalidatePath("/admin/staff");
   return { ok: true };
@@ -217,6 +270,9 @@ export async function addTimeOff(input: TimeOffInput): Promise<Result> {
     return { ok: false, error: bad ? "bad-range" : "invalid" };
   }
   const d = parsed.data;
+  // The same "from today onwards" the form checks. Riyadh's today, not the
+  // server's: a Vercel box in UTC is still on yesterday until 3am here.
+  if (d.startsOn < riyadhDateKey()) return { ok: false, error: "past-date" };
 
   const [target] = await db.select().from(staff).where(eq(staff.id, d.staffId)).limit(1);
   if (!target) return { ok: false, error: "not-found" };

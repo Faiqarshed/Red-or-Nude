@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { BellRing } from "lucide-react";
-import { Card, CardHeader, EmptyState, PageHeader, StatCard, Badge, Thumb } from "@/components/admin/ui";
+import { Card, CardHeader, EmptyState, PageHeader, StatCard, Badge, Thumb, tabItem } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { formatDuration, localTime } from "@/lib/time";
@@ -225,7 +225,7 @@ export default function MyDayView({
                 key={key}
                 href={`/admin?period=${key}`}
                 className={cn(
-                  "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                  tabItem,
                   period === key ? "bg-white text-ink shadow-sm" : "text-ink/55 hover:text-ink",
                 )}
               >

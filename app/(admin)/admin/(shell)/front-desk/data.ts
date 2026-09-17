@@ -10,6 +10,7 @@ import { db } from "@/lib/db";
 import {
   bookingAddons,
   bookings,
+  branches,
   customers,
   designs,
   services,
@@ -24,6 +25,7 @@ import { getSettings } from "@/lib/settings";
 import { halalasToSar } from "@/lib/money";
 import { mediaUrl } from "@/lib/storage";
 import type { BookingStatus } from "../bookings/BookingsView";
+import { partnersElsewhere, type PartnerElsewhere } from "../bookings/partners";
 
 /**
  * One of today's bookings, wide enough to be a `BookingRow`.
@@ -75,6 +77,8 @@ export type FrontDeskRow = {
   technicianName: string | null;
   /** The chosen design, else the service's own picture. May be null. */
   imageUrl: string | null;
+  /** The booking this one refills, so the drawer can tag it as a refill. */
+  refillOfCode: string | null;
 };
 
 export type TechnicianOption = {
@@ -102,6 +106,10 @@ export type FrontDeskData = {
   /** `checkin_early_min`, so the drawer can count down to the unlock. */
   checkinEarlyMin: number;
   stats: { finished: number; inService: number; waiting: number; upcoming: number };
+  /** Today's party members booked at another branch, for the drawer. */
+  partnersElsewhere: PartnerElsewhere[];
+  /** This desk's branch, to head the partners seated here. */
+  branchName: Localized | null;
 };
 
 /**
@@ -114,6 +122,8 @@ export const NO_BRANCH: FrontDeskData = {
   graceMin: 0,
   checkinEarlyMin: 0,
   stats: { finished: 0, inService: 0, waiting: 0, upcoming: 0 },
+  partnersElsewhere: [],
+  branchName: null,
 };
 
 export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
@@ -150,6 +160,9 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
         customerPhone: customers.phone,
         notes: bookings.notes,
         noShowNote: bookings.noShowNote,
+        // The original's code, for the drawer's refill tag. A subquery rather
+        // than a self-join, which would need an alias Drizzle cannot infer.
+        refillOfCode: sql<string | null>`(select p.code from bookings p where p.id = bookings.refill_of_booking_id)`,
         totalHalalas: bookings.totalHalalas,
         technicianId: bookings.technicianId,
         technicianName: staff.name,
@@ -184,6 +197,11 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
       .orderBy(asc(staff.name)),
 
     offOn(),
+  ]);
+
+  const [elsewhere, [branch]] = await Promise.all([
+    partnersElsewhere(branchId, rows),
+    db.select({ name: branches.name }).from(branches).where(eq(branches.id, branchId)).limit(1),
   ]);
 
   // One extra query rather than a join: joining add-ons would fan each booking
@@ -241,5 +259,7 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
     graceMin: settings.no_show_grace_min,
     checkinEarlyMin: settings.checkin_early_min,
     stats,
+    partnersElsewhere: elsewhere,
+    branchName: branch?.name ?? null,
   };
 }

@@ -1,9 +1,13 @@
 // Booking creation. One implementation, called by the public booking API and by
 // the admin's walk-in form, so the two can't drift on pricing or conflict rules.
 //
-// A booking for two guests is not a separate code path: it is the same function
-// with two members instead of one. Everything below — pricing, chair claiming,
-// ticket numbers — is written to handle N and called with 1 or 2.
+// A group booking is not a separate code path: it is the same function with
+// more members. Everything below — pricing, chair claiming, ticket numbers — is
+// written to handle N, and the HTTP edge decides how many N may be (four).
+//
+// A member may carry her own branch and her own start; both default to the
+// party's. What the party shares is the local day, and that is the one thing
+// enforced here rather than left to the screen.
 
 import "server-only";
 import { randomInt, randomUUID } from "node:crypto";
@@ -16,19 +20,22 @@ import {
   branches,
   customers,
   designs,
+  payments,
   removalTypes,
   services,
   staff,
+  stations,
   ticketCounters,
   type Localized,
 } from "@/lib/db/schema";
 import { reserveStations, utcToLocalDate } from "@/lib/availability";
 import { canCancel, cancelDeadline } from "@/lib/cancellation";
-import { refillDaysLeft, refillPriceHalalas, refillWindowEnd } from "@/lib/refill";
+import { refillDaysLeft, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 import { halalasToSar, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { quotePromo, type PromoRefusal } from "@/lib/promo";
 import { quoteReward, spendPoints } from "@/lib/loyalty";
+import { quotePackCredit, spendPackCredit } from "@/lib/packs";
 import type { RewardRefusal } from "@/lib/rewards";
 import { formatTicketNo } from "@/lib/tickets";
 import { assignIfToday } from "@/lib/assign";
@@ -51,11 +58,37 @@ export type BookingMember = {
   addonIds: string[];
   removalTypeId?: string | null;
   designId?: string | null;
+  /**
+   * This guest's own branch and start, when they differ from the party's.
+   *
+   * A group is four women going out together, not four women sitting in a row:
+   * the client asked for one to be able to take 11:00 at Al Urubah while
+   * another takes 14:00 across town. Both default to the party's, so a solo
+   * booking and the shape the payment page already posts are unchanged.
+   *
+   * The one thing held in common is the day — see the check in createBookings.
+   */
+  branchId?: string | null;
+  startsAt?: string | null;
+  /**
+   * Pay for this guest's service line with a credit from a membership pack she
+   * already owns (docs/SCOPE-ENHANCEMENT.md §6).
+   *
+   * The purchase, not the pack: a customer may hold two of the same pack, and
+   * the credit comes off one of them. Re-checked here against her own ledger —
+   * nothing the browser sends decides whether a credit exists.
+   *
+   * Only the service line goes to zero. Add-ons, a removal and a coffee are the
+   * same work and the same cost whether or not a pack paid for the service,
+   * exactly as they are on a refill.
+   */
+  customerPackId?: string | null;
 };
 
 export type CreateBookingsInput = {
+  /** The party's branch. A member may override it with one of their own. */
   branchId: string;
-  /** ISO UTC. Every guest in a group starts at the same moment, by definition. */
+  /** ISO UTC. The party's start; a member may override it with their own. */
   startsAt: string;
   customer: { name?: string | null; phone: string; email?: string | null; lang?: "ar" | "en" };
   source: "web" | "walk_in" | "phone";
@@ -127,8 +160,19 @@ export type CreateBookingError =
   | "blocked"
   /** The offer itself has lapsed, or was never on this booking. */
   | "refill-expired"
+  /** A real, open offer — on somebody else's booking. */
+  | "refill-not-yours"
   /** The offer is open, but the appointment chosen falls outside its window. */
   | "refill-window"
+  /** A group was posted with guests on two different days. */
+  | "different-day"
+  /** A pack credit was offered against a group booking, which is forbidden. */
+  | "pack-not-in-group"
+  /**
+   * The credit she was quoted was spent by another tab before this booking
+   * committed. `guestIndex` says whose, as with `slot-taken`.
+   */
+  | "pack-credit-gone"
   /** A discount code was given and does not apply. `promoReason` says why. */
   | "promo-invalid"
   /**
@@ -157,6 +201,13 @@ export type CreateBookingsResult =
       rewardReason?: RewardRefusal;
       /** The balance as it actually is, so the checkout can correct itself. */
       pointsBalance?: number;
+      /**
+       * Which guest the refusal is about, zero-based — set with `slot-taken`
+       * from the per-guest reservation loop. Four chairs at one branch at one
+       * hour fail far more often than two did, and "that time has gone" tells a
+       * party of four nothing they can act on: the checkout names her.
+       */
+      guestIndex?: number;
     };
 
 // ---- the original one-guest API, unchanged for existing callers -------------
@@ -172,6 +223,8 @@ export type CreateBookingInput = {
   source: "web" | "walk_in" | "phone";
   notes?: string | null;
   technicianId?: string | null;
+  /** The account to book onto, resolved by the caller. See CreateBookingsInput. */
+  customerId?: string | null;
 };
 
 export type CreateBookingResult =
@@ -184,7 +237,11 @@ export type CreateBookingResult =
  * out of a bad state is to throw.
  */
 class BookingAbort extends Error {
-  constructor(readonly reason: CreateBookingError) {
+  constructor(
+    readonly reason: CreateBookingError,
+    /** Which guest it was about, when the refusal is about one of them. */
+    readonly guestIndex?: number,
+  ) {
     super(reason);
   }
 }
@@ -233,7 +290,17 @@ type Priced = {
   durationMin: number;
   /** What the service line actually costs — reduced when this is a refill. */
   servicePriceHalalas: number;
+  /** The purchase a credit is coming from, once it has been checked. */
+  packCredit: { customerPackId: string; serviceId: string } | null;
+  /** What the discounts are worked out on. Excludes `treatHalalas`. */
   grossHalalas: number;
+  /**
+   * The checkout upsells — coffee and a cookie. Held out of the gross because
+   * they are never discounted: not by the group discount, not by a promo code,
+   * not by a loyalty rung. 10 SAR is 10 SAR, so this goes back on after the
+   * whole discount stack has run.
+   */
+  treatHalalas: number;
 };
 
 /**
@@ -241,7 +308,13 @@ type Priced = {
  * just "what is this person buying and how long does it take". Read outside the
  * transaction so the lock in reserveStations is held for as little time as possible.
  */
-async function priceMember(m: BookingMember, refillPercent = 0): Promise<Priced | null> {
+async function priceMember(
+  m: BookingMember,
+  /** The flat refill price, or null when this is an ordinary booking. */
+  refillPriceHalalas: number | null = null,
+  /** Her account, when there is one. A pack credit needs an owner to belong to. */
+  customerId: string | null = null,
+): Promise<Priced | null> {
   const [service] = await db
     .select()
     .from(services)
@@ -249,23 +322,53 @@ async function priceMember(m: BookingMember, refillPercent = 0): Promise<Priced 
     .limit(1);
   if (!service) return null;
 
-  const addonRows = m.addonIds.length
-    ? await db.select().from(addons).where(inArray(addons.id, m.addonIds))
+  // The same `active` test the service above gets, and the same refusal when it
+  // fails — a retired add-on was billable and still held the chair for it. The
+  // count is checked as well as the rows: `inArray` drops ids that do not exist
+  // without a word, and `Set` because a repeat collapses in SQL either way.
+  const wantedAddons = [...new Set(m.addonIds)];
+  const addonRows = wantedAddons.length
+    ? await db
+        .select()
+        .from(addons)
+        .where(and(inArray(addons.id, wantedAddons), eq(addons.active, true)))
     : [];
+  if (addonRows.length !== wantedAddons.length) return null;
 
   const [removal] = m.removalTypeId
-    ? await db.select().from(removalTypes).where(eq(removalTypes.id, m.removalTypeId)).limit(1)
+    ? await db
+        .select()
+        .from(removalTypes)
+        .where(and(eq(removalTypes.id, m.removalTypeId), eq(removalTypes.active, true)))
+        .limit(1)
     : [];
+  if (m.removalTypeId && !removal) return null;
 
   const [design] = m.designId
-    ? await db.select().from(designs).where(eq(designs.id, m.designId)).limit(1)
+    ? await db
+        .select()
+        .from(designs)
+        .where(and(eq(designs.id, m.designId), eq(designs.active, true)))
+        .limit(1)
     : [];
+  if (m.designId && !design) return null;
 
-  // A refill is the same service at a reduced rate. Add-ons and removal are
-  // extra work either way, so only the service line moves.
-  const servicePriceHalalas = refillPercent
-    ? refillPriceHalalas(service.priceHalalas, refillPercent)
-    : service.priceHalalas;
+  // A credit pays for the service line and nothing else. Quoted against her own
+  // ledger rather than trusted: the browser knowing about a credit is not the
+  // same as her having one, and this is the read the charge is built on.
+  //
+  // A refill priced by a credit would be two discounts on one line, so a pack
+  // wins and the refill price is simply not reached — nothing chains here.
+  const credit =
+    customerId && m.customerPackId
+      ? await quotePackCredit(customerId, m.customerPackId, m.serviceId)
+      : null;
+  const packCredit = credit?.ok ? { customerPackId: credit.customerPackId, serviceId: credit.serviceId } : null;
+
+  // A refill is the same service at a flat price, whatever the service costs.
+  // Add-ons and removal are extra work either way, so only the service line
+  // moves — a refill with a removal on it pays for the removal.
+  const servicePriceHalalas = packCredit ? 0 : (refillPriceHalalas ?? service.priceHalalas);
 
   return {
     member: m,
@@ -281,10 +384,12 @@ async function priceMember(m: BookingMember, refillPercent = 0): Promise<Priced 
       (removal?.durationMin ?? 0),
     // Catalogue prices, VAT-inclusive as shown on the site.
     servicePriceHalalas,
+    packCredit,
     grossHalalas:
       servicePriceHalalas +
-      addonRows.reduce((sum, a) => sum + a.priceHalalas, 0) +
+      addonRows.reduce((sum, a) => sum + (a.atCheckout ? 0 : a.priceHalalas), 0) +
       (removal?.priceHalalas ?? 0),
+    treatHalalas: addonRows.reduce((sum, a) => sum + (a.atCheckout ? a.priceHalalas : 0), 0),
   };
 }
 
@@ -303,9 +408,12 @@ async function loadRefillParent(code: string) {
       refillOfBookingId: bookings.refillOfBookingId,
       removalTypeId: bookings.removalTypeId,
       refillDays: services.refillDays,
+      /** Who the offer was emailed to — see the ownership check in createBookings. */
+      customerEmail: customers.email,
     })
     .from(bookings)
     .leftJoin(services, eq(services.id, bookings.serviceId))
+    .leftJoin(customers, eq(customers.id, bookings.customerId))
     .where(eq(bookings.code, code.trim().toUpperCase()))
     .limit(1);
 
@@ -473,6 +581,7 @@ export async function bookingSummaries(
       // person's name — she is a second customer with her own privacy, and the
       // one who booked already knows who she brought.
       groupSize: r.groupId ? rows.filter((x) => x.groupId === r.groupId).length : 1,
+      groupId: r.groupId,
       startsAt: r.startsAt.toISOString(),
       status: r.status,
       ticketNo: r.ticketNo,
@@ -530,7 +639,9 @@ export async function allocateTickets(
 /**
  * Release chairs held by web bookings that were never paid for.
  *
- * Runs as the first statement of every booking write. Filtering these out of the
+ * Runs before any chair is claimed, once per branch the party touches — after
+ * the station locks are taken, so the order those are acquired in stays fixed.
+ * Filtering these out of the
  * availability query alone would not be enough: `bookings_station_slot_unique`
  * knows nothing about expiry and would still reject the replacement booking. By
  * actually cancelling them, the constraint and the calendar agree by construction.
@@ -549,6 +660,52 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
   // ponytail: sweeps only when someone tries to book. A branch with no booking
   // attempts keeps stale holds visible until the next one. Add a cron only if
   // that ever becomes visible to staff.
+}
+
+/**
+ * Give back an unpaid web hold its own customer walked away from.
+ *
+ * She went back from checkout to change the booking. Left alone, the hold keeps
+ * her own chair until the window runs out, so the calendar shows the very time
+ * she had as taken and a second hold for it is refused.
+ *
+ * A code is four characters — guessable — so the email the hold was made under
+ * has to match as well. Refused while a payment for the party is in flight: that
+ * charge may still land.
+ *
+ * Cancelled as `payment-timeout`, what the sweep writes: it is the same unpaid
+ * hold, let go early, so a pack credit or points spent on it come back under the
+ * rules that already exist for that (lib/packs.ts, lib/rewards.ts).
+ */
+export async function releaseWebHold(code: string, email: string): Promise<boolean> {
+  const [anchor] = await db
+    .select({ id: bookings.id, groupId: bookings.groupId })
+    .from(bookings)
+    .innerJoin(customers, eq(customers.id, bookings.customerId))
+    .where(
+      and(
+        eq(bookings.code, code),
+        eq(bookings.status, "pending"),
+        eq(bookings.source, "web"),
+        sql`lower(${customers.email}) = ${email.trim().toLowerCase()}`,
+      ),
+    )
+    .limit(1);
+  if (!anchor) return false;
+
+  const released = await db
+    .update(bookings)
+    .set({ status: "cancelled", cancelReason: "payment-timeout", updatedAt: new Date() })
+    .where(
+      and(
+        anchor.groupId ? eq(bookings.groupId, anchor.groupId) : eq(bookings.id, anchor.id),
+        eq(bookings.status, "pending"),
+        eq(bookings.source, "web"),
+        sql`not exists (select 1 from ${payments} p where p.booking_id = ${bookings.id} and p.status = 'pending')`,
+      ),
+    )
+    .returning({ id: bookings.id });
+  return released.length > 0;
 }
 
 /**
@@ -636,7 +793,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     "vat_percent",
     "booking_hold_min",
     "group_discount_percent",
-    "refill_discount_percent",
+    "refill_price_halalas",
   ]);
 
   // Give back chairs whose customer never checked in, before we go looking for a
@@ -644,7 +801,10 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   // someone who did not turn up. Outside the transaction on purpose: it is an
   // independent state change, and it must not be rolled back if this particular
   // booking then fails to find a chair.
-  await sweepNoShows(input.branchId);
+  // Every branch the party touches, not just the party's own.
+  for (const branchId of new Set(input.members.map((m) => m.branchId ?? input.branchId))) {
+    await sweepNoShows(branchId);
+  }
 
   // A refill is checked before anything is priced: the window has to be open,
   // and it has to be the same service the customer originally had. The button
@@ -654,6 +814,25 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   if (input.refillOfCode) {
     refillParent = await loadRefillParent(input.refillOfCode);
     if (!refillParent) return { ok: false, error: "refill-expired" };
+
+    // And it has to be *hers*.
+    //
+    // The window and the service were re-decided here from the start, which
+    // stops a hand-crafted request buying a full set at half price — but not one
+    // buying *somebody else's* half-price set. POST /api/my-bookings/refill
+    // makes a guest prove the booking is hers before it will even quote the
+    // offer; nothing asked the same question on the way in, so the code alone
+    // bought the discount and that gate guarded a number rather than a price.
+    //
+    // The address, not the session: a guest legitimately holding this offer read
+    // it in that inbox, and has no account to sign into. Same credential shape
+    // as releaseWebHold. A signed-in customer passes on her account address,
+    // which is what the checkout prefills. A parent with no address on file —
+    // a walk-in — can't be refilled from the web at all, which is correct: she
+    // never had anywhere to receive the offer.
+    const owner = refillParent.customerEmail?.trim().toLowerCase();
+    if (!owner || owner !== email) return { ok: false, error: "refill-not-yours" };
+
     if (!refillDaysLeft(refillParent)) return { ok: false, error: "refill-expired" };
 
     // The *appointment* must fall inside the window, not merely the moment of
@@ -672,16 +851,53 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     }
   }
 
+  // A pack credit pays for one woman's own appointment and nothing else.
+  //
+  // Packs are sold and spent on the solo screen (docs/SCOPE-ENHANCEMENT.md §8:
+  // "a pack paying for a group booking" is not in this phase), and no screen
+  // offers a credit on a group booking. But a screen not offering something is
+  // not the same as the engine refusing it, and a request nobody's screen can
+  // produce is still a request this function has to answer.
+  //
+  // Not a race: spendPackCredit locks the purchase and recounts inside the
+  // transaction, so the second guest naming the same credit finds nothing left
+  // and the party aborts with `pack-credit-gone`. The balance cannot go
+  // negative. This is a scope line, not a safety net — refusing it up front
+  // names the reason instead of failing later with one that reads like a
+  // glitch.
+  //
+  // Refused rather than ignored, for the reason a bad promo code is: silently
+  // charging full price to someone who asked to spend a credit is the one
+  // outcome nobody would accept.
+  if (input.members.length > 1 && input.members.some((m) => m.customerPackId)) {
+    return { ok: false, error: "pack-not-in-group" };
+  }
+
+  // Where and when each guest actually sits. Falls back to the party's, so the
+  // solo path and every existing caller are untouched.
+  const day = utcToLocalDate(startsAt);
+  const placements: { branchId: string; startsAt: Date }[] = [];
+  for (const m of input.members) {
+    const at = m.startsAt ? new Date(m.startsAt) : startsAt;
+    if (Number.isNaN(at.getTime())) return { ok: false, error: "failed" };
+    // One day is the whole of what a party holds in common now. It is what
+    // makes the group discount mean something — four people out together — and
+    // it is the only thing the client asked to keep fixed.
+    if (utcToLocalDate(at) !== day) return { ok: false, error: "different-day" };
+    placements.push({ branchId: m.branchId ?? input.branchId, startsAt: at });
+  }
+
   const priced = await Promise.all(
     input.members.map((m) =>
-      priceMember(m, refillParent ? settings.refill_discount_percent : 0),
+      priceMember(m, refillParent ? settings.refill_price_halalas : null, input.customerId ?? null),
     ),
   );
   if (priced.some((p) => p === null)) return { ok: false, error: "invalid-service" };
   const guests = priced as Priced[];
 
-  // The discount only exists because two people booked together, so it applies to
-  // the combined bill and only when there is more than one of them.
+  // The discount exists because they booked together, so it applies to the
+  // combined bill and only when there is more than one of them — however the
+  // party is spread across the day.
   const isGroup = guests.length > 1;
   const split = splitGroupPrice(
     guests.map((g) => g.grossHalalas),
@@ -689,10 +905,16 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   );
 
   // Each guest keeps their own end time — one can have a 90-minute service while
-  // the other has 45. The chairs are claimed for the longest of them so nobody's
-  // chair gets taken out from under them mid-appointment.
-  const endsAtPer = guests.map((g) => new Date(startsAt.getTime() + g.durationMin * 60_000));
-  const latestEndsAt = new Date(Math.max(...endsAtPer.map((d) => d.getTime())));
+  // the other has 45, and now they need not have started together either.
+  const endsAtPer = guests.map(
+    (g, i) => new Date(placements[i].startsAt.getTime() + g.durationMin * 60_000),
+  );
+
+  /** Do two guests want a chair at the same branch at the same moment? */
+  const clash = (a: number, b: number) =>
+    placements[a].branchId === placements[b].branchId &&
+    placements[a].startsAt < endsAtPer[b] &&
+    placements[b].startsAt < endsAtPer[a];
 
   // The promo comes off last, on top of whatever the group or refill discount
   // already took — the codes are occasion offers, not alternatives to the other
@@ -758,21 +980,66 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
 
   const status = input.status ?? "confirmed";
   const groupId = isGroup ? randomUUID() : null;
-  const billTotal = afterPromo.reduce((sum, t, i) => sum + t - rewardShares[i], 0);
+  // The treats go back on last, after every discount has been taken — that is
+  // what "a coffee is 10 SAR" means. They were never in `grossHalalas`, so no
+  // discount above has seen them.
+  const billTotal = afterPromo.reduce(
+    (sum, t, i) => sum + t - rewardShares[i] + guests[i].treatHalalas,
+    0,
+  );
 
   try {
     const created = await db.transaction(async (tx) => {
-      await sweepExpiredHolds(tx, input.branchId, settings.booking_hold_min);
+      // Every branch's chairs, locked up front in one fixed order.
+      //
+      // reserveStations takes `for update` on a branch's chairs and holds it to
+      // commit. Taking them guest by guest meant two parties booking the same
+      // pair of branches in opposite orders each held what the other waited
+      // for. Postgres kills one, and a deadlock is not
+      // `bookings_station_slot_unique`, so isSlotConflict does not recognise it
+      // and the customer reads "something went wrong" instead of "that time has
+      // gone". Sorted here, so every transaction queues the same way and the
+      // per-guest locks below are already held.
+      const branchIds = [...new Set(placements.map((p) => p.branchId))].sort();
+      if (branchIds.length > 1) {
+        await tx
+          .select({ id: stations.id })
+          .from(stations)
+          .where(inArray(stations.branchId, branchIds))
+          .orderBy(asc(stations.branchId), asc(stations.id))
+          .for("update");
+      }
 
-      const stationIds = await reserveStations(
-        tx,
-        input.branchId,
-        startsAt,
-        latestEndsAt,
-        guests.length,
-        { onlyStationId: input.stationId ?? undefined },
-      );
-      if (!stationIds) throw new BookingAbort("slot-taken");
+      for (const branchId of branchIds) {
+        await sweepExpiredHolds(tx, branchId, settings.booking_hold_min);
+      }
+
+      // One guest at a time, each at her own branch and hour, rather than N
+      // chairs in one call at one place. Still all-or-nothing: the first guest
+      // who cannot be seated aborts the transaction and the party keeps nothing,
+      // which is the right behaviour for people who came out together.
+      //
+      // Chairs already promised in this transaction are held back by hand —
+      // nothing is inserted until the loop below, so the conflict scan inside
+      // reserveStations cannot see them yet.
+      const stationIds: string[] = [];
+      for (let i = 0; i < placements.length; i++) {
+        const got = await reserveStations(
+          tx,
+          placements[i].branchId,
+          placements[i].startsAt,
+          endsAtPer[i],
+          1,
+          {
+            onlyStationId: input.stationId ?? undefined,
+            excludeStationIds: stationIds.filter((_, j) => clash(i, j)),
+          },
+        );
+        // Carries `i`: the party is refused as a whole, but the checkout still
+        // has to say which of them could not be seated.
+        if (!got) throw new BookingAbort("slot-taken", i);
+        stationIds.push(got[0]);
+      }
 
       // A signed-in customer books against the row they signed in as, full stop.
       //
@@ -797,7 +1064,11 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
               lang: input.customer.lang ?? "ar",
             })
             .onConflictDoUpdate({
+              // Guest rows only (customers_guest_phone_unique): an account
+              // holder's number makes a guest row beside the account, never a
+              // booking on it, and never a change to its sign-in email.
               target: customers.phone,
+              targetWhere: sql`${customers.emailVerifiedAt} is null`,
               // Don't blank an existing name or email with an empty one from a
               // rushed form — but do record a newly supplied one: it is how a
               // returning customer gets an address on file, and it keeps the
@@ -820,10 +1091,20 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
 
       // A pending booking has not been paid for and gets no number — the ticket
       // is issued at confirmation. Walk-ins are confirmed on the spot.
-      const tickets =
-        status === "confirmed"
-          ? await allocateTickets(tx, input.branchId, utcToLocalDate(startsAt), guests.length)
-          : null;
+      //
+      // Per branch, because ticket_counters is keyed (branch_id, day): a party
+      // split across two salons takes one number from each queue rather than
+      // consecutive numbers from a queue only half of them are standing in.
+      let tickets: (string | null)[] | null = null;
+      if (status === "confirmed") {
+        tickets = guests.map(() => null);
+        const byBranch = new Map<string, number[]>();
+        placements.forEach((p, i) => byBranch.set(p.branchId, [...(byBranch.get(p.branchId) ?? []), i]));
+        for (const [branchId, indexes] of byBranch) {
+          const issued = await allocateTickets(tx, branchId, day, indexes.length);
+          indexes.forEach((at, k) => (tickets![at] = issued[k]));
+        }
+      }
 
       const out: CreatedBooking[] = [];
 
@@ -834,7 +1115,9 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
         // total. `promo_code_id` records which code produced part of it, and the
         // loyalty_txns row written below records the rest.
         const discountHalalas = split[i].discountHalalas + promoShare + rewardShare;
-        const totalHalalas = split[i].totalHalalas - promoShare - rewardShare;
+        // The treat is added after the discounts, never inside them.
+        const totalHalalas =
+          split[i].totalHalalas - promoShare - rewardShare + guest.treatHalalas;
         // Prices are VAT-inclusive, so VAT comes back out of the discounted total
         // rather than being added on. The customer pays exactly what was shown.
         const vat = vatIncludedIn(totalHalalas, settings.vat_percent);
@@ -843,14 +1126,14 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
           .insert(bookings)
           .values({
             code: makeCode(),
-            branchId: input.branchId,
+            branchId: placements[i].branchId,
             customerId: customer.id,
             stationId: stationIds[i],
             technicianId: input.technicianId ?? null,
             serviceId: guest.service.id,
             removalTypeId: guest.removal?.id ?? null,
             designId: guest.design?.id ?? null,
-            startsAt,
+            startsAt: placements[i].startsAt,
             endsAt: endsAtPer[i],
             status,
             source: input.source,
@@ -886,6 +1169,27 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
           );
         }
 
+        // Inside the transaction, against the row just written: a booking that
+        // fails cannot spend a credit, and a credit that fails to record cannot
+        // leave a free booking behind. The partial unique index on
+        // (booking_id, service_id) refuses a second one for the same booking.
+        //
+        // It can still come back false. spendPackCredit locks the purchase and
+        // recounts, and the credit this guest was quoted may have been spent by
+        // another tab in the meantime — the quote ran before the transaction
+        // opened. Her service line is priced at zero on the strength of that
+        // quote, so a false here means the bill on screen is wrong: abort rather
+        // than seat her, because the alternative is giving the service away.
+        if (guest.packCredit) {
+          const spent = await spendPackCredit(
+            tx,
+            guest.packCredit.customerPackId,
+            guest.packCredit.serviceId,
+            row.id,
+          );
+          if (!spent) throw new BookingAbort("pack-credit-gone", i);
+        }
+
         out.push({
           id: row.id,
           code: row.code,
@@ -918,7 +1222,9 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
 
     return { ok: true, groupId, totalHalalas: billTotal, bookings: created, pointsSpent };
   } catch (err) {
-    if (err instanceof BookingAbort) return { ok: false, error: err.reason };
+    if (err instanceof BookingAbort) {
+      return { ok: false, error: err.reason, guestIndex: err.guestIndex };
+    }
     // Kept as a cheap backstop even though reserveStations now locks: a bug that
     // bypasses the lock should still fail loudly rather than double-book a chair.
     if (isSlotConflict(err)) return { ok: false, error: "slot-taken" };
@@ -935,6 +1241,7 @@ export async function createBooking(input: CreateBookingInput): Promise<CreateBo
     branchId: input.branchId,
     startsAt: input.startsAt,
     customer: input.customer,
+    customerId: input.customerId,
     source: input.source,
     notes: input.notes,
     technicianId: input.technicianId,
@@ -985,44 +1292,47 @@ export async function rescheduleBooking(input: {
 }): Promise<RescheduleResult> {
   if (Number.isNaN(input.startsAt.getTime())) return { ok: false, error: "failed" };
 
-  const [anchor] = await db.select().from(bookings).where(eq(bookings.id, input.id)).limit(1);
-  if (!anchor) return { ok: false, error: "not-found" };
+  const [booking] = await db.select().from(bookings).where(eq(bookings.id, input.id)).limit(1);
+  if (!booking) return { ok: false, error: "not-found" };
 
-  const members = anchor.groupId
-    ? await db
-        .select()
-        .from(bookings)
-        .where(eq(bookings.groupId, anchor.groupId))
-        .orderBy(asc(bookings.createdAt), asc(bookings.id))
-    : [anchor];
-
-  // Each guest keeps their own duration — moving an appointment must not
-  // silently shorten or lengthen it, and in a group the two may differ.
-  const durations = members.map((m) => m.endsAt.getTime() - m.startsAt.getTime());
-  const latestEndsAt = new Date(input.startsAt.getTime() + Math.max(...durations));
+  // This booking, and only this booking, even when it belongs to a group.
+  //
+  // It used to move the whole party, which was right while a group meant one
+  // branch at one moment: moving your appointment moved your friend's, because
+  // they were the same appointment. Guests hold their own branch and hour now,
+  // so dragging the rest of the party to a time nobody asked for is no longer a
+  // convenience, it is a booking they did not make. The reference the customer
+  // quoted is the chair that moves.
+  //
+  // The party is not held to one day after the fact. Same-day is a rule about
+  // booking together (see createBookings); plans change afterwards, and nothing
+  // downstream depends on it — cancellation fans out over group_id, and tickets
+  // are per branch per day on each row.
+  const duration = booking.endsAt.getTime() - booking.startsAt.getTime();
+  const endsAt = new Date(input.startsAt.getTime() + duration);
 
   try {
     const moved = await db.transaction(async (tx) => {
       // Claim and move in one transaction, so nobody can take the target chair
-      // between the check and the update. Their own chairs are fair game —
-      // hence the ignore ids, or a booking would see itself as the conflict.
+      // between the check and the update. Its own chair is fair game — hence the
+      // ignore id, or a booking would see itself as the conflict.
       const stationIds = await reserveStations(
         tx,
-        anchor.branchId,
+        booking.branchId,
         input.startsAt,
-        latestEndsAt,
-        members.length,
-        { ignoreBookingIds: members.map((m) => m.id) },
+        endsAt,
+        1,
+        { ignoreBookingIds: [booking.id] },
       );
       if (!stationIds) return null;
 
-      for (const [i, member] of members.entries()) {
+      {
         await tx
           .update(bookings)
           .set({
             startsAt: input.startsAt,
-            endsAt: new Date(input.startsAt.getTime() + durations[i]),
-            stationId: stationIds[i],
+            endsAt,
+            stationId: stationIds[0],
             // The technician was free at the old time; at the new one she may
             // already have someone. Emptying the row hands the booking back to
             // the automation below, which is the only thing that checks. Keeping
@@ -1031,7 +1341,7 @@ export async function rescheduleBooking(input: {
             technicianId: null,
             updatedAt: new Date(),
           })
-          .where(eq(bookings.id, member.id));
+          .where(eq(bookings.id, booking.id));
       }
 
       return stationIds;
@@ -1042,7 +1352,7 @@ export async function rescheduleBooking(input: {
     // Re-staffed straight away when the move lands on today. A move to a later
     // day deliberately stays empty until that morning's run, which is the only
     // one that can see who will be in.
-    await assignIfToday(anchor.branchId, input.startsAt);
+    await assignIfToday(booking.branchId, input.startsAt);
 
     return { ok: true, startsAt: input.startsAt, stationIds: moved };
   } catch (err) {
@@ -1102,7 +1412,7 @@ export async function getRefillOffer(code: string): Promise<RefillOffer | null> 
     .limit(1);
   if (!service) return null;
 
-  const settings = await getSettings(["refill_discount_percent"]);
+  const settings = await getSettings(["refill_price_halalas"]);
 
   // Snapshots from the original booking, not today's catalogue: this is a repeat
   // of what they had. Rows whose add-on was since deleted keep their snapshot
@@ -1136,9 +1446,7 @@ export async function getRefillOffer(code: string): Promise<RefillOffer | null> 
       }
     : null;
 
-  const servicePriceSar = halalasToSar(
-    refillPriceHalalas(service.priceHalalas, settings.refill_discount_percent),
-  );
+  const servicePriceSar = halalasToSar(settings.refill_price_halalas);
 
   return {
     code: code.trim().toUpperCase(),
