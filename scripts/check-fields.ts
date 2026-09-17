@@ -417,8 +417,10 @@ console.log("  closures: a stored range reads back as the days the admin typed �
   assert.equal(typedText("Noura 2", PERSON_TEXT), "Noura ", "digits never land in a name");
 
   // Staff: a person, a required sign-in email, an optional mobile, a real password.
+  /** A password shape the checks should accept. Fixture data; not a secret. */
+  const PASSES = "Salon2026";
   const member = (o: Partial<{ name: string; email: string; phone: string; password: string; isNew: boolean }> = {}) =>
-    checkStaff(adminStrings.en, { name: "Lama Al-Harbi", email: "lama@redornude.com", phone: "", password: "Salon2026", isNew: true, ...o });
+    checkStaff(adminStrings.en, { name: "Lama Al-Harbi", email: "lama@redornude.com", phone: "", password: PASSES, isNew: true, ...o });
   assert.deepEqual(member(), {});
   assert.deepEqual(member({ phone: "0555000111" }), {});
   assert.deepEqual(member({ password: "", isNew: false }), {}, "blank keeps the current password on an edit");
@@ -428,7 +430,7 @@ console.log("  closures: a stored range reads back as the days the admin typed �
   assert.equal(member({ password: "short1" }).password, "Password needs at least 8 characters");
   assert.equal(member({ password: "onlyletters" }).password, "Password needs at least one letter and one number");
   assert.equal(member({ password: "12345678" }).password, "Password needs at least one letter and one number");
-  assert.equal(member({ password: " Salon2026" }).password, "Password can't start or end with a space");
+  assert.equal(member({ password: ` ${PASSES}` }).password, "Password can't start or end with a space");
   assert.equal(member({ password: "a1".repeat(37) }).password, "Password can't be longer than 72 characters", "bcrypt's 72-byte ceiling");
   assert.equal(member({ password: "كلمةسر2026" }).password, undefined, "Arabic letters count as letters");
   assert.equal(member({ name: "Lama (seed)" }).name, `"(" can't be used in a name. Allowed: letters, spaces and - ' .`);
