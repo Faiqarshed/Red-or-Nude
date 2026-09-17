@@ -33,6 +33,7 @@ const PACKS = "lib/packs.ts";
 const CLIENT = "lib/booking.ts";
 const REORDER = "lib/admin/reorder.ts";
 const HISTORY = "app/(admin)/admin/(shell)/customers/data.ts";
+const REWARDS = "lib/rewards.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -394,9 +395,54 @@ const mutations = [
         "        order by ${bookings.startsAt} desc",
       ),
   },
+  // ---- the milestone rule ----------------------------------------------------
+  //
+  // The client's rule in their own words: "spend 199, get 50 points worth 10
+  // riyals — and if a person spends 350 we still give 50, because they haven't
+  // touched 399". Each mutant below breaks one clause of that sentence.
+  {
+    name: "milestones: pay out on the threshold being passed, not reached",
+    expect: "tests/branch.test.ts",
+    apply: () =>
+      mutate(
+        REWARDS,
+        "  if (totalHalalas < first) return 0;",
+        "  if (totalHalalas <= first) return 0;",
+      ),
+  },
+  {
+    name: "subtle: count the milestone the bill is working toward, not the one it reached",
+    expect: "tests/branch.test.ts",
+    apply: () =>
+      mutate(
+        REWARDS,
+        "  return Math.floor((totalHalalas - first) / step) + 1;",
+        "  return Math.ceil((totalHalalas - first) / step) + 1;",
+      ),
+  },
+  {
+    name: "rewards: let a reward bigger than the bill pay the difference out",
+    expect: "tests/branch.test.ts",
+    apply: () =>
+      mutate(
+        REWARDS,
+        "  return Math.max(0, Math.min(pointsValue(points, rules), totalHalalas));",
+        "  return Math.max(0, pointsValue(points, rules));",
+      ),
+  },
+  {
+    name: "subtle: accept any number of points, not whole steps",
+    expect: "tests/branch.test.ts",
+    apply: () =>
+      mutate(
+        REWARDS,
+        "  if (!Number.isInteger(points) || points <= 0 || points % step !== 0) return \"unknown\";",
+        "  if (!Number.isInteger(points) || points <= 0) return \"unknown\";",
+      ),
+  },
 ];
 
-const touched = [CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY];
+const touched = [CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));
 

@@ -20,7 +20,7 @@ import { utcToLocalDate } from "@/lib/availability";
 import { notify } from "@/lib/notify";
 import { sendBookingInvoice } from "@/lib/invoice/send";
 import { countPromoUse } from "@/lib/promo";
-import { awardPoints } from "@/lib/loyalty";
+import { awardPoints, loyaltyRules } from "@/lib/loyalty";
 import { pointsEarned } from "@/lib/rewards";
 import { getSettings } from "@/lib/settings";
 import { assignIfToday } from "@/lib/assign";
@@ -351,8 +351,9 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     // the anchor booking, which means cancelling it later revokes these points
     // by the same balance filter that returns spent ones.
     if (anchor.customerId) {
-      const { loyalty_sar_per_point: sarPerPoint } = await getSettings(["loyalty_sar_per_point"]);
-      await awardPoints(anchor.customerId, anchor.id, pointsEarned(billTotal, sarPerPoint));
+      // Milestones, not a rate: 199 SAR is 50 points, and so is 350 — the next
+      // 50 lands at 399. See lib/rewards.ts milestonesReached.
+      await awardPoints(anchor.customerId, anchor.id, pointsEarned(billTotal, await loyaltyRules()));
     }
 
     await sendConfirmations(members, tickets, labelOf, techOf);
