@@ -1127,7 +1127,7 @@ export default function PaymentPage() {
           tickets={tickets}
           booking={booking}
           method={method}
-          onClose={() => router.push("/")}
+          onClose={() => router.replace("/")}
         />
       )}
     </main>
@@ -1157,9 +1157,29 @@ function SuccessModal({
   const { c, lang } = useI18n();
   const p = c.payment;
 
+  // Nothing to hunt for. The booking is paid and this screen has no decision
+  // left on it, so anywhere outside the card leaves, and so does Escape — both
+  // land on the home page rather than on the checkout she has just finished.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm">
-      <div className="w-full max-w-[460px] rounded-[24px] bg-white p-8 text-center shadow-[0_40px_100px_rgba(0,0,0,0.25)]">
+    <div
+      role="presentation"
+      onClick={onClose}
+      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-[460px] rounded-[24px] bg-white p-8 text-center shadow-[0_40px_100px_rgba(0,0,0,0.25)]"
+      >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/pay/success-check.webp" alt="" className="mx-auto mb-5 h-20 w-20" />
         <h3 className="font-display text-2xl font-extrabold text-ink">{p.successTitle}</h3>
@@ -1226,6 +1246,7 @@ function SuccessModal({
         <div className="mt-6 flex gap-3">
           <Link
             href="/booking"
+            replace
             className="flex-1 rounded-[12px] bg-black/[0.05] py-3.5 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
           >
             {p.newBooking}

@@ -53,6 +53,8 @@ type StaffRow = {
   lastLoginAt: string | null;
   hasPassword: boolean;
   timeOff: TimeOffRow[];
+  /** Her own monthly discount code, or null before the first one is issued. */
+  discount: { id: string; code: string; percent: number; active: boolean; used: boolean } | null;
 };
 
 const RANK: Record<StaffRole, number> = {
@@ -161,6 +163,37 @@ export default function StaffView({
                   <Badge tone={s.role === "ceo" ? "danger" : "neutral"}>
                     {ROLE_LABELS[s.role][lang]}
                   </Badge>
+
+                  {/* Her code, on her row. It used to sit on the marketing
+                      screen among the Eid and National Day campaigns, where it
+                      read as one of them and could be edited like one. */}
+                  <span
+                    className="hidden w-32 shrink-0 text-start sm:block"
+                    title={
+                      s.discount
+                        ? t.staff.discountCodeHint.replace("{percent}", String(s.discount.percent))
+                        : undefined
+                    }
+                  >
+                    {s.discount ? (
+                      <>
+                        <span
+                          className={cn(
+                            "block truncate font-mono text-xs font-semibold",
+                            s.discount.active && !s.discount.used ? "text-ink" : "text-ink/35 line-through",
+                          )}
+                          dir="ltr"
+                        >
+                          {s.discount.code}
+                        </span>
+                        <span className="block truncate text-[10px] text-ink/40">
+                          {s.discount.used ? t.staff.discountCodeUsed : `${s.discount.percent}%`}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-[11px] text-ink/30">{t.staff.discountCodeNone}</span>
+                    )}
+                  </span>
 
                   <span className="hidden w-28 shrink-0 text-start text-[11px] text-ink/40 sm:block">
                     {s.lastLoginAt ? s.lastLoginAt.slice(0, 10) : t.staff.never}

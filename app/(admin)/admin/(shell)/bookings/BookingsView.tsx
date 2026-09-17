@@ -402,7 +402,13 @@ export default function BookingsView({
   /** Unresolved no-shows across every date, not just the one being viewed. */
   /** Unresolved no-show flags for this role's branches, on any date. */
   noShowCount: number;
-  catalog: { services: CatalogOption[]; addons: CatalogOption[]; removals: CatalogOption[] };
+  catalog: {
+    services: CatalogOption[];
+    addons: CatalogOption[];
+    /** at_checkout rows — the coffee and the cookie, kept out of the add-ons. */
+    treats: CatalogOption[];
+    removals: CatalogOption[];
+  };
   /** Walk-ins and the no-show backlog — everyone but a technician. */
   canManage: boolean;
   /** `bookings.status`: rewriting a booking by hand. The owner only. */

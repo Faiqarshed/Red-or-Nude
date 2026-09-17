@@ -36,6 +36,10 @@ const HISTORY = "app/(admin)/admin/(shell)/customers/data.ts";
 const REWARDS = "lib/rewards.ts";
 const MYDAY = "app/(admin)/admin/(shell)/my-day/data.ts";
 const TREAT = "lib/station-treat.ts";
+const DBERR = "lib/db/errors.ts";
+const CATALOG = "app/(admin)/admin/(shell)/catalog/actions.ts";
+const PROMO = "app/(admin)/admin/(shell)/promo-codes/actions.ts";
+const STAFFCODE = "lib/staff-codes.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -504,9 +508,108 @@ const mutations = [
         "        bookingId: booking.id,",
       ),
   },
+  // ---- one active thing per name ---------------------------------------------
+  {
+    name: "catalog: report a name clash as a generic failure again",
+    expect: "tests/catalog-names.test.ts",
+    apply: () =>
+      mutate(
+        CATALOG,
+        '  return /_active_name_(en|ar)_unique$/.test(violatedConstraint(err) ?? "");',
+        "  return false;",
+      ),
+  },
+  {
+    name: "subtle: catch the English clash but let the Arabic one through",
+    expect: "tests/catalog-names.test.ts",
+    apply: () =>
+      mutate(
+        CATALOG,
+        '  return /_active_name_(en|ar)_unique$/.test(violatedConstraint(err) ?? "");',
+        '  return /_active_name_en_unique$/.test(violatedConstraint(err) ?? "");',
+      ),
+  },
+  {
+    name: "catalog: let the switch turn a second row on under a taken name",
+    expect: "tests/catalog-names.test.ts",
+    apply: () =>
+      mutate(
+        CATALOG,
+        lines(
+          '    if (isDuplicateName(err)) return { ok: false, error: "duplicate-name" };',
+          '    console.error("[catalog] activate failed", err);',
+        ),
+        '    console.error("[catalog] activate failed", err);',
+      ),
+  },
+  // ---- reading which constraint refused --------------------------------------
+  {
+    name: "db errors: go back to matching the wrapped query text",
+    expect: "tests/db-errors.test.ts",
+    apply: () =>
+      mutate(
+        DBERR,
+        "    const name = (current as { constraint_name?: unknown }).constraint_name;",
+        "    const name = (current as { message?: unknown }).message;",
+      ),
+  },
+  {
+    name: "subtle: look one level down instead of walking the chain",
+    expect: "tests/db-errors.test.ts",
+    apply: () =>
+      mutate(
+        DBERR,
+        "  for (let depth = 0; current && depth < 5; depth++) {",
+        "  for (let depth = 0; current && depth < 1; depth++) {",
+      ),
+  },
+  {
+    name: "subtle: accept an empty constraint name and stop looking",
+    expect: "tests/db-errors.test.ts",
+    apply: () =>
+      mutate(
+        DBERR,
+        '    if (typeof name === "string" && name.length > 0) return name;',
+        '    if (typeof name === "string") return name;',
+      ),
+  },
+  // ---- a staff code is not a campaign ----------------------------------------
+  {
+    name: "promo: let marketing retune a staff member’s own code",
+    expect: "tests/staff-codes.test.ts",
+    apply: () =>
+      mutate(
+        PROMO,
+        '      if (before.staffId) return { ok: false, error: "staff-code" };',
+        '      if (false) return { ok: false, error: "staff-code" };',
+      ),
+  },
+  {
+    name: "promo: let marketing switch a staff member’s own code off",
+    expect: "tests/staff-codes.test.ts",
+    apply: () =>
+      mutate(
+        PROMO,
+        '  if (current.staffId) return { ok: false, error: "staff-code" };',
+        '  if (!current.staffId) return { ok: false, error: "staff-code" };',
+      ),
+  },
+  {
+    name: "staff codes: issue one that belongs to nobody",
+    expect: "tests/staff-codes.test.ts",
+    apply: () =>
+      mutate(
+        STAFFCODE,
+        lines("    code,", "    staffId,"),
+        lines("    code,", "    staffId: null,"),
+      ),
+  },
 ];
 
-const touched = [CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, MYDAY, TREAT];
+const touched = [
+  CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, MYDAY, TREAT,
+  DBERR, CATALOG, PROMO, STAFFCODE,
+];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));
 

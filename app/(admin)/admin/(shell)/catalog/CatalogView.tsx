@@ -65,6 +65,8 @@ export default function CatalogView({
   const [editing, setEditing] = useState<CatalogRow | null>(null);
   const [creating, setCreating] = useState(false);
   const { run: refreshAfter } = usePendingAction();
+  /** Why the last switch refused. Cleared by the next attempt. */
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   const rows =
     tab === "service" ? services : tab === "addon" ? addons : tab === "upsell" ? upsells : removals;
@@ -99,8 +101,8 @@ export default function CatalogView({
       />
 
       {/* Two-by-two on a phone. Four across leaves about sixty pixels of text
-          per tab, which breaks "At checkout" over two lines and drags the whole
-          strip out of square with it. */}
+          per tab, which breaks the longer labels over two lines and drags the
+          whole strip out of square with them. */}
       <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-black/[0.06] bg-white p-1 sm:flex">
         {TABS.map(({ kind, labelKey }) => (
           <button
@@ -116,6 +118,15 @@ export default function CatalogView({
           </button>
         ))}
       </div>
+
+      {toggleError && (
+        <p
+          role="alert"
+          className="mb-4 rounded-xl bg-red/[0.06] px-4 py-3 text-sm font-medium text-red"
+        >
+          {toggleError}
+        </p>
+      )}
 
       <Card className="overflow-hidden">
         {rows.length === 0 ? (
@@ -198,7 +209,21 @@ export default function CatalogView({
                     aria-checked={row.active}
                     aria-label={t.catalog.active}
                     title={t.catalog.activeHint}
-                    onClick={() => run(() => setCatalogActive(tab, row.id, !row.active))}
+                    onClick={() =>
+                      refreshAfter(async () => {
+                        setToggleError(null);
+                        const res = await setCatalogActive(tab, row.id, !row.active);
+                        if (res.ok) return;
+                        // Switching a second row on under a name that is taken.
+                        // Nothing changed, so there is nothing to refresh for.
+                        setToggleError(
+                          res.error === "duplicate-name"
+                            ? t.catalog.duplicateName
+                            : t.common.error,
+                        );
+                        return false;
+                      })
+                    }
                     className={cn(
                       "relative h-5 w-9 shrink-0 rounded-full transition-colors",
                       touchTargetSwitch,

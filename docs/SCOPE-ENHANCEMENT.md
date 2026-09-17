@@ -139,7 +139,8 @@ sale. An old ticket still reads as what was actually bought.
 
 **The monthly swap, for the salon:**
 
-1. Admin → Catalog → **Upsells**
+1. Admin → Catalog → **Treats** (the tab was called "At checkout" until the
+   salon asked for its own word)
 2. Click the row to edit — "Hot coffee & a treat" or "Iced coffee & a treat"
 3. Change the Arabic and English names to whatever the treat is this month
 4. Swap the picture with the media picker, and Save
@@ -154,6 +155,10 @@ Two rules the form already enforces, worth knowing before editing:
 - **`duration_min` stays 0**, forced by `saveCatalogItem` and hidden from the
   upsell form. A treat with a duration would move `ends_at` under a booking that
   is already being held.
+- **Two live treats may not share a name.** `addons_active_name_en_unique` and
+  its Arabic twin (`drizzle/0025`) refuse it, and the drawer says so. Switch the
+  old one off first, or rename it — which is how a name gets reused without
+  losing what was sold under it.
 - **A row that has been sold cannot be deleted.** `addon_id` is half of
   `booking_addons`' primary key, so the delete is refused and the panel says
   "in use". Deactivate it instead — it disappears from checkout and every past

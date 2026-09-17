@@ -36,7 +36,13 @@ export default function WalkInDrawer({
   open: boolean;
   branchId: string;
   date: string;
-  catalog: { services: CatalogOption[]; addons: CatalogOption[]; removals: CatalogOption[] };
+  catalog: {
+    services: CatalogOption[];
+    addons: CatalogOption[];
+    /** at_checkout rows — the coffee and the cookie, kept out of the add-ons. */
+    treats: CatalogOption[];
+    removals: CatalogOption[];
+  };
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -66,11 +72,16 @@ export default function WalkInDrawer({
     setTried(false);
   }, [open, catalog.services]);
 
+  // Both groups go out as one `addonIds` — the split is how they are offered,
+  // not what they are — so every lookup below reads from both.
+  const extras = [...catalog.addons, ...catalog.treats];
+
   // Duration drives which slots actually fit, so it has to be recomputed as the
-  // receptionist adds extras — same rule the customer-facing flow follows.
+  // receptionist adds extras — same rule the customer-facing flow follows. A
+  // treat is 0 minutes by catalogue rule, so ticking one never moves the slot.
   const durationMin =
     (catalog.services.find((s) => s.id === serviceId)?.durationMin ?? 60) +
-    addonIds.reduce((sum, id) => sum + (catalog.addons.find((a) => a.id === id)?.durationMin ?? 0), 0) +
+    addonIds.reduce((sum, id) => sum + (extras.find((a) => a.id === id)?.durationMin ?? 0), 0) +
     (catalog.removals.find((r) => r.id === removalId)?.durationMin ?? 0);
 
   useEffect(() => {
@@ -86,6 +97,9 @@ export default function WalkInDrawer({
       cancelled = true;
     };
   }, [open, branchId, date, durationMin, serviceId]);
+
+  const toggleExtra = (id: string) =>
+    setAddonIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   const v = t.validation;
   const phoneLabel = t.bookings.phone;
@@ -134,7 +148,7 @@ export default function WalkInDrawer({
 
   const total =
     (catalog.services.find((s) => s.id === serviceId)?.priceSar ?? 0) +
-    addonIds.reduce((sum, id) => sum + (catalog.addons.find((a) => a.id === id)?.priceSar ?? 0), 0) +
+    addonIds.reduce((sum, id) => sum + (extras.find((a) => a.id === id)?.priceSar ?? 0), 0) +
     (catalog.removals.find((r) => r.id === removalId)?.priceSar ?? 0);
 
   return (
@@ -209,29 +223,25 @@ export default function WalkInDrawer({
           </select>
         </Field>
 
-        <div className="text-start">
-          <span className="mb-1.5 block text-xs font-medium text-ink/70">{t.bookings.addons}</span>
-          <div className="flex flex-wrap gap-2">
-            {catalog.addons.map((a) => {
-              const on = addonIds.includes(a.id);
-              return (
-                <button
-                  key={a.id}
-                  type="button"
-                  onClick={() =>
-                    setAddonIds((prev) => (on ? prev.filter((x) => x !== a.id) : [...prev, a.id]))
-                  }
-                  className={cn(
-                    "rounded-xl border px-3 py-1.5 text-xs transition-colors",
-                    on ? "border-red bg-red/[0.07] text-red" : "border-black/10 text-ink/70 hover:bg-black/[0.03]",
-                  )}
-                >
-                  {pick(a.name, lang)}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <Chips
+          label={t.bookings.addons}
+          options={catalog.addons}
+          lang={lang}
+          selected={addonIds}
+          onToggle={toggleExtra}
+        />
+
+        {/* Her coffee, asked for as a treat rather than buried among the gel
+            removals. Same ids, same `addonIds`, different heading. */}
+        {catalog.treats.length > 0 && (
+          <Chips
+            label={t.bookings.treats}
+            options={catalog.treats}
+            lang={lang}
+            selected={addonIds}
+            onToggle={toggleExtra}
+          />
+        )}
 
         <Field label={t.bookings.removal}>
           <select
@@ -285,5 +295,44 @@ export default function WalkInDrawer({
         <FormErrors errors={errors} summary={t.validation.summary} server={error} />
       </div>
     </Drawer>
+  );
+}
+
+/** One heading and a row of toggles. Add-ons and treats differ only in which. */
+function Chips({
+  label,
+  options,
+  lang,
+  selected,
+  onToggle,
+}: {
+  label: string;
+  options: CatalogOption[];
+  lang: "ar" | "en";
+  selected: string[];
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div className="text-start">
+      <span className="mb-1.5 block text-xs font-medium text-ink/70">{label}</span>
+      <div className="flex flex-wrap gap-2">
+        {options.map((a) => {
+          const on = selected.includes(a.id);
+          return (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => onToggle(a.id)}
+              className={cn(
+                "rounded-xl border px-3 py-1.5 text-xs transition-colors",
+                on ? "border-red bg-red/[0.07] text-red" : "border-black/10 text-ink/70 hover:bg-black/[0.03]",
+              )}
+            >
+              {pick(a.name, lang)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

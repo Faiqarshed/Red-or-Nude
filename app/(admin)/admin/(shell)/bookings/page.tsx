@@ -47,7 +47,7 @@ export default async function BookingsPage({
     : utcToLocalDate(riyadhDayRange().start);
 
   if (!branchId) {
-    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} catalog={{ services: [], addons: [], removals: [] }} canManage={false} canSetStatus={false} canReschedule={false} canDelete={false} checkinEarlyMin={0} branchId="" />;
+    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} catalog={{ services: [], addons: [], treats: [], removals: [] }} canManage={false} canSetStatus={false} canReschedule={false} canDelete={false} checkinEarlyMin={0} branchId="" />;
   }
 
   // Release chairs nobody checked in to, before reading the day back — otherwise
@@ -210,12 +210,25 @@ export default async function BookingsPage({
           priceSar: halalasToSar(s.priceHalalas),
           durationMin: s.durationMin,
         })),
-        addons: addonRows.map((a) => ({
-          id: a.id,
-          name: a.name,
-          priceSar: halalasToSar(a.priceHalalas),
-          durationMin: a.durationMin,
-        })),
+        // Split, because to the receptionist a coffee is not an add-on. It is
+        // the same `addons` table and the same `addonIds` on the way out —
+        // `at_checkout` is the only thing that moves it to its own group.
+        addons: addonRows
+          .filter((a) => !a.atCheckout)
+          .map((a) => ({
+            id: a.id,
+            name: a.name,
+            priceSar: halalasToSar(a.priceHalalas),
+            durationMin: a.durationMin,
+          })),
+        treats: addonRows
+          .filter((a) => a.atCheckout)
+          .map((a) => ({
+            id: a.id,
+            name: a.name,
+            priceSar: halalasToSar(a.priceHalalas),
+            durationMin: a.durationMin,
+          })),
         removals: removalRows.map((r) => ({
           id: r.id,
           name: r.name,

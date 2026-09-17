@@ -219,58 +219,127 @@ export const closures = pgTable("closures", {
 
 // ------------------------------------------------------------- catalog ------
 
-export const services = pgTable("services", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: localized("name").notNull(),
-  description: localized("description"),
-  priceHalalas: integer("price_halalas").notNull(),
-  // New vs. the static site, which showed a flat "15 MIN" for everything.
-  // Real durations are what make the availability engine work.
-  durationMin: integer("duration_min").notNull().default(60),
-  /**
-   * How many days after the appointment this service can be refilled: 30 for
-   * nails, 14 for lashes, 0 for services that have no refill at all.
-   *
-   * A column rather than a service category, because "does it have a refill and
-   * for how long" is the only question anyone asks — a taxonomy would be a
-   * second thing to keep in sync for no extra answer.
-   */
-  refillDays: integer("refill_days").notNull().default(0),
-  image: text("image"),
-  sort: integer("sort").notNull().default(0),
-  active: boolean("active").notNull().default(true),
-  ...stamps,
-});
+export const services = pgTable(
+  "services",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: localized("name").notNull(),
+    description: localized("description"),
+    priceHalalas: integer("price_halalas").notNull(),
+    // New vs. the static site, which showed a flat "15 MIN" for everything.
+    // Real durations are what make the availability engine work.
+    durationMin: integer("duration_min").notNull().default(60),
+    /**
+     * How many days after the appointment this service can be refilled: 30 for
+     * nails, 14 for lashes, 0 for services that have no refill at all.
+     *
+     * A column rather than a service category, because "does it have a refill and
+     * for how long" is the only question anyone asks — a taxonomy would be a
+     * second thing to keep in sync for no extra answer.
+     */
+    refillDays: integer("refill_days").notNull().default(0),
+    image: text("image"),
+    sort: integer("sort").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    ...stamps,
+  },
+  (t) => ({
+    /**
+     * One live row per name, per language (client review, Sep 2026).
+     *
+     * Two active services both called the same thing are indistinguishable on
+     * every screen that offers them, and the receptionist picking the wrong one
+     * puts the wrong price on a real appointment. Partial on `active`, because
+     * switching the old row off is how the salon reuses a name without losing
+     * the history hanging off it.
+     *
+     * An index, not a check in the action: two tabs that both read "that name
+     * is free" and both save is precisely what a check-then-write cannot see.
+     */
+    activeNameEn: uniqueIndex("services_active_name_en_unique")
+      .on(sql`lower(btrim(${t.name} ->> 'en'))`)
+      .where(sql`${t.active}`),
+    activeNameAr: uniqueIndex("services_active_name_ar_unique")
+      .on(sql`lower(btrim(${t.name} ->> 'ar'))`)
+      .where(sql`${t.active}`),
+  }),
+);
 
-export const addons = pgTable("addons", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: localized("name").notNull(),
-  priceHalalas: integer("price_halalas").notNull(),
-  durationMin: integer("duration_min").notNull().default(0),
-  image: text("image"),
-  // The seasonal add-on opens the designs pop-up on the public site.
-  isSeasonal: boolean("is_seasonal").notNull().default(false),
-  /**
-   * Offered at checkout instead of beside the services — the coffee-and-cookie
-   * upsell. Keep `duration_min` at 0 for these: they are picked after the chair
-   * has been quoted, so a duration would move `ends_at` under a booking that is
-   * already about to be held.
-   */
-  atCheckout: boolean("at_checkout").notNull().default(false),
-  sort: integer("sort").notNull().default(0),
-  active: boolean("active").notNull().default(true),
-  ...stamps,
-});
+export const addons = pgTable(
+  "addons",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: localized("name").notNull(),
+    priceHalalas: integer("price_halalas").notNull(),
+    durationMin: integer("duration_min").notNull().default(0),
+    image: text("image"),
+    // The seasonal add-on opens the designs pop-up on the public site.
+    isSeasonal: boolean("is_seasonal").notNull().default(false),
+    /**
+     * Offered at checkout instead of beside the services — the coffee-and-cookie
+     * upsell. Keep `duration_min` at 0 for these: they are picked after the chair
+     * has been quoted, so a duration would move `ends_at` under a booking that is
+     * already about to be held.
+     */
+    atCheckout: boolean("at_checkout").notNull().default(false),
+    sort: integer("sort").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    ...stamps,
+  },
+  (t) => ({
+    /**
+     * One live row per name, per language (client review, Sep 2026).
+     *
+     * Two active add-ons both called the same thing are indistinguishable on
+     * every screen that offers them, and the receptionist picking the wrong one
+     * puts the wrong price on a real appointment. Partial on `active`, because
+     * switching the old row off is how the salon reuses a name without losing
+     * the history hanging off it.
+     *
+     * An index, not a check in the action: two tabs that both read "that name
+     * is free" and both save is precisely what a check-then-write cannot see.
+     */
+    activeNameEn: uniqueIndex("addons_active_name_en_unique")
+      .on(sql`lower(btrim(${t.name} ->> 'en'))`)
+      .where(sql`${t.active}`),
+    activeNameAr: uniqueIndex("addons_active_name_ar_unique")
+      .on(sql`lower(btrim(${t.name} ->> 'ar'))`)
+      .where(sql`${t.active}`),
+  }),
+);
 
-export const removalTypes = pgTable("removal_types", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: localized("name").notNull(),
-  priceHalalas: integer("price_halalas").notNull(),
-  durationMin: integer("duration_min").notNull().default(0),
-  sort: integer("sort").notNull().default(0),
-  active: boolean("active").notNull().default(true),
-  ...stamps,
-});
+export const removalTypes = pgTable(
+  "removal_types",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: localized("name").notNull(),
+    priceHalalas: integer("price_halalas").notNull(),
+    durationMin: integer("duration_min").notNull().default(0),
+    sort: integer("sort").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    ...stamps,
+  },
+  (t) => ({
+    /**
+     * One live row per name, per language (client review, Sep 2026).
+     *
+     * Two active removal types both called the same thing are indistinguishable on
+     * every screen that offers them, and the receptionist picking the wrong one
+     * puts the wrong price on a real appointment. Partial on `active`, because
+     * switching the old row off is how the salon reuses a name without losing
+     * the history hanging off it.
+     *
+     * An index, not a check in the action: two tabs that both read "that name
+     * is free" and both save is precisely what a check-then-write cannot see.
+     */
+    activeNameEn: uniqueIndex("removal_types_active_name_en_unique")
+      .on(sql`lower(btrim(${t.name} ->> 'en'))`)
+      .where(sql`${t.active}`),
+    activeNameAr: uniqueIndex("removal_types_active_name_ar_unique")
+      .on(sql`lower(btrim(${t.name} ->> 'ar'))`)
+      .where(sql`${t.active}`),
+  }),
+);
 
 /** Which add-ons are offered with which service. Empty = offered with all. */
 export const serviceAddons = pgTable(

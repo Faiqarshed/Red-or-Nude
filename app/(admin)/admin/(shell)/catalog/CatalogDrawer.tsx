@@ -196,7 +196,16 @@ export default function CatalogDrawer({
         sort: row?.sort ?? nextSort,
       });
       if (res.ok) onSaved();
-      else setError(res.error === "not-found" ? t.validation.notFound : t.common.error);
+      else
+        setError(
+          res.error === "not-found"
+            ? t.validation.notFound
+            : // The one refusal a person can act on: two live rows may not
+              // share a name. Says which way out rather than "error".
+              res.error === "duplicate-name"
+              ? t.catalog.duplicateName
+              : t.common.error,
+        );
     });
 
   const [confirmDelete, setConfirmDelete] = useState(false);
