@@ -148,9 +148,17 @@ export default async function BookingsPage({
     // its copy. Without the join this read every add-on row the salon has ever
     // sold, on every load, to label one day's bookings.
     db
-      .select({ bookingId: bookingAddons.bookingId, name: bookingAddons.name })
+      .select({
+        bookingId: bookingAddons.bookingId,
+        name: bookingAddons.name,
+        // What tells a coffee from a gel removal. The name still comes from
+        // booking_addons, which snapshots it at the time of sale; the catalogue
+        // row is only asked what kind of thing it was.
+        atCheckout: addons.atCheckout,
+      })
       .from(bookingAddons)
       .innerJoin(bookings, eq(bookings.id, bookingAddons.bookingId))
+      .leftJoin(addons, eq(addons.id, bookingAddons.addonId))
       .where(
         and(eq(bookings.branchId, branchId), gte(bookings.startsAt, dayStart), lt(bookings.startsAt, dayEnd)),
       ),
@@ -164,11 +172,15 @@ export default async function BookingsPage({
   const elsewhere = await partnersElsewhere(branchId, rows);
 
   const addonsByBooking = new Map<string, { ar: string; en: string }[]>();
+  const treatsByBooking = new Map<string, { ar: string; en: string }[]>();
   for (const link of addonLinks) {
     if (!link.name) continue;
-    const list = addonsByBooking.get(link.bookingId) ?? [];
+    // Unreachable today: addon_id is half the primary key, so a sold catalogue
+    // row cannot be deleted at all. See my-day/data.ts for the long version.
+    const into = link.atCheckout ? treatsByBooking : addonsByBooking;
+    const list = into.get(link.bookingId) ?? [];
     list.push(link.name);
-    addonsByBooking.set(link.bookingId, list);
+    into.set(link.bookingId, list);
   }
 
   return (
@@ -227,6 +239,7 @@ export default async function BookingsPage({
           stationId: r.stationId,
           serviceName: r.serviceName,
           addons: addonsByBooking.get(r.id) ?? [],
+          treats: treatsByBooking.get(r.id) ?? [],
           totalSar: halalasToSar(r.totalHalalas),
           notes: r.notes,
           customerName: r.customerName,

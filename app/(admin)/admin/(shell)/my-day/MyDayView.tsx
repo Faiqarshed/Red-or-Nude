@@ -478,6 +478,24 @@ function NextCard({
           </div>
         ) : null}
 
+        {/* Its own row, with the picture, because this is the one thing on the
+            ticket that is an errand rather than the work. It used to arrive as
+            another grey pill beside the nail add-ons and nothing said it was a
+            drink to fetch. Warm ground so it reads as a note to act on. */}
+        {b.treats.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 ring-1 ring-amber-200/70">
+            <span className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+              {m.treats}
+            </span>
+            {b.treats.map((t, i) => (
+              <span key={i} className="flex items-center gap-1.5 text-xs font-medium text-ink">
+                <Thumb src={t.imageUrl} size="sm" />
+                {pick(t.name, lang)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+
         {b.customerName ? (
           <p className="text-sm text-ink/70">
             {m.customer}: <span className="font-medium text-ink">{b.customerName}</span>
@@ -700,6 +718,24 @@ function DetailDialog({
             {b.addons.map((a, i) => (
               <span key={i} className="rounded-full bg-black/[0.05] px-3 py-1 text-xs text-ink/70">
                 {pick(a, lang)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {/* Its own row, with the picture, because this is the one thing on the
+            ticket that is an errand rather than the work. It used to arrive as
+            another grey pill beside the nail add-ons and nothing said it was a
+            drink to fetch. Warm ground so it reads as a note to act on. */}
+        {b.treats.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 ring-1 ring-amber-200/70">
+            <span className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+              {m.treats}
+            </span>
+            {b.treats.map((t, i) => (
+              <span key={i} className="flex items-center gap-1.5 text-xs font-medium text-ink">
+                <Thumb src={t.imageUrl} size="sm" />
+                {pick(t.name, lang)}
               </span>
             ))}
           </div>

@@ -8,6 +8,7 @@ import "server-only";
 import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
+  addons,
   bookingAddons,
   bookings,
   customers,
@@ -29,7 +30,17 @@ export type MyDayBooking = {
   finishedAt: string | null;
   serviceName: Localized | null;
   designName: Localized | null;
+  /** Nail work bought alongside the service. Pills, as before. */
   addons: Localized[];
+  /**
+   * Coffee and treats, kept apart from the add-ons above.
+   *
+   * The salon's actual complaint: she is the one who fetches these, and until
+   * now they arrived in the same grey row as the nail add-ons with nothing to
+   * say one was a drink. A technician reading "gel removal, hot coffee" as one
+   * list has to know the catalogue to tell which is which.
+   */
+  treats: Treat[];
   stationLabel: string | null;
   /** First name only — all a technician needs to greet her by. */
   customerName: string | null;
@@ -42,6 +53,13 @@ export type MyDayBooking = {
    * Resolved through mediaUrl here rather than in the view: storage keys are a
    * server concern, and MyDayView is a client component.
    */
+  imageUrl: string | null;
+};
+
+/** Something to fetch rather than something to do. */
+export type Treat = {
+  name: Localized;
+  /** The picture from the catalogue — she is fetching a *specific* drink. */
   imageUrl: string | null;
 };
 
@@ -159,11 +177,25 @@ export async function loadMyDay(technicianId: string): Promise<MyDayBooking[]> {
 
   if (rows.length === 0) return [];
 
-  // One extra query rather than a join: joining add-ons would fan each booking
-  // into a row per add-on, and re-collapsing them is more code than this.
+  // One extra query rather than a join onto `bookings`: joining add-ons there
+  // would fan each booking into a row per add-on, and re-collapsing them is
+  // more code than this.
+  //
+  // The join onto `addons` is a different matter and is what tells a coffee
+  // from a gel removal. `name` still comes from booking_addons, which snapshots
+  // it at the time of sale — the catalogue row is consulted for what *kind* of
+  // thing it was and for its picture, never for what it was called or cost.
+  //
+  // Deliberately no price column in this select. See the header.
   const addonRows = await db
-    .select({ bookingId: bookingAddons.bookingId, name: bookingAddons.name })
+    .select({
+      bookingId: bookingAddons.bookingId,
+      name: bookingAddons.name,
+      atCheckout: addons.atCheckout,
+      image: addons.image,
+    })
     .from(bookingAddons)
+    .leftJoin(addons, eq(addons.id, bookingAddons.addonId))
     .where(
       inArray(
         bookingAddons.bookingId,
@@ -172,11 +204,29 @@ export async function loadMyDay(technicianId: string): Promise<MyDayBooking[]> {
     );
 
   const addonsFor = new Map<string, Localized[]>();
+  const treatsFor = new Map<string, Treat[]>();
   for (const a of addonRows) {
     if (!a.name) continue;
-    const list = addonsFor.get(a.bookingId) ?? [];
-    list.push(a.name);
-    addonsFor.set(a.bookingId, list);
+    // A left join, and the fallback below, for a case the database currently
+    // makes unreachable — `addon_id` is half of booking_addons' primary key, so
+    // it is implicitly NOT NULL and the column's `on delete set null` can never
+    // fire. Deleting a catalogue row that has been sold raises instead, and
+    // catalog/actions.ts reports it as "in-use". So the join is total today and
+    // a treat keeps its picture for as long as the ticket exists.
+    //
+    // Kept anyway because the cost is one branch and the failure mode without
+    // it is a treat vanishing from a ticket rather than merely losing its
+    // picture. If that primary key is ever relaxed, this already does the right
+    // thing: the line falls back to the add-on pills, where it used to live.
+    if (a.atCheckout) {
+      const list = treatsFor.get(a.bookingId) ?? [];
+      list.push({ name: a.name, imageUrl: mediaUrl(a.image) });
+      treatsFor.set(a.bookingId, list);
+    } else {
+      const list = addonsFor.get(a.bookingId) ?? [];
+      list.push(a.name);
+      addonsFor.set(a.bookingId, list);
+    }
   }
 
   return rows.map((r) => ({
@@ -189,6 +239,7 @@ export async function loadMyDay(technicianId: string): Promise<MyDayBooking[]> {
     serviceName: r.serviceName,
     designName: r.designName,
     addons: addonsFor.get(r.id) ?? [],
+    treats: treatsFor.get(r.id) ?? [],
     stationLabel: r.stationLabel,
     customerName: r.customerName?.trim().split(/\s+/)[0] ?? null,
     notes: r.notes,

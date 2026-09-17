@@ -70,6 +70,8 @@ export type BookingRow = {
   stationId: string | null;
   serviceName: Localized | null;
   addons: Localized[];
+  /** Coffee and treats — an errand, not part of the work. */
+  treats: Localized[];
   totalSar: number;
   notes: string | null;
   customerName: string | null;

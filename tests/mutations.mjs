@@ -34,6 +34,7 @@ const CLIENT = "lib/booking.ts";
 const REORDER = "lib/admin/reorder.ts";
 const HISTORY = "app/(admin)/admin/(shell)/customers/data.ts";
 const REWARDS = "lib/rewards.ts";
+const MYDAY = "app/(admin)/admin/(shell)/my-day/data.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -440,9 +441,30 @@ const mutations = [
         "  if (!Number.isInteger(points) || points <= 0) return \"unknown\";",
       ),
   },
+  // ---- the treat on the technician's ticket ----------------------------------
+  {
+    name: "treats: put the coffee back among the nail add-ons",
+    expect: "tests/treats.test.ts",
+    apply: () =>
+      mutate(
+        MYDAY,
+        "    if (a.atCheckout) {",
+        "    if (false) {",
+      ),
+  },
+  {
+    name: "subtle: send the nail work to the treats row instead",
+    expect: "tests/treats.test.ts",
+    apply: () =>
+      mutate(
+        MYDAY,
+        "    if (a.atCheckout) {",
+        "    if (!a.atCheckout) {",
+      ),
+  },
 ];
 
-const touched = [CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS];
+const touched = [CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, MYDAY];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));
 

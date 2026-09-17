@@ -8,6 +8,7 @@ import "server-only";
 import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
+  addons,
   bookingAddons,
   bookings,
   branches,
@@ -64,6 +65,8 @@ export type FrontDeskRow = {
   finishedAt: string | null;
   serviceName: Localized | null;
   addons: Localized[];
+  /** Coffee and treats, kept apart so the desk can see what to bring. */
+  treats: Localized[];
   /** What the service is *meant* to take, for the running timer to sit against. */
   durationMin: number | null;
   stationId: string | null;
@@ -206,10 +209,17 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
 
   // One extra query rather than a join: joining add-ons would fan each booking
   // into a row per add-on, and re-collapsing them is more code than this.
+  // The join onto `addons` is what tells a coffee from a gel removal. `name`
+  // still comes from booking_addons, which snapshots it at the time of sale.
   const addonRows = rows.length
     ? await db
-        .select({ bookingId: bookingAddons.bookingId, name: bookingAddons.name })
+        .select({
+          bookingId: bookingAddons.bookingId,
+          name: bookingAddons.name,
+          atCheckout: addons.atCheckout,
+        })
         .from(bookingAddons)
+        .leftJoin(addons, eq(addons.id, bookingAddons.addonId))
         .where(
           inArray(
             bookingAddons.bookingId,
@@ -219,9 +229,14 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
     : [];
 
   const addonsFor = new Map<string, Localized[]>();
+  const treatsFor = new Map<string, Localized[]>();
   for (const a of addonRows) {
     if (!a.name) continue;
-    addonsFor.set(a.bookingId, [...(addonsFor.get(a.bookingId) ?? []), a.name]);
+    // Unreachable today: addon_id is half the primary key, so a sold catalogue
+    // row cannot be deleted at all. One branch, and it degrades to the add-on
+    // pills rather than dropping the line. See my-day/data.ts for the long version.
+    const into = a.atCheckout ? treatsFor : addonsFor;
+    into.set(a.bookingId, [...(into.get(a.bookingId) ?? []), a.name]);
   }
 
   // Counted here rather than in four more round trips: the day's rows are
@@ -249,6 +264,7 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
       startedAt: r.startedAt?.toISOString() ?? null,
       finishedAt: r.finishedAt?.toISOString() ?? null,
       addons: addonsFor.get(r.id) ?? [],
+      treats: treatsFor.get(r.id) ?? [],
       totalSar: halalasToSar(totalHalalas),
       // Destructured out above rather than spread through: the two raw storage
       // keys are a server detail, and the client only ever needs the resolved
