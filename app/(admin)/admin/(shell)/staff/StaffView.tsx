@@ -38,6 +38,7 @@ import { mustHaveBranch, ROLE_LABELS } from "@/lib/auth/rbac";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
 import type { Localized, StaffRole } from "@/lib/db/schema";
+import type { StaffCodeView } from "@/lib/staff-codes";
 import { addTimeOff, deleteStaff, removeTimeOff, saveStaff, setStaffActive } from "./actions";
 
 type TimeOffRow = { id: string; startsOn: string; endsOn: string };
@@ -54,10 +55,8 @@ type StaffRow = {
   hasPassword: boolean;
   timeOff: TimeOffRow[];
   /** Her own monthly discount code, or null before the first one is issued. */
-  discount: StaffRowDiscount | null;
+  discount: StaffCodeView | null;
 };
-
-export type StaffRowDiscount = { id: string; code: string; percent: number; active: boolean; used: boolean };
 
 const RANK: Record<StaffRole, number> = {
   technician: 1,

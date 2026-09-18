@@ -9,16 +9,22 @@
 // whose it is, which is `promo_codes.staff_id`. No second table, no second set
 // of rules to keep in step with lib/promo.ts.
 //
+// The code itself is random — STF and eight characters — and not her name. A
+// name is a guess away for anyone who knows who works here, and a 90% code that
+// can be guessed is a 90% code for the whole of Riyadh. It is hers because
+// `staff_id` says so, and she reads it off her own screen (MyCodeCard), not
+// because it spells her.
+//
 // Not built, and explicitly a later phase in the brief: linking a code to an HR
 // record or a government ID so it cannot be shared.
 
 import "server-only";
-import { desc, eq, inArray } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
+import { desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { promoCodes, staff } from "@/lib/db/schema";
 import { recordAudit } from "@/lib/audit";
-import { normalizePromoCode } from "@/lib/promo";
-import { UTC_OFFSET_HOURS } from "@/lib/time";
+import { UTC_OFFSET_HOURS, riyadhDateKey } from "@/lib/time";
 
 /** The client's number. One place, so raising it is one edit. */
 export const STAFF_CODE_PERCENT = 90;
@@ -37,33 +43,47 @@ export function monthWindow(date: Date): { start: Date; end: Date } {
   return { start, end };
 }
 
-/**
- * "SARA", "SARA2", "SARA3"… — the first spelling that isn't taken.
- *
- * Names collide in a salon and the code is a unique key, so a second Sara has
- * to get something. Bounded rather than looping forever: after ten tries the
- * name is the problem and a human should pick. Only reached for someone's first
- * code; every month after renews that same one.
- */
-async function freeCode(base: string): Promise<string | null> {
-  const root = normalizePromoCode(base.replace(/[^a-zA-Z0-9]/g, "")) || "STAFF";
-  const candidates = ["", 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => `${root}${n}`);
+/** What a staff code looks like on a screen, from its row and the moment it is read. */
+export type StaffCodeView = {
+  code: string;
+  percent: number;
+  /** Both ways a code stops working, as one flag: the switch, and a month that has ended. */
+  active: boolean;
+  /** `max_uses` is 1, so any use at all is this month spent. */
+  used: boolean;
+  /** Riyadh date the next month's code opens, `YYYY-MM-DD`. */
+  renewsOn: string;
+};
 
-  const taken = new Set(
-    (
-      await db
-        .select({ code: promoCodes.code })
-        .from(promoCodes)
-        .where(inArray(promoCodes.code, candidates))
-    ).map((r) => r.code),
-  );
+/** Shared by the staff list and her own card, so the two can never disagree. */
+export function describeStaffCode(
+  row: { code: string; value: number; active: boolean; uses: number; endsAt: Date | null },
+  now: Date = new Date(),
+): StaffCodeView {
+  return {
+    code: row.code,
+    percent: row.value,
+    active: row.active && !(row.endsAt && row.endsAt <= now),
+    used: row.uses > 0,
+    renewsOn: riyadhDateKey(monthWindow(now).end),
+  };
+}
 
-  return candidates.find((c) => !taken.has(c)) ?? null;
+/** Her current code, or null before the first one has been issued. */
+export async function myStaffCode(staffId: string): Promise<StaffCodeView | null> {
+  // Newest first: older rows can exist from before codes were renewed in place.
+  const [row] = await db
+    .select()
+    .from(promoCodes)
+    .where(eq(promoCodes.staffId, staffId))
+    .orderBy(desc(promoCodes.createdAt))
+    .limit(1);
+  return row ? describeStaffCode(row) : null;
 }
 
 export type IssueOutcome =
   | { ok: true; code: string; renewed: boolean }
-  | { ok: false; reason: "already-issued" | "no-free-code" | "not-found" };
+  | { ok: false; reason: "already-issued" | "not-found" };
 
 /** Who renewal is recorded as in the audit log. */
 export const RENEWAL_ACTOR = { id: null, name: "Automatic renewal" } as const;
@@ -72,7 +92,7 @@ export const RENEWAL_ACTOR = { id: null, name: "Automatic renewal" } as const;
  * Give one staff member their code for the month `date` falls in.
  *
  * The same code every month: her existing one has its window moved to the new
- * month and its use reset, so "SARA" stays SARA. Last month's bookings keep
+ * month and its use reset, so the code she knows stays hers. Last month's bookings keep
  * pointing at it, which is where the record of what was used lives.
  *
  * Idempotent by design: a code whose window is already this month is left
@@ -118,10 +138,10 @@ export async function issueMonthlyCode(staffId: string, date: Date = new Date())
     return { ok: true, code: current.code, renewed: true };
   }
 
-  // First name only — the brief's example is "Sara", not "Sara Al-Otaibi".
-  const code = await freeCode(member.name.trim().split(/\s+/)[0] ?? "");
-  if (!code) return { ok: false, reason: "no-free-code" };
-
+  // STF and eight upper-case hex characters: hex has no O or I to misread
+  // against 0 and 1 when she reads it out at the desk, and four random bytes
+  // only have to be unguessable, since uses are capped at one a month.
+  const code = `STF${randomBytes(4).toString("hex").toUpperCase()}`;
   await db.insert(promoCodes).values({
     code,
     staffId,

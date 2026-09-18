@@ -584,6 +584,32 @@ const mutations = [
         lines("    code,", "    staffId: null,"),
       ),
   },
+  {
+    name: "staff codes: hand everyone the same code again",
+    expect: "tests/staff-codes.test.ts",
+    apply: () =>
+      mutate(
+        STAFFCODE,
+        '  const code = `STF${randomBytes(4).toString("hex").toUpperCase()}`;',
+        '  const code = "STFSARA0000";',
+      ),
+  },
+  {
+    name: "subtle: call a code used only after its second use",
+    expect: "tests/staff-codes.test.ts",
+    apply: () =>
+      mutate(STAFFCODE, "    used: row.uses > 0,", "    used: row.uses > 1,"),
+  },
+  {
+    name: "subtle: keep a code live for the instant its month ends",
+    expect: "tests/staff-codes.test.ts",
+    apply: () =>
+      mutate(
+        STAFFCODE,
+        "    active: row.active && !(row.endsAt && row.endsAt <= now),",
+        "    active: row.active && !(row.endsAt && row.endsAt < now),",
+      ),
+  },
 ];
 
 const touched = [

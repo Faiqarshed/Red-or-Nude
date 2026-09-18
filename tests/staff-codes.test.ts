@@ -20,32 +20,42 @@
 
 import "./as-staff";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { eq, like } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { promoCodes, staff } from "@/lib/db/schema";
-import { STAFF_CODE_PERCENT, issueMonthlyCode } from "@/lib/staff-codes";
+import {
+  STAFF_CODE_PERCENT,
+  describeStaffCode,
+  issueMonthlyCode,
+  monthWindow,
+  myStaffCode,
+} from "@/lib/staff-codes";
 
 const { savePromoCode, setPromoActive } = await import(
   "@/app/(admin)/admin/(shell)/promo-codes/actions"
 );
 
-/** Codes generated from this name, so cleanup can never reach a real one. */
 const WHO = "Zzcodetest";
+/** This file's staff rows. Codes are random now, so they are found through these. */
 const EMAIL = "zz-code-test@example.invalid";
+const EMAIL_2 = "zz-code-test-2@example.invalid";
 /** A campaign code of this file's own, for the "still works" half. */
 const CAMPAIGN = "ZZCAMPAIGNTEST";
 
 async function wipe() {
-  await db.delete(promoCodes).where(like(promoCodes.code, `${WHO.toUpperCase()}%`));
+  const mine = await db.select({ id: staff.id }).from(staff).where(inArray(staff.email, [EMAIL, EMAIL_2]));
+  if (mine.length) {
+    await db.delete(promoCodes).where(inArray(promoCodes.staffId, mine.map((m) => m.id)));
+    await db.delete(staff).where(inArray(staff.id, mine.map((m) => m.id)));
+  }
   await db.delete(promoCodes).where(eq(promoCodes.code, CAMPAIGN));
-  await db.delete(staff).where(eq(staff.email, EMAIL));
 }
 
 /** One staff member with one freshly issued code. */
-async function member(): Promise<{ staffId: string; codeId: string; code: string }> {
+async function member(email = EMAIL): Promise<{ staffId: string; codeId: string; code: string }> {
   const [row] = await db
     .insert(staff)
-    .values({ name: `${WHO} Alotaibi`, email: EMAIL, role: "technician" })
+    .values({ name: `${WHO} Alotaibi`, email, role: "technician" })
     .returning({ id: staff.id });
 
   const issued = await issueMonthlyCode(row.id);
@@ -147,5 +157,81 @@ describe("staff codes are separate from campaign codes", () => {
     const rows = await db.select().from(promoCodes).where(eq(promoCodes.staffId, m.staffId));
     expect(rows).toHaveLength(1);
     expect(rows[0].uses).toBe(0);
+  });
+});
+
+describe("a staff code is an id, not her name", () => {
+  it("issues a random STF code that does not spell her", async () => {
+    // "SARA" is a guess away for anyone who knows who works here, and it is 90%
+    // off. The code has to be something only she has been shown.
+    const m = await member();
+
+    expect(m.code).toMatch(/^STF[0-9A-F]{8}$/);
+    expect(m.code).not.toContain(WHO.toUpperCase());
+  });
+
+  it("gives two people with the same first name two different codes", async () => {
+    const a = await member(EMAIL);
+    const b = await member(EMAIL_2);
+
+    expect(a.code).not.toBe(b.code);
+  });
+
+  it("shows her her own code, and nobody else's", async () => {
+    const a = await member(EMAIL);
+    const b = await member(EMAIL_2);
+
+    expect((await myStaffCode(a.staffId))?.code).toBe(a.code);
+    expect((await myStaffCode(b.staffId))?.code).toBe(b.code);
+  });
+
+  it("shows nothing to someone who has no code yet", async () => {
+    const [row] = await db
+      .insert(staff)
+      .values({ name: WHO, email: EMAIL, role: "receptionist" })
+      .returning({ id: staff.id });
+
+    expect(await myStaffCode(row.id)).toBeNull();
+  });
+
+  it("says she has used it once the one use is taken", async () => {
+    const m = await member();
+    expect((await myStaffCode(m.staffId))?.used).toBe(false);
+
+    await db.update(promoCodes).set({ uses: 1 }).where(eq(promoCodes.id, m.codeId));
+
+    expect((await myStaffCode(m.staffId))?.used).toBe(true);
+  });
+});
+
+describe("describeStaffCode", () => {
+  const now = new Date("2026-09-18T10:00:00.000Z");
+  const row = {
+    code: "STF0000ABCD",
+    value: 90,
+    active: true,
+    uses: 0,
+    endsAt: monthWindow(now).end,
+  };
+
+  it("is available until it is used", () => {
+    expect(describeStaffCode(row, now)).toMatchObject({ active: true, used: false, percent: 90 });
+    expect(describeStaffCode({ ...row, uses: 1 }, now).used).toBe(true);
+  });
+
+  it("is off when switched off, whatever the date", () => {
+    expect(describeStaffCode({ ...row, active: false }, now).active).toBe(false);
+  });
+
+  it("is off the instant its month ends, not a moment after", () => {
+    const end = monthWindow(now).end;
+    expect(describeStaffCode(row, new Date(end.getTime() - 1)).active).toBe(true);
+    expect(describeStaffCode(row, end).active).toBe(false);
+  });
+
+  it("renews on the 1st of next month, in Riyadh", () => {
+    // Local midnight on 1 October is 21:00 UTC on 30 September. A UTC date
+    // would tell her the 30th.
+    expect(describeStaffCode(row, now).renewsOn).toBe("2026-10-01");
   });
 });

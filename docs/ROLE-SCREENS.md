@@ -256,9 +256,13 @@ Two ways one gets issued, both through the same idempotent
 Months are Riyadh calendar months (`monthWindow`), so a code opens at local
 midnight on the 1st.
 
+Codes are random — `STF` and eight hex characters, e.g. `STF7A3F09C2` — not
+her first name, which anyone who knows the staff could guess (migration 0026
+re-issued the old name codes). She sees her own at the top of her home screen,
+with whether it is used this month and the date it renews.
+
 Renewal keeps the **same code**: her existing row gets the new month's window
-and `uses` back to 0, so "SARA" stays SARA instead of becoming SARA2, SARA3 and
-running out after ten months. Last month's bookings still point at that row
+and `uses` back to 0, so the code she memorised stays hers. Last month's bookings still point at that row
 through `promo_code_id`, which is where the record of what was used lives. Each
 renewal writes a "Renewed for the month" row to the audit log.
 
@@ -338,8 +342,9 @@ Sign in as the CEO (the seeded `SEED_OWNER_EMAIL` account; its role is now
 - one **Technician**
 
 Check as you go: the role dropdown now reads CEO / Admin / Receptionist /
-Technician. Creating each one should also mint a 90% promo code named after their
-first name — confirm on **Discount codes**.
+Technician. Creating each one should also mint a 90% `STF…` code — confirm it beside their
+name on **Staff**, and at the top of their own home screen when signed in as
+them.
 
 > In `next dev` the login screen is skipped and `lib/auth/guard.ts` signs you in
 > as the CEO. To test the other two roles you need a production-mode run
