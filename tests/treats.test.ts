@@ -19,7 +19,7 @@ import { and, eq, inArray, like } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { addons, bookingAddons, bookings, customers } from "@/lib/db/schema";
 import { loadMyDay } from "@/app/(admin)/admin/(shell)/my-day/data";
-import { fixtures, reset, techniciansAt, todayAt, type Fixtures } from "./helpers";
+import { fixtures, reset, techniciansAt, todayAt, type Fixtures, taggedAddon } from "./helpers";
 
 let f: Fixtures;
 let technicianId: string;
@@ -28,23 +28,9 @@ let technicianId: string;
 const TAG = "zz-treat-test";
 const tagged = like(addons.image, `${TAG}%`);
 
-/** A catalogue row of either kind, marked by its image so it is findable. */
-async function catalogRow(label: string, atCheckout: boolean): Promise<string> {
-  const [row] = await db
-    .insert(addons)
-    .values({
-      name: { ar: label, en: label },
-      priceHalalas: 1000,
-      durationMin: 0,
-      atCheckout,
-      // Doubles as this file's cleanup marker and, for a treat, as the picture
-      // the technician is shown.
-      image: `${TAG}/${label}.webp`,
-      active: false,
-    })
-    .returning({ id: addons.id });
-  return row.id;
-}
+/** A catalogue row of either kind, switched off so it never shows on a live screen. */
+const catalogRow = (label: string, atCheckout: boolean) =>
+  taggedAddon(TAG, label, atCheckout, { active: false });
 
 /** One booking on today's floor for our technician, with the given add-ons. */
 async function bookWith(items: { addonId: string | null; name: string }[]): Promise<string> {

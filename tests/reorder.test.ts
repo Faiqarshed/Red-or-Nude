@@ -17,6 +17,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { addons } from "@/lib/db/schema";
 import { reorderBySort } from "@/lib/admin/reorder";
+import { nameLike } from "./helpers";
 
 /** Marks every row this file creates, so cleanup can never reach a real one. */
 const TAG = "zz-reorder-test";
@@ -25,7 +26,7 @@ const TAG = "zz-reorder-test";
  * `addons.name` is jsonb, so `like` cannot be applied to it directly — Postgres
  * has no `jsonb ~~ text`. Match on the extracted English string instead.
  */
-const tagged = sql`${addons.name} ->> 'en' like ${`%${TAG}%`}`;
+const tagged = nameLike(addons, `%${TAG}%`);
 
 // Both lists are additionally scoped to this file's own rows. The seeded
 // catalogue lives in the same table and would otherwise interleave with the

@@ -93,7 +93,7 @@ export default function GiftCardsView({
 }) {
   const { t, lang } = useAdminI18n();
   const router = useRouter();
-  const { run: refreshAfter } = usePendingAction();
+  const { act } = usePendingAction();
 
   const [tab, setTab] = useState<"issued" | "setup">("issued");
   const [issuing, setIssuing] = useState(false);
@@ -109,12 +109,10 @@ export default function GiftCardsView({
 
   // Holds through the refresh, not just the action — see
   // components/admin/use-pending-action.
-  const run = (fn: () => Promise<{ ok: boolean }>) =>
-    refreshAfter(async () => {
-      setSetupError(null);
-      const res = await fn();
-      if (!res.ok) setSetupError(t.common.error);
-    });
+  const run = (fn: () => Promise<{ ok: boolean }>) => {
+    setSetupError(null);
+    return act(fn, () => setSetupError(t.common.error));
+  };
 
   const deleteValue = () =>
     refreshAfterDelete(async () => {

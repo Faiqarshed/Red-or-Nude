@@ -5,11 +5,9 @@
 // keeps them out of the reviews screen.
 
 import "server-only";
-import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
-  addons,
-  bookingAddons,
   bookings,
   customers,
   designs,
@@ -19,6 +17,7 @@ import {
 } from "@/lib/db/schema";
 import { riyadhDateKey, riyadhDayRange } from "@/lib/time";
 import { mediaUrl } from "@/lib/storage";
+import { addonLinesFor, NO_LINES, type Treat } from "@/lib/admin/addon-lines";
 import { performedFilter, periodRange, type PeriodKey } from "@/lib/performance";
 
 export type MyDayBooking = {
@@ -56,12 +55,7 @@ export type MyDayBooking = {
   imageUrl: string | null;
 };
 
-/** Something to fetch rather than something to do. */
-export type Treat = {
-  name: Localized;
-  /** The picture from the catalogue — she is fetching a *specific* drink. */
-  imageUrl: string | null;
-};
+export type { Treat };
 
 /** One service she has already done, for the 7- and 30-day views. */
 export type MyPastService = {
@@ -177,57 +171,9 @@ export async function loadMyDay(technicianId: string): Promise<MyDayBooking[]> {
 
   if (rows.length === 0) return [];
 
-  // One extra query rather than a join onto `bookings`: joining add-ons there
-  // would fan each booking into a row per add-on, and re-collapsing them is
-  // more code than this.
-  //
-  // The join onto `addons` is a different matter and is what tells a coffee
-  // from a gel removal. `name` still comes from booking_addons, which snapshots
-  // it at the time of sale — the catalogue row is consulted for what *kind* of
-  // thing it was and for its picture, never for what it was called or cost.
-  //
-  // Deliberately no price column in this select. See the header.
-  const addonRows = await db
-    .select({
-      bookingId: bookingAddons.bookingId,
-      name: bookingAddons.name,
-      atCheckout: addons.atCheckout,
-      image: addons.image,
-    })
-    .from(bookingAddons)
-    .leftJoin(addons, eq(addons.id, bookingAddons.addonId))
-    .where(
-      inArray(
-        bookingAddons.bookingId,
-        rows.map((r) => r.id),
-      ),
-    );
-
-  const addonsFor = new Map<string, Localized[]>();
-  const treatsFor = new Map<string, Treat[]>();
-  for (const a of addonRows) {
-    if (!a.name) continue;
-    // A left join, and the fallback below, for a case the database currently
-    // makes unreachable — `addon_id` is half of booking_addons' primary key, so
-    // it is implicitly NOT NULL and the column's `on delete set null` can never
-    // fire. Deleting a catalogue row that has been sold raises instead, and
-    // catalog/actions.ts reports it as "in-use". So the join is total today and
-    // a treat keeps its picture for as long as the ticket exists.
-    //
-    // Kept anyway because the cost is one branch and the failure mode without
-    // it is a treat vanishing from a ticket rather than merely losing its
-    // picture. If that primary key is ever relaxed, this already does the right
-    // thing: the line falls back to the add-on pills, where it used to live.
-    if (a.atCheckout) {
-      const list = treatsFor.get(a.bookingId) ?? [];
-      list.push({ name: a.name, imageUrl: mediaUrl(a.image) });
-      treatsFor.set(a.bookingId, list);
-    } else {
-      const list = addonsFor.get(a.bookingId) ?? [];
-      list.push(a.name);
-      addonsFor.set(a.bookingId, list);
-    }
-  }
+  // A separate query: joining add-ons onto `bookings` would fan each booking
+  // into a row per add-on. The shared loader selects no price — see the header.
+  const lines = await addonLinesFor(rows.map((r) => r.id));
 
   return rows.map((r) => ({
     id: r.id,
@@ -238,8 +184,7 @@ export async function loadMyDay(technicianId: string): Promise<MyDayBooking[]> {
     finishedAt: r.finishedAt?.toISOString() ?? null,
     serviceName: r.serviceName,
     designName: r.designName,
-    addons: addonsFor.get(r.id) ?? [],
-    treats: treatsFor.get(r.id) ?? [],
+    ...(lines.get(r.id) ?? NO_LINES),
     stationLabel: r.stationLabel,
     customerName: r.customerName?.trim().split(/\s+/)[0] ?? null,
     notes: r.notes,

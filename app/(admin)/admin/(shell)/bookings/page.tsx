@@ -12,7 +12,9 @@ import {
   services,
   staff,
   stations,
+  type Localized,
 } from "@/lib/db/schema";
+import { addonLineQuery, NO_LINES, splitAddonLines } from "@/lib/admin/addon-lines";
 import { mediaUrl } from "@/lib/storage";
 import { getSettings } from "@/lib/settings";
 import { requirePage } from "@/lib/auth/guard";
@@ -25,6 +27,14 @@ import BookingsView, { type BookingRow } from "./BookingsView";
 import { partnersElsewhere } from "./partners";
 
 export const dynamic = "force-dynamic";
+
+/** Any priced catalogue row, as the walk-in drawer offers it. */
+const toOption = (r: { id: string; name: Localized; priceHalalas: number; durationMin: number }) => ({
+  id: r.id,
+  name: r.name,
+  priceSar: halalasToSar(r.priceHalalas),
+  durationMin: r.durationMin,
+});
 
 export default async function BookingsPage({
   searchParams,
@@ -144,21 +154,10 @@ export default async function BookingsPage({
           isNull(bookings.noShowResolvedAt),
         ),
       ),
-    // Scoped to the day being browsed, the same way front-desk/data.ts scopes
-    // its copy. Without the join this read every add-on row the salon has ever
-    // sold, on every load, to label one day's bookings.
-    db
-      .select({
-        bookingId: bookingAddons.bookingId,
-        name: bookingAddons.name,
-        // What tells a coffee from a gel removal. The name still comes from
-        // booking_addons, which snapshots it at the time of sale; the catalogue
-        // row is only asked what kind of thing it was.
-        atCheckout: addons.atCheckout,
-      })
-      .from(bookingAddons)
+    // The shared add-on select, scoped here to the day being browsed and run
+    // inside this batch rather than after it as a second round trip.
+    addonLineQuery()
       .innerJoin(bookings, eq(bookings.id, bookingAddons.bookingId))
-      .leftJoin(addons, eq(addons.id, bookingAddons.addonId))
       .where(
         and(eq(bookings.branchId, branchId), gte(bookings.startsAt, dayStart), lt(bookings.startsAt, dayEnd)),
       ),
@@ -171,17 +170,7 @@ export default async function BookingsPage({
   // is this branch only, and the drawer has to name them anyway.
   const elsewhere = await partnersElsewhere(branchId, rows);
 
-  const addonsByBooking = new Map<string, { ar: string; en: string }[]>();
-  const treatsByBooking = new Map<string, { ar: string; en: string }[]>();
-  for (const link of addonLinks) {
-    if (!link.name) continue;
-    // Unreachable today: addon_id is half the primary key, so a sold catalogue
-    // row cannot be deleted at all. See my-day/data.ts for the long version.
-    const into = link.atCheckout ? treatsByBooking : addonsByBooking;
-    const list = into.get(link.bookingId) ?? [];
-    list.push(link.name);
-    into.set(link.bookingId, list);
-  }
+  const lines = splitAddonLines(addonLinks);
 
   return (
     <BookingsView
@@ -204,37 +193,13 @@ export default async function BookingsPage({
       // once instead of on every booking.
       checkinEarlyMin={checkinEarlyMin}
       catalog={{
-        services: serviceRows.map((s) => ({
-          id: s.id,
-          name: s.name,
-          priceSar: halalasToSar(s.priceHalalas),
-          durationMin: s.durationMin,
-        })),
+        services: serviceRows.map(toOption),
         // Split, because to the receptionist a coffee is not an add-on. It is
         // the same `addons` table and the same `addonIds` on the way out —
         // `at_checkout` is the only thing that moves it to its own group.
-        addons: addonRows
-          .filter((a) => !a.atCheckout)
-          .map((a) => ({
-            id: a.id,
-            name: a.name,
-            priceSar: halalasToSar(a.priceHalalas),
-            durationMin: a.durationMin,
-          })),
-        treats: addonRows
-          .filter((a) => a.atCheckout)
-          .map((a) => ({
-            id: a.id,
-            name: a.name,
-            priceSar: halalasToSar(a.priceHalalas),
-            durationMin: a.durationMin,
-          })),
-        removals: removalRows.map((r) => ({
-          id: r.id,
-          name: r.name,
-          priceSar: halalasToSar(r.priceHalalas),
-          durationMin: r.durationMin,
-        })),
+        addons: addonRows.filter((a) => !a.atCheckout).map(toOption),
+        treats: addonRows.filter((a) => a.atCheckout).map(toOption),
+        removals: removalRows.map(toOption),
       }}
       noShowCount={noShowCount?.n ?? 0}
       partnersElsewhere={elsewhere}
@@ -251,8 +216,7 @@ export default async function BookingsPage({
           source: r.source,
           stationId: r.stationId,
           serviceName: r.serviceName,
-          addons: addonsByBooking.get(r.id) ?? [],
-          treats: treatsByBooking.get(r.id) ?? [],
+          ...(lines.get(r.id) ?? NO_LINES),
           totalSar: halalasToSar(r.totalHalalas),
           notes: r.notes,
           customerName: r.customerName,

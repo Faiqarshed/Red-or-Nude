@@ -23,6 +23,7 @@ import {
   Thumb,
   scoreTone, tabItem, tabTone} from "@/components/admin/ui";
 import { AdminTable } from "@/components/admin/Table";
+import type { Treat } from "@/lib/admin/addon-lines";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { statusPulse } from "@/lib/booking-pulse";
 import { cn } from "@/lib/cn";
@@ -71,7 +72,7 @@ export type BookingRow = {
   serviceName: Localized | null;
   addons: Localized[];
   /** Coffee and treats — an errand, not part of the work. */
-  treats: Localized[];
+  treats: Treat[];
   totalSar: number;
   notes: string | null;
   customerName: string | null;

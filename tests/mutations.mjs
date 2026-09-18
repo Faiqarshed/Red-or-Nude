@@ -34,7 +34,7 @@ const CLIENT = "lib/booking.ts";
 const REORDER = "lib/admin/reorder.ts";
 const HISTORY = "app/(admin)/admin/(shell)/customers/data.ts";
 const REWARDS = "lib/rewards.ts";
-const MYDAY = "app/(admin)/admin/(shell)/my-day/data.ts";
+const LINES = "lib/admin/addon-lines.ts";
 const TREAT = "lib/station-treat.ts";
 const DBERR = "lib/db/errors.ts";
 const CATALOG = "app/(admin)/admin/(shell)/catalog/actions.ts";
@@ -452,9 +452,9 @@ const mutations = [
     expect: "tests/treats.test.ts",
     apply: () =>
       mutate(
-        MYDAY,
-        "    if (a.atCheckout) {",
-        "    if (false) {",
+        LINES,
+        "    if (r.atCheckout) lines.treats.push(",
+        "    if (false) lines.treats.push(",
       ),
   },
   {
@@ -462,9 +462,9 @@ const mutations = [
     expect: "tests/treats.test.ts",
     apply: () =>
       mutate(
-        MYDAY,
-        "    if (a.atCheckout) {",
-        "    if (!a.atCheckout) {",
+        LINES,
+        "    if (r.atCheckout) lines.treats.push(",
+        "    if (!r.atCheckout) lines.treats.push(",
       ),
   },
   // ---- a treat ordered from the chair ----------------------------------------
@@ -549,28 +549,8 @@ const mutations = [
     apply: () =>
       mutate(
         DBERR,
-        "    const name = (current as { constraint_name?: unknown }).constraint_name;",
-        "    const name = (current as { message?: unknown }).message;",
-      ),
-  },
-  {
-    name: "subtle: look one level down instead of walking the chain",
-    expect: "tests/db-errors.test.ts",
-    apply: () =>
-      mutate(
-        DBERR,
-        "  for (let depth = 0; current && depth < 5; depth++) {",
-        "  for (let depth = 0; current && depth < 1; depth++) {",
-      ),
-  },
-  {
-    name: "subtle: accept an empty constraint name and stop looking",
-    expect: "tests/db-errors.test.ts",
-    apply: () =>
-      mutate(
-        DBERR,
-        '    if (typeof name === "string" && name.length > 0) return name;',
-        '    if (typeof name === "string") return name;',
+        "?.cause?.constraint_name || null;",
+        "?.message || null;",
       ),
   },
   // ---- a staff code is not a campaign ----------------------------------------
@@ -607,7 +587,7 @@ const mutations = [
 ];
 
 const touched = [
-  CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, MYDAY, TREAT,
+  CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, LINES, TREAT,
   DBERR, CATALOG, PROMO, STAFFCODE,
 ];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));

@@ -478,23 +478,7 @@ function NextCard({
           </div>
         ) : null}
 
-        {/* Its own row, with the picture, because this is the one thing on the
-            ticket that is an errand rather than the work. It used to arrive as
-            another grey pill beside the nail add-ons and nothing said it was a
-            drink to fetch. Warm ground so it reads as a note to act on. */}
-        {b.treats.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 ring-1 ring-amber-200/70">
-            <span className="text-xs font-semibold uppercase tracking-wide text-amber-800">
-              {m.treats}
-            </span>
-            {b.treats.map((t, i) => (
-              <span key={i} className="flex items-center gap-1.5 text-xs font-medium text-ink">
-                <Thumb src={t.imageUrl} size="sm" />
-                {pick(t.name, lang)}
-              </span>
-            ))}
-          </div>
-        ) : null}
+        <TreatStrip treats={b.treats} />
 
         {b.customerName ? (
           <p className="text-sm text-ink/70">
@@ -723,23 +707,7 @@ function DetailDialog({
           </div>
         ) : null}
 
-        {/* Its own row, with the picture, because this is the one thing on the
-            ticket that is an errand rather than the work. It used to arrive as
-            another grey pill beside the nail add-ons and nothing said it was a
-            drink to fetch. Warm ground so it reads as a note to act on. */}
-        {b.treats.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 ring-1 ring-amber-200/70">
-            <span className="text-xs font-semibold uppercase tracking-wide text-amber-800">
-              {m.treats}
-            </span>
-            {b.treats.map((t, i) => (
-              <span key={i} className="flex items-center gap-1.5 text-xs font-medium text-ink">
-                <Thumb src={t.imageUrl} size="sm" />
-                {pick(t.name, lang)}
-              </span>
-            ))}
-          </div>
-        ) : null}
+        <TreatStrip treats={b.treats} />
 
         <div className="grid gap-2 rounded-xl bg-white p-4 text-sm sm:grid-cols-2">
           <p className="text-ink/55">
@@ -769,5 +737,29 @@ function DetailDialog({
         ) : null}
       </div>
     </Dialog>
+  );
+}
+
+/**
+ * The treats on a ticket, on their own row with their pictures: the one thing
+ * on it that is an errand rather than the work. It used to arrive as another
+ * grey pill beside the nail add-ons and nothing said it was a drink to fetch.
+ * Warm ground so it reads as a note to act on. Card and dialog both show it.
+ */
+function TreatStrip({ treats }: { treats: MyDayBooking["treats"] }) {
+  const { t, lang } = useAdminI18n();
+  if (treats.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 ring-1 ring-amber-200/70">
+      <span className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+        {t.myDay.treats}
+      </span>
+      {treats.map((treat, i) => (
+        <span key={i} className="flex items-center gap-1.5 text-xs font-medium text-ink">
+          <Thumb src={treat.imageUrl} size="sm" />
+          {pick(treat.name, lang)}
+        </span>
+      ))}
+    </div>
   );
 }

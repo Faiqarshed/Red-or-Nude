@@ -2,7 +2,7 @@ import { asc, desc, isNotNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { branches, promoCodes, staff, staffTimeOff } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
-import StaffView from "./StaffView";
+import StaffView, { type StaffRowDiscount } from "./StaffView";
 
 export const dynamic = "force-dynamic";
 
@@ -28,9 +28,20 @@ export default async function StaffPage() {
 
   // Newest first above, so the first one seen per person is the current one.
   // Older rows exist from before codes were renewed in place.
-  const codeFor = new Map<string, (typeof codeRows)[number]>();
+  const now = new Date();
+  const codeFor = new Map<string, StaffRowDiscount>();
   for (const row of codeRows) {
-    if (row.staffId && !codeFor.has(row.staffId)) codeFor.set(row.staffId, row);
+    if (!row.staffId || codeFor.has(row.staffId)) continue;
+    codeFor.set(row.staffId, {
+      id: row.id,
+      code: row.code,
+      percent: row.value,
+      // Both ways a code stops working, as one flag: the switch, and a month
+      // that has ended. The row still shows either way — greyed, not gone.
+      active: row.active && !(row.endsAt && row.endsAt <= now),
+      // `max_uses` is 1, so any use at all is this month spent.
+      used: row.uses > 0,
+    });
   }
 
   const timeOff = new Map<string, { id: string; startsOn: string; endsOn: string }[]>();
@@ -58,21 +69,7 @@ export default async function StaffPage() {
         // The hash never leaves the server.
         hasPassword: s.passwordHash !== null,
         timeOff: timeOff.get(s.id) ?? [],
-        discount: (() => {
-          const row = codeFor.get(s.id);
-          if (!row) return null;
-          return {
-            id: row.id,
-            code: row.code,
-            percent: row.value,
-            // Both ways a code stops working, collapsed into one flag: the
-            // switch, and a month that has ended. The row is the record either
-            // way, so it still shows — greyed rather than gone.
-            active: row.active && !(row.endsAt && row.endsAt <= new Date()),
-            // `max_uses` is 1, so any use at all is this month spent.
-            used: row.uses > 0,
-          };
-        })(),
+        discount: codeFor.get(s.id) ?? null,
       }))}
     />
   );

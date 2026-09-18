@@ -22,7 +22,7 @@ import {
   stations,
 } from "@/lib/db/schema";
 import { buyStationTreat } from "@/lib/station-treat";
-import { fixtures, reset, type Fixtures } from "./helpers";
+import { fixtures, reset, type Fixtures, taggedAddon } from "./helpers";
 
 let f: Fixtures;
 let chair: { id: string; token: string };
@@ -35,20 +35,8 @@ const tagged = like(addons.image, `${TAG}%`);
 const PHONE = "0500000097";
 const PRICE = 1000;
 
-async function catalogRow(label: string, atCheckout: boolean, active = true): Promise<string> {
-  const [row] = await db
-    .insert(addons)
-    .values({
-      name: { ar: label, en: label },
-      priceHalalas: PRICE,
-      durationMin: 0,
-      atCheckout,
-      image: `${TAG}/${label}.webp`,
-      active,
-    })
-    .returning({ id: addons.id });
-  return row.id;
-}
+const catalogRow = (label: string, atCheckout: boolean, active = true) =>
+  taggedAddon(TAG, label, atCheckout, { active, priceHalalas: PRICE });
 
 /** A booking occupying `chair` across `now`, unless told otherwise. */
 async function seat(opts: {

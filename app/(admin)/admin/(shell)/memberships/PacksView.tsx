@@ -48,14 +48,9 @@ export default function PacksView({
   const router = useRouter();
   const [editing, setEditing] = useState<PackRow | null>(null);
   const [creating, setCreating] = useState(false);
-  const { run: refreshAfter } = usePendingAction();
-
   // Holds through the refresh, not just the action — see
   // components/admin/use-pending-action.
-  const run = (fn: () => Promise<unknown>) =>
-    refreshAfter(async () => {
-      await fn();
-    });
+  const { act: run } = usePendingAction();
 
   /** What a pack is worth at list price, so the discount is visible while pricing it. */
   const listPrice = (row: PackRow) =>

@@ -41,6 +41,18 @@ export type PendingAction = {
    * forgets to say costs a query, not a stale screen.
    */
   run: (work: () => Promise<boolean | void>) => Promise<void>;
+  /**
+   * `run` for the usual shape of server action, one answering `{ ok, error? }`.
+   *
+   * Refreshes when it worked. When it was refused, hands the error code to
+   * `onRefused` and skips the refresh, since nothing changed. Every screen had
+   * this check-set-skip written out by hand, and the ones that forgot the skip
+   * re-rendered unchanged rows after every refusal.
+   */
+  act: (
+    action: () => Promise<{ ok: boolean; error?: string }>,
+    onRefused?: (error: string) => void,
+  ) => Promise<void>;
 };
 
 export function usePendingAction(): PendingAction {
@@ -63,5 +75,16 @@ export function usePendingAction(): PendingAction {
     [router],
   );
 
-  return { pending: running || refreshing, run };
+  const act = useCallback<PendingAction["act"]>(
+    (action, onRefused) =>
+      run(async () => {
+        const res = await action();
+        if (res.ok) return;
+        onRefused?.(res.error ?? "");
+        return false;
+      }),
+    [run],
+  );
+
+  return { pending: running || refreshing, run, act };
 }

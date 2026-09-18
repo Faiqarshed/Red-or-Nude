@@ -219,6 +219,26 @@ export const closures = pgTable("closures", {
 
 // ------------------------------------------------------------- catalog ------
 
+/**
+ * One live row per name, per language (client review, Sep 2026).
+ *
+ * Two active services, add-ons or removal types called the same thing are
+ * indistinguishable on every screen that offers them, and picking the wrong one
+ * puts the wrong price on a real appointment. Partial on `active`, because
+ * switching the old row off is how the salon reuses a name without losing the
+ * history hanging off it. An index, not a check in the action: two tabs that
+ * both read "that name is free" and both save is what a check-then-write cannot
+ * see. The catalogue actions read these names back to say which rule refused.
+ */
+function activeName(table: string, t: { name: AnyPgColumn; active: AnyPgColumn }) {
+  const on = (lang: "en" | "ar") =>
+    uniqueIndex(`${table}_active_name_${lang}_unique`)
+      .on(sql`lower(btrim(${t.name} ->> ${sql.raw(`'${lang}'`)}))`)
+      .where(sql`${t.active}`);
+  return { activeNameEn: on("en"), activeNameAr: on("ar") };
+}
+
+
 export const services = pgTable(
   "services",
   {
@@ -243,26 +263,7 @@ export const services = pgTable(
     active: boolean("active").notNull().default(true),
     ...stamps,
   },
-  (t) => ({
-    /**
-     * One live row per name, per language (client review, Sep 2026).
-     *
-     * Two active services both called the same thing are indistinguishable on
-     * every screen that offers them, and the receptionist picking the wrong one
-     * puts the wrong price on a real appointment. Partial on `active`, because
-     * switching the old row off is how the salon reuses a name without losing
-     * the history hanging off it.
-     *
-     * An index, not a check in the action: two tabs that both read "that name
-     * is free" and both save is precisely what a check-then-write cannot see.
-     */
-    activeNameEn: uniqueIndex("services_active_name_en_unique")
-      .on(sql`lower(btrim(${t.name} ->> 'en'))`)
-      .where(sql`${t.active}`),
-    activeNameAr: uniqueIndex("services_active_name_ar_unique")
-      .on(sql`lower(btrim(${t.name} ->> 'ar'))`)
-      .where(sql`${t.active}`),
-  }),
+  (t) => activeName("services", t),
 );
 
 export const addons = pgTable(
@@ -286,26 +287,7 @@ export const addons = pgTable(
     active: boolean("active").notNull().default(true),
     ...stamps,
   },
-  (t) => ({
-    /**
-     * One live row per name, per language (client review, Sep 2026).
-     *
-     * Two active add-ons both called the same thing are indistinguishable on
-     * every screen that offers them, and the receptionist picking the wrong one
-     * puts the wrong price on a real appointment. Partial on `active`, because
-     * switching the old row off is how the salon reuses a name without losing
-     * the history hanging off it.
-     *
-     * An index, not a check in the action: two tabs that both read "that name
-     * is free" and both save is precisely what a check-then-write cannot see.
-     */
-    activeNameEn: uniqueIndex("addons_active_name_en_unique")
-      .on(sql`lower(btrim(${t.name} ->> 'en'))`)
-      .where(sql`${t.active}`),
-    activeNameAr: uniqueIndex("addons_active_name_ar_unique")
-      .on(sql`lower(btrim(${t.name} ->> 'ar'))`)
-      .where(sql`${t.active}`),
-  }),
+  (t) => activeName("addons", t),
 );
 
 export const removalTypes = pgTable(
@@ -319,26 +301,7 @@ export const removalTypes = pgTable(
     active: boolean("active").notNull().default(true),
     ...stamps,
   },
-  (t) => ({
-    /**
-     * One live row per name, per language (client review, Sep 2026).
-     *
-     * Two active removal types both called the same thing are indistinguishable on
-     * every screen that offers them, and the receptionist picking the wrong one
-     * puts the wrong price on a real appointment. Partial on `active`, because
-     * switching the old row off is how the salon reuses a name without losing
-     * the history hanging off it.
-     *
-     * An index, not a check in the action: two tabs that both read "that name
-     * is free" and both save is precisely what a check-then-write cannot see.
-     */
-    activeNameEn: uniqueIndex("removal_types_active_name_en_unique")
-      .on(sql`lower(btrim(${t.name} ->> 'en'))`)
-      .where(sql`${t.active}`),
-    activeNameAr: uniqueIndex("removal_types_active_name_ar_unique")
-      .on(sql`lower(btrim(${t.name} ->> 'ar'))`)
-      .where(sql`${t.active}`),
-  }),
+  (t) => activeName("removal_types", t),
 );
 
 /** Which add-ons are offered with which service. Empty = offered with all. */

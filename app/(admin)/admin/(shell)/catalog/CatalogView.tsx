@@ -8,8 +8,28 @@ import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
 import type { Localized } from "@/lib/db/schema";
 import { usePendingAction } from "@/components/admin/use-pending-action";
+import type { AdminStrings } from "@/lib/admin/strings";
 import CatalogDrawer from "./CatalogDrawer";
 import { moveCatalogItem, setCatalogActive, type CatalogKind } from "./actions";
+
+/**
+ * What to tell a person whose catalogue change was refused. Shared by the list
+ * and the drawer, so a refusal reads the same wherever it happened.
+ */
+export function catalogError(t: AdminStrings, code: string): string {
+  switch (code) {
+    case "not-found":
+      return t.validation.notFound;
+    // Two live rows may not share a name. Says which way out rather than "error".
+    case "duplicate-name":
+      return t.catalog.duplicateName;
+    // Booking history holds it (FK restrict); deactivating is the answer.
+    case "in-use":
+      return t.catalog.inUseCannotDelete;
+    default:
+      return t.common.error;
+  }
+}
 
 /** One picture in an add-on's design picker. */
 export type DesignRow = {
@@ -64,9 +84,9 @@ export default function CatalogView({
   const [tab, setTab] = useState<CatalogKind>("service");
   const [editing, setEditing] = useState<CatalogRow | null>(null);
   const [creating, setCreating] = useState(false);
-  const { run: refreshAfter } = usePendingAction();
-  /** Why the last switch refused. Cleared by the next attempt. */
-  const [toggleError, setToggleError] = useState<string | null>(null);
+  const { act } = usePendingAction();
+  /** Why the last arrow or switch was refused. Cleared by the next attempt. */
+  const [listError, setListError] = useState<string | null>(null);
 
   const rows =
     tab === "service" ? services : tab === "addon" ? addons : tab === "upsell" ? upsells : removals;
@@ -81,11 +101,12 @@ export default function CatalogView({
           : t.catalog.newRemoval;
 
   // Holds through the refresh, not just the action — see
-  // components/admin/use-pending-action for why startTransition could not.
-  const run = (fn: () => Promise<unknown>) =>
-    refreshAfter(async () => {
-      await fn();
-    });
+  // components/admin/use-pending-action. A refusal is shown rather than
+  // swallowed: switching a second row on under a taken name lands here.
+  const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
+    setListError(null);
+    return act(fn, (code) => setListError(catalogError(t, code)));
+  };
 
   return (
     <>
@@ -119,12 +140,12 @@ export default function CatalogView({
         ))}
       </div>
 
-      {toggleError && (
+      {listError && (
         <p
           role="alert"
           className="mb-4 rounded-xl bg-red/[0.06] px-4 py-3 text-sm font-medium text-red"
         >
-          {toggleError}
+          {listError}
         </p>
       )}
 
@@ -209,21 +230,7 @@ export default function CatalogView({
                     aria-checked={row.active}
                     aria-label={t.catalog.active}
                     title={t.catalog.activeHint}
-                    onClick={() =>
-                      refreshAfter(async () => {
-                        setToggleError(null);
-                        const res = await setCatalogActive(tab, row.id, !row.active);
-                        if (res.ok) return;
-                        // Switching a second row on under a name that is taken.
-                        // Nothing changed, so there is nothing to refresh for.
-                        setToggleError(
-                          res.error === "duplicate-name"
-                            ? t.catalog.duplicateName
-                            : t.common.error,
-                        );
-                        return false;
-                      })
-                    }
+                    onClick={() => run(() => setCatalogActive(tab, row.id, !row.active))}
                     className={cn(
                       "relative h-5 w-9 shrink-0 rounded-full transition-colors",
                       touchTargetSwitch,

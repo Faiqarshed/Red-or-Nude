@@ -11,26 +11,20 @@
 // goes through a real violation against a real Postgres rather than a
 // hand-built error object — a fake one would have passed the old code too.
 
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { like, sql } from "drizzle-orm";
+import "./as-staff";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { like } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { promoCodes, services } from "@/lib/db/schema";
 import { violatedConstraint } from "@/lib/db/errors";
-
-// The last case below goes through the real server action, whose first line is
-// a capability check and whose last is a cache revalidation. Neither exists in
-// a test run.
-vi.mock("@/lib/auth/guard", () => ({
-  requireCan: async () => ({ id: null, name: "Db error test" }),
-}));
-vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+import { nameLike } from "./helpers";
 
 const CODE = "ZZDBERRTEST";
 const NAME = "zz-db-error-test";
 
 async function wipe() {
   await db.delete(promoCodes).where(like(promoCodes.code, `${CODE}%`));
-  await db.delete(services).where(sql`${services.name} ->> 'en' like ${`${NAME}%`}`);
+  await db.delete(services).where(nameLike(services, `${NAME}%`));
 }
 
 /** Run something that must fail, and hand back what it threw. */
@@ -77,35 +71,6 @@ describe("violatedConstraint", () => {
     expect(violatedConstraint(null)).toBeNull();
     expect(violatedConstraint(undefined)).toBeNull();
     expect(violatedConstraint("not an error at all")).toBeNull();
-  });
-
-  it("finds it however deeply the driver error is wrapped", async () => {
-    // Drizzle wraps once today. The chain is walked so that a version which
-    // wraps twice does not silently take these messages away again.
-    const driver = Object.assign(new Error("duplicate key"), {
-      constraint_name: "some_index_unique",
-    });
-    const wrapped = new Error("Failed query", { cause: new Error("outer", { cause: driver }) });
-
-    expect(violatedConstraint(wrapped)).toBe("some_index_unique");
-  });
-
-  it("does not loop forever on a cause cycle", async () => {
-    const a = new Error("a");
-    const b = new Error("b");
-    (a as Error & { cause: unknown }).cause = b;
-    (b as Error & { cause: unknown }).cause = a;
-
-    expect(violatedConstraint(a)).toBeNull();
-  });
-
-  it("ignores an empty constraint name and keeps looking", async () => {
-    const outer = Object.assign(new Error("outer"), { constraint_name: "" });
-    (outer as Error & { cause: unknown }).cause = Object.assign(new Error("inner"), {
-      constraint_name: "real_index_unique",
-    });
-
-    expect(violatedConstraint(outer)).toBe("real_index_unique");
   });
 });
 

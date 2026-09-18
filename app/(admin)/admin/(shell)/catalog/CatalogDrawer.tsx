@@ -9,7 +9,7 @@ import { pick } from "@/lib/localized";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { NumberField, TextPair } from "@/components/admin/TextField";
 import { arScript, collect, DESC_MAX, focusFirstInvalid, hasErrors, NAME_MAX, rules } from "@/lib/admin/validate";
-import type { CatalogRow, DesignRow } from "./CatalogView";
+import { catalogError, type CatalogRow, type DesignRow } from "./CatalogView";
 import { deleteCatalogItem, saveCatalogItem, type CatalogKind } from "./actions";
 
 type FormState = {
@@ -196,16 +196,7 @@ export default function CatalogDrawer({
         sort: row?.sort ?? nextSort,
       });
       if (res.ok) onSaved();
-      else
-        setError(
-          res.error === "not-found"
-            ? t.validation.notFound
-            : // The one refusal a person can act on: two live rows may not
-              // share a name. Says which way out rather than "error".
-              res.error === "duplicate-name"
-              ? t.catalog.duplicateName
-              : t.common.error,
-        );
+      else setError(catalogError(t, res.error));
     });
 
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -217,9 +208,7 @@ export default function CatalogDrawer({
       setDeleteError(null);
       const res = await deleteCatalogItem(kind, row.id);
       if (res.ok) return onSaved();
-      // A service with booking history can't be deleted (FK restrict) — that
-      // would erase what a customer actually bought. Deactivating is the answer.
-      setDeleteError(res.error === "in-use" ? t.catalog.inUseCannotDelete : t.common.error);
+      setDeleteError(catalogError(t, res.error));
     });
 
   return (

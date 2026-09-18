@@ -4,9 +4,10 @@
 // prefix. The gate in tests/setup.ts has already refused to run against
 // anything but a local `*_test` database by the time any of this executes.
 
-import { and, eq, inArray, like } from "drizzle-orm";
+import { and, eq, inArray, like, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
+  addons,
   bookings,
   branches,
   customers,
@@ -16,6 +17,7 @@ import {
   ticketCounters,
 } from "@/lib/db/schema";
 import { UTC_OFFSET_HOURS, riyadhDateKey } from "@/lib/time";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 /**
  * Distinct from the check scripts' `0500000001`, so a stray row left by one
@@ -125,3 +127,36 @@ export async function techniciansAt(branchId: string) {
     .from(staff)
     .where(and(eq(staff.branchId, branchId), eq(staff.role, "technician"), eq(staff.active, true)));
 }
+
+/**
+ * A catalogue add-on of one test file's own, marked by `tag` in its image so
+ * that file's cleanup — `like(addons.image, `${tag}%`)` — can never reach a
+ * real row. For a treat the image doubles as the picture a technician is shown.
+ */
+export async function taggedAddon(
+  tag: string,
+  label: string,
+  atCheckout: boolean,
+  { active = true, priceHalalas = 1000 }: { active?: boolean; priceHalalas?: number } = {},
+): Promise<string> {
+  const [row] = await db
+    .insert(addons)
+    .values({
+      name: { ar: label, en: label },
+      priceHalalas,
+      durationMin: 0,
+      atCheckout,
+      image: `${tag}/${label}.webp`,
+      active,
+    })
+    .returning({ id: addons.id });
+  return row.id;
+}
+
+/**
+ * Rows whose English name matches a LIKE pattern. `name` is jsonb, so plain
+ * `like()` is a type error in Postgres; this is the marker for tables that have
+ * nowhere else to hide one — removal types have no image column.
+ */
+export const nameLike = (table: { name: AnyPgColumn }, pattern: string) =>
+  sql`${table.name} ->> 'en' like ${pattern}`;

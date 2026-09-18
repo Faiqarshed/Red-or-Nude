@@ -54,8 +54,10 @@ type StaffRow = {
   hasPassword: boolean;
   timeOff: TimeOffRow[];
   /** Her own monthly discount code, or null before the first one is issued. */
-  discount: { id: string; code: string; percent: number; active: boolean; used: boolean } | null;
+  discount: StaffRowDiscount | null;
 };
+
+export type StaffRowDiscount = { id: string; code: string; percent: number; active: boolean; used: boolean };
 
 const RANK: Record<StaffRole, number> = {
   technician: 1,
@@ -80,7 +82,7 @@ export default function StaffView({
   const [editing, setEditing] = useState<StaffRow | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { run: refreshAfter } = usePendingAction();
+  const { act } = usePendingAction();
   const [doomed, setDoomed] = useState<StaffRow | null>(null);
 
   const messageFor = (code: string) =>
@@ -102,12 +104,10 @@ export default function StaffView({
 
   // Holds through the refresh, not just the action — see
   // components/admin/use-pending-action.
-  const run = (fn: () => Promise<{ ok: boolean; error?: string }>) =>
-    refreshAfter(async () => {
-      setError(null);
-      const res = await fn();
-      if (!res.ok) setError(messageFor(res.error ?? ""));
-    });
+  const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
+    setError(null);
+    return act(fn, (code) => setError(messageFor(code)));
+  };
 
   return (
     <>

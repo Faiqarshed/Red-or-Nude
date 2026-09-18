@@ -16,18 +16,12 @@
 // receptionist can act on is the part that silently rots if the index is ever
 // renamed.
 
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import "./as-staff";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { addons, removalTypes, services } from "@/lib/db/schema";
-
-// No cookies in a test run, and the actions' first line is a capability check.
-// `id: null` is a real shape — audit_log.actor_id is nullable for the customer
-// who cancels her own booking — so nothing here needs a fake staff row.
-vi.mock("@/lib/auth/guard", () => ({
-  requireCan: async () => ({ id: null, name: "Catalog name test" }),
-}));
-vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+import { nameLike } from "./helpers";
 
 const { saveCatalogItem, setCatalogActive } = await import(
   "@/app/(admin)/admin/(shell)/catalog/actions"
@@ -45,7 +39,7 @@ const named = (label: string) => ({ ar: `${TAG}-ar-${label}`, en: `${TAG}-${labe
 
 async function wipe() {
   for (const table of [services, addons, removalTypes]) {
-    await db.delete(table).where(sql`${table.name} ->> 'en' like ${`${TAG}%`}`);
+    await db.delete(table).where(nameLike(table, `${TAG}%`));
   }
 }
 
@@ -142,7 +136,7 @@ describe("one active row per name", () => {
     const rows = await db
       .select()
       .from(services)
-      .where(sql`${services.name} ->> 'en' like ${`${TAG}%`}`);
+      .where(nameLike(services, `${TAG}%`));
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe(id);
     expect(rows[0].priceHalalas).toBe(5000);
@@ -254,7 +248,7 @@ describe("one active row per name", () => {
     const rows = await db
       .select()
       .from(addons)
-      .where(sql`${addons.name} ->> 'en' like ${`${TAG}%`}`);
+      .where(nameLike(addons, `${TAG}%`));
     expect(rows).toHaveLength(2);
   });
 });

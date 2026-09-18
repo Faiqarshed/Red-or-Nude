@@ -158,7 +158,7 @@ export function BookingFacts({ booking, now }: { booking: BookingRow; now: numbe
     // row the desk learns to skip, and then misses on the ticket that has one.
     ...row(
       t.myDay.treats,
-      booking.treats.length ? booking.treats.map((a) => pick(a, lang)).join("، ") : null,
+      booking.treats.length ? booking.treats.map((a) => pick(a.name, lang)).join("، ") : null,
     ),
     ...row(f.checkedIn, booking.checkedInAt ? localTime(booking.checkedInAt) : null),
     ...row(f.started, booking.startedAt ? localTime(booking.startedAt) : null),

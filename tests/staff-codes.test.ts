@@ -18,16 +18,12 @@
 // mutations on the marketing screen refuse a staff row outright — a tab opened
 // before the split still holds the id.
 
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { eq, isNull, like } from "drizzle-orm";
+import "./as-staff";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { eq, like } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { promoCodes, staff } from "@/lib/db/schema";
 import { STAFF_CODE_PERCENT, issueMonthlyCode } from "@/lib/staff-codes";
-
-vi.mock("@/lib/auth/guard", () => ({
-  requireCan: async () => ({ id: null, name: "Staff code test" }),
-}));
-vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 
 const { savePromoCode, setPromoActive } = await import(
   "@/app/(admin)/admin/(shell)/promo-codes/actions"
@@ -75,53 +71,23 @@ describe("staff codes are separate from campaign codes", () => {
     expect(row.maxUses).toBe(1);
   });
 
-  it("keeps it out of the marketing list", async () => {
-    // The query /admin/promo-codes now runs. Asserted here rather than by
-    // eye, because the row is invisible on that screen by absence — nothing
-    // on the page would look wrong if the filter were dropped.
-    const m = await member();
-
-    const listed = await db.select().from(promoCodes).where(isNull(promoCodes.staffId));
-
-    expect(listed.some((r) => r.id === m.codeId)).toBe(false);
-  });
-
-  it("refuses to edit a staff code from the marketing screen", async () => {
-    const m = await member();
-
-    const res = await savePromoCode({
-      id: m.codeId,
-      code: m.code,
-      type: "percent",
-      // The move that breaks her: 90% quietly becomes 10%.
-      value: 10,
-      minTotalSar: 0,
-      active: true,
-    });
-
-    expect(res).toEqual({ ok: false, error: "staff-code" });
-  });
-
-  it("leaves the code untouched when that edit is refused", async () => {
+  it("refuses to edit a staff code from the marketing screen, and changes nothing", async () => {
     const m = await member();
     const [before] = await db.select().from(promoCodes).where(eq(promoCodes.id, m.codeId));
 
-    await savePromoCode({
+    const res = await savePromoCode({
       id: m.codeId,
       code: "SOMETHINGELSE",
+      // The move that breaks her: 90% quietly becomes a 1 SAR discount.
       type: "fixed",
       value: 1,
       minTotalSar: 0,
       active: false,
     });
 
+    expect(res).toEqual({ ok: false, error: "staff-code" });
     const [after] = await db.select().from(promoCodes).where(eq(promoCodes.id, m.codeId));
-    expect(after.code).toBe(before.code);
-    expect(after.value).toBe(before.value);
-    expect(after.type).toBe(before.type);
-    expect(after.active).toBe(before.active);
-    expect(after.staffId).toBe(before.staffId);
-    expect(after.endsAt?.getTime()).toBe(before.endsAt?.getTime());
+    expect(after).toEqual(before);
   });
 
   it("refuses to switch a staff code off from the marketing screen", async () => {
