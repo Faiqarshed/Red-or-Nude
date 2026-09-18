@@ -74,7 +74,28 @@ export function toMemberSelection(
     addons: addons.map((a) => pick(a.name, lang)),
     removal: removal ? pick(removal.name, lang) : null,
     design: g.design,
-    price: guestTotals(catalog, g).price,
+    ...guestTotals(catalog, g),
+  };
+}
+
+/**
+ * toMemberSelection backwards: a guest saved for checkout, as picker state
+ * again. Anything the catalogue no longer offers is dropped, and her service
+ * index is null if the service itself is gone.
+ */
+export function guestFromMember(
+  catalog: PublicCatalog,
+  m: MemberSelection,
+  lang: "ar" | "en",
+): GuestState {
+  const service = catalog.services.findIndex((s) => s.id === m.serviceId);
+  const design = catalog.designs.find((d) => d.id === m.designId);
+  return {
+    name: m.guestName ?? undefined,
+    service: service >= 0 ? service : null,
+    addons: m.addonIds.map((id) => catalog.addons.findIndex((a) => a.id === id)).filter((i) => i >= 0),
+    removal: catalog.removals.some((r) => r.id === m.removalTypeId) ? m.removalTypeId : null,
+    design: design ? pick(design.name, lang) : null,
   };
 }
 
@@ -158,6 +179,18 @@ export default function GuestPicker({
     ? (removals.find((r) => r.id === value.removal)?.name ?? null)
     : null;
 
+  // Which add-on this design belongs to. Found through the design itself rather
+  // than "the first seasonal one ticked": two add-ons can both offer a
+  // catalogue, and naming the wrong one is the confusion this is here to end.
+  const designOwner =
+    (value.design &&
+      addons.find(
+        (a, i) =>
+          value.addons.includes(i) &&
+          designs.some((d) => d.addonId === a.id && pick(d.name, lang) === value.design),
+      )) ||
+    null;
+
   const toggleAddon = (i: number) => {
     const isSeasonal = addons[i].seasonal;
     const on = value.addons.includes(i);
@@ -218,10 +251,27 @@ export default function GuestPicker({
             />
           ))}
         </div>
-        {value.design && (
-          <p className="mt-3 text-start text-[12px] text-ink/55">
-            {b.chosenDesign} <span className="font-semibold text-red">{value.design}</span>
-          </p>
+        {/* Named, and changeable. "Selected design: Winter Rose" sat under the
+            whole grid saying nothing about which add-on it was for, and the
+            only way to pick another was to untick the add-on and tick it
+            again. */}
+        {value.design && designOwner && (
+          <button
+            type="button"
+            onClick={() => {
+              setDesignsFor(designOwner.id);
+              setModal("designs");
+            }}
+            className="mt-3 flex items-center gap-2 text-start text-[12px] text-ink/55 transition-colors hover:text-ink"
+          >
+            <span>
+              {b.chosenDesign.replace("{addon}", pick(designOwner.name, lang))}{" "}
+              <span className="font-semibold text-red">{value.design}</span>
+            </span>
+            <span className="font-semibold text-red underline underline-offset-2">
+              {b.changeDesign}
+            </span>
+          </button>
         )}
       </div>
 
@@ -247,7 +297,10 @@ export default function GuestPicker({
           onClose={() => setModal(null)}
         />
       )}
-      {modal === "designs" && (
+      {/* Waits for the add-on to actually be on: the booking page can hold a
+          change back behind a "pick your time again?" question, and the designs
+          must not open over it for an add-on she may yet decline. */}
+      {modal === "designs" && value.addons.some((i) => addons[i].id === designsFor) && (
         <DesignsModal
           designs={designs.filter((d) => d.addonId === designsFor)}
           initialDesign={value.design}

@@ -149,7 +149,13 @@ export default function DashboardView({
         />
       </div>
 
-      <div className="mt-4 grid gap-4 sm:grid-cols-3">
+      {/* Two up on a phone rather than three full-width cards each holding one
+          digit — a stack like that is mostly empty card. The grid stretches
+          both to the taller of the pair, so a label that wraps to two lines
+          can't leave its neighbour short. The third takes the full width: at
+          this size "No-shows this week" wants the room, and an orphan sitting
+          half-width reads as something that failed to load. */}
+      <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
         <StatCard
           weight="quiet"
           href={bookingsHref()}
@@ -162,12 +168,14 @@ export default function DashboardView({
           label={d.upcoming}
           value={data.counts.upcoming}
         />
-        <StatCard
-          weight="quiet"
-          href={bookingsHref()}
-          label={d.noShowsWeek}
-          value={data.counts.noShowsWeek}
-        />
+        <div className="col-span-2 sm:col-span-1">
+          <StatCard
+            weight="quiet"
+            href={bookingsHref()}
+            label={d.noShowsWeek}
+            value={data.counts.noShowsWeek}
+          />
+        </div>
       </div>
     </>
   );
@@ -321,8 +329,12 @@ function BranchesCard({
                   {d.booked(b.bookings)} · {d.techniciansIn(b.techniciansIn)}
                 </span>
               </span>
+              {/* The bar between these two is `sm:block`, so on a phone the
+                  money and the percentage end up neighbours. A 96px column
+                  holding "0" then strands them either side of a gap the eye
+                  reads as a missing column. */}
               {showRevenue ? (
-                <span className="w-24 shrink-0 text-end text-sm font-semibold tabular-nums text-ink">
+                <span className="w-16 shrink-0 text-end text-sm font-semibold tabular-nums text-ink sm:w-24">
                   {formatSAR(b.revenueHalalas)}
                 </span>
               ) : null}
@@ -371,7 +383,7 @@ function TopServicesCard({
                 <Bar value={top > 0 ? (s.revenueHalalas / top) * 100 : 0} brand />
               </span>
               {showRevenue ? (
-                <span className="w-24 shrink-0 text-end text-sm font-semibold tabular-nums text-ink">
+                <span className="w-16 shrink-0 text-end text-sm font-semibold tabular-nums text-ink sm:w-24">
                   {formatSAR(s.revenueHalalas)}
                 </span>
               ) : null}

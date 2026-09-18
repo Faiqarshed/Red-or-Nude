@@ -21,10 +21,12 @@ import { cancelDeadline, cancelRefusal } from "@/lib/cancellation";
 import { getSettings } from "@/lib/settings";
 import { clientIp, throttled } from "@/lib/throttle";
 import { refundBookings } from "@/lib/payments/refund";
+import { returnPackCredits } from "@/lib/packs";
 import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
 import { refuseBookingAction } from "@/lib/booking-auth";
 import { assignIfToday } from "@/lib/assign";
+import { utcToLocalDate } from "@/lib/availability";
 import { OTP_LENGTH } from "@/lib/otp";
 
 export const dynamic = "force-dynamic";
@@ -69,19 +71,6 @@ export async function POST(request: Request) {
   }
 
   const { cancel_cutoff_hours: cutoff } = await getSettings(["cancel_cutoff_hours"]);
-  const refusal = cancelRefusal(anchor, cutoff);
-  if (refusal) {
-    return NextResponse.json(
-      {
-        error: refusal,
-        // The customer is being refused; telling them the deadline they missed
-        // is more use than telling them "no".
-        cancelBy: cancelDeadline(anchor, cutoff).toISOString(),
-        cutoffHours: cutoff,
-      },
-      { status: 409 },
-    );
-  }
 
   // A group cancels as a unit. It is one combined bill (§2.4) at a discount that
   // only exists because two people booked together, so releasing half of it
@@ -93,6 +82,35 @@ export async function POST(request: Request) {
         .where(eq(bookings.groupId, anchor.groupId))
         .orderBy(asc(bookings.createdAt), asc(bookings.id))
     : [anchor];
+
+  // Which means it has to be *cancellable* as a unit too, and that is judged on
+  // every guest rather than on the one whose reference was quoted.
+  //
+  // Asking only the anchor split parties down the middle. One friend arrives and
+  // the desk checks her in; the other cancels from her phone; the anchor is
+  // still `confirmed` so the request is allowed, and the update below silently
+  // passes over the guest who is already in the chair. Her friend is released,
+  // she is not, and she is left alone holding a price that existed because two
+  // of them booked together — the exact outcome the paragraph above forbids.
+  //
+  // So whoever is furthest along decides for all of them: a party with someone
+  // already in a chair is the branch's to sort out, not a self-service button's.
+  // The guest herself, not just her refusal: guests hold their own hours now,
+  // so the deadline below is hers and not the anchor's.
+  const blocked = members.find((m) => cancelRefusal(m, cutoff));
+  if (blocked) {
+    return NextResponse.json(
+      {
+        error: cancelRefusal(blocked, cutoff),
+        // The customer is being refused; telling them the deadline they missed
+        // is more use than telling them "no" — and quoting the anchor's would
+        // name an hour that was never the one in the way.
+        cancelBy: cancelDeadline(blocked, cutoff).toISOString(),
+        cutoffHours: cutoff,
+      },
+      { status: 409 },
+    );
+  }
 
   // One statement, so it needs no transaction to be atomic. Guarded on status as
   // well as id: two taps on a slow connection must not produce two refunds — the
@@ -122,6 +140,21 @@ export async function POST(request: Request) {
   // refundBookings never throws — a failure is logged for the admin to settle.
   const refund = await refundBookings(cancelled, "customer-cancelled");
 
+  // A pack credit comes back exactly where money does, and only where money
+  // does. Inside the window it is returned; cancel later and it is spent, the
+  // same way the fee is kept — the symmetry is the rule, and putting this call
+  // beside the refund is what keeps the two from drifting apart.
+  //
+  // Nothing here can fail the cancellation: the chair is already released, and a
+  // credit that did not come back is a support ticket, not a reason to leave an
+  // appointment standing.
+  let creditsBack = 0;
+  try {
+    creditsBack = await returnPackCredits(cancelled, "customer-cancelled");
+  } catch (err) {
+    console.error("[cancel] could not return pack credits", err);
+  }
+
   await recordAudit(
     { id: null, name: "customer" },
     {
@@ -131,6 +164,7 @@ export async function POST(request: Request) {
       diff: {
         status: { from: anchor.status, to: "cancelled" },
         refundedHalalas: { from: null, to: refund.ok ? refund.amountHalalas : null },
+        packCreditsReturned: { from: null, to: creditsBack || null },
       },
     },
   );
@@ -140,7 +174,13 @@ export async function POST(request: Request) {
   // The chair came free and so did whoever was holding this hour. Anything left
   // unassigned today may now be staffable, so run the day again — it only fills
   // empty rows, so nobody loses a customer over someone else's cancellation.
-  await assignIfToday(anchor.branchId, anchor.startsAt);
+  //
+  // Once per floor the party sat on, not once for the anchor's. A group may be
+  // spread across branches and hours now, and the chair freed at the far one is
+  // exactly the one no other pass would come back for.
+  const floors = new Map<string, (typeof members)[number]>();
+  for (const m of members) floors.set(`${m.branchId}:${utcToLocalDate(m.startsAt)}`, m);
+  for (const m of floors.values()) await assignIfToday(m.branchId, m.startsAt);
 
   return NextResponse.json({
     ok: true,

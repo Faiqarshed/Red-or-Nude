@@ -12,19 +12,17 @@
 // the same code machinery. The account is not touched until ./confirm/route.ts.
 
 import { NextResponse } from "next/server";
-import { and, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { customers } from "@/lib/db/schema";
-import { emailSubject, issueOtp, maskEmail } from "@/lib/otp";
+import { emailField } from "@/lib/account/fields";
+import { ACCOUNT_OTP_TTL_MS, emailSubject, issueOtp, maskEmail } from "@/lib/otp";
 import { sendOtpEmail } from "@/lib/otp-email";
-import { currentCustomer } from "@/lib/account/guard";
+import { currentCustomer, emailUsedByOther } from "@/lib/account/guard";
 import { clientIp, throttled } from "@/lib/throttle";
 
 export const dynamic = "force-dynamic";
 
 const body = z.object({
-  email: z.string().trim().email().max(200),
+  email: emailField,
   lang: z.enum(["ar", "en"]).optional(),
 });
 
@@ -51,22 +49,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "same-email" }, { status: 400 });
   }
 
-  // Unlike sign-in, this one *does* say whether the address is taken — and it
-  // is not an enumeration hole, because the caller must already hold a session.
-  // Saying so here is better than sending a code that ./confirm will refuse.
-  const [taken] = await db
-    .select({ id: customers.id })
-    .from(customers)
-    .where(and(sql`lower(${customers.email}) = ${email}`, isNotNull(customers.emailVerifiedAt)))
-    .limit(1);
-  if (taken) return NextResponse.json({ error: "already-registered" }, { status: 409 });
+  // Unlike sign-in, this one *does* say whether the address is taken — the
+  // caller must already hold a session, and the IP throttle above bounds how
+  // many addresses one can try. Saying so here beats sending a code that
+  // ./confirm would refuse.
+  if (await emailUsedByOther(email, customer.id)) {
+    return NextResponse.json({ error: "email-in-use" }, { status: 409 });
+  }
 
   if (throttled(`account-email-to:${email}`, { max: 1 })) {
     return NextResponse.json({ sent: true, sentTo: maskEmail(email), throttled: true });
   }
 
-  const code = await issueOtp(emailSubject(email));
-  const mail = await sendOtpEmail({ to: email, code, lang: parsed.data.lang ?? customer.lang });
+  const code = await issueOtp(emailSubject(email), ACCOUNT_OTP_TTL_MS);
+  const mail = await sendOtpEmail({ to: email, code, lang: parsed.data.lang ?? customer.lang, ttlMs: ACCOUNT_OTP_TTL_MS });
 
   if (!mail.ok) {
     console.error("[account] could not email a change-of-address code:", mail.reason);

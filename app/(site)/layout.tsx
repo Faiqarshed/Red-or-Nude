@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Almarai, Tajawal, Poppins } from "next/font/google";
 import "../globals.css";
 import { LanguageProvider } from "@/lib/i18n";
+import { LANG_COOKIE } from "@/lib/localized";
 import { AccountProvider } from "@/lib/account/context";
 import { currentCustomer } from "@/lib/account/guard";
 import ChatWidget from "@/components/ChatWidget";
@@ -42,15 +44,19 @@ export default async function RootLayout({
   // Resolved once here so every SiteHeader on the site knows which button to
   // render, without any page having to think about auth. See lib/account/context.
   const customer = await currentCustomer();
+  // Her language, drawn by the server from the first byte. Read from a cookie
+  // because the server cannot see localStorage: without it every refresh
+  // painted Arabic and flipped to English a moment later.
+  const lang = cookies().get(LANG_COOKIE)?.value === "en" ? "en" : "ar";
 
   return (
     <html
-      lang="ar"
-      dir="rtl"
-      className={`${almarai.variable} ${tajawal.variable} ${poppins.variable}`}
+      lang={lang}
+      dir={lang === "ar" ? "rtl" : "ltr"}
+      className={`${almarai.variable} ${tajawal.variable} ${poppins.variable}${lang === "en" ? " lang-en" : ""}`}
     >
       <body className="font-ar bg-cream text-ink">
-        <LanguageProvider>
+        <LanguageProvider initialLang={lang}>
           <AccountProvider signedIn={Boolean(customer)}>
             {children}
             {/* Site only — the admin shell has its own layout and no business

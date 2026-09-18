@@ -8,14 +8,17 @@
 // automatically: the receptionist knows which of her customers can wait and which
 // cannot, and the software does not.
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown } from "lucide-react";
+import { CalendarClock, ChevronDown } from "lucide-react";
 import { Badge, BranchFilter, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import { Dialog } from "@/components/admin/overlays";
+import RescheduleDialog from "../bookings/RescheduleDialog";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { pick } from "@/lib/localized";
 import { localTime } from "@/lib/time";
 import { busyDuring } from "@/lib/slots";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { cn } from "@/lib/cn";
 import type { Localized } from "@/lib/db/schema";
 import type { FloorBooking, FloorData } from "./data";
@@ -28,28 +31,41 @@ export default function FloorView({
   data,
   branchId,
   branchOptions,
+  canReschedule = false,
 }: {
   data: FloorData;
   branchId: string;
+  /** `bookings.reschedule`, for a customer nobody left is free to take. */
+  canReschedule?: boolean;
   /** Empty for anyone pinned. A floor is one place, so there is no "all". */
   branchOptions: { id: string; name: Localized }[];
 }) {
   const { t, lang } = useAdminI18n();
   const f = t.floor;
   const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  // `startTransition(async …)` ends the transition at the first `await` on
+  // React 18, so `pending` here used to go false the instant the server action
+  // was *sent* — before its result, and long before the refresh it triggers.
+  // usePendingAction spans both. See components/admin/use-pending-action.
+  const { pending, run } = usePendingAction();
   const [error, setError] = useState<string | null>(null);
   const [open, toggle] = useToggleSet();
   const now = useDayClock();
-  /** How many customers the last Send home left without a technician. */
-  const [alerted, setAlerted] = useState<number | null>(null);
+  /**
+   * The technician being sent home, while the desk decides where her customers
+   * go. Nothing has happened yet — Cancel leaves the floor exactly as it was.
+   */
+  const [leaving, setLeaving] = useState<string | null>(null);
+  /** Booking id → the technician it will go to, once Done is pressed. */
+  const [picks, setPicks] = useState<Record<string, string>>({});
+  const [leaveError, setLeaveError] = useState<string | null>(null);
+  const [rescheduling, setRescheduling] = useState<FloorBooking | null>(null);
 
-  const run = (fn: () => Promise<{ ok: boolean; error?: string }>) =>
-    startTransition(async () => {
+  const act = (fn: () => Promise<{ ok: boolean; error?: string }>) =>
+    run(async () => {
       setError(null);
       const res = await fn();
       if (!res.ok) setError(res.error === "on-leave" ? f.onLeave : t.common.error);
-      router.refresh();
     });
 
   const working = data.technicians.filter((tech) => !tech.off).length;
@@ -59,8 +75,45 @@ export default function FloorView({
   // these rows belong to no card, so no card would ever show them.
   const orphans = data.rows.filter((b) => !b.technicianId && b.status === "confirmed");
 
-  // The one list, rendered in three places: under a technician on leave, at the
-  // top of the screen, and in the popup that says to go and do it now.
+  // The send-home plan, read live off the day so a booking rescheduled from the
+  // popup leaves the list the moment the page refreshes.
+  const leavingTech = data.technicians.find((tech) => tech.id === leaving) ?? null;
+  const waiting = leavingTech?.bookings.filter((b) => b.status === "confirmed") ?? [];
+  const staysWithLeaving =
+    leavingTech?.bookings.filter((b) => !["confirmed", "cancelled", "no_show"].includes(b.status)) ?? [];
+  // The day as it will be after Done, so two of her customers at one hour cannot
+  // both be handed to the same person.
+  const planned = data.rows.map((r) => (picks[r.id] ? { ...r, technicianId: picks[r.id] } : r));
+  const allPlaced = waiting.every((b) => picks[b.id]);
+
+  const closeLeaving = () => {
+    setLeaving(null);
+    setPicks({});
+    setLeaveError(null);
+  };
+
+  const confirmLeaving = () =>
+    run(async () => {
+      if (!leaving || !allPlaced) return false;
+      setLeaveError(null);
+      const res = await sendHome(
+        leaving,
+        waiting.map((b) => ({ bookingId: b.id, technicianId: picks[b.id] })),
+      );
+      if (res.ok) {
+        closeLeaving();
+        return;
+      }
+      // `unplaced`: a booking landed on her while the popup was open. The
+      // refresh still runs, which puts it in the list; saying so beats a Done
+      // that silently fails.
+      setLeaveError(
+        res.error === "unplaced" ? f.unplaced : res.error === "bad-target" ? f.badTarget : t.common.error,
+      );
+    });
+
+  // The one list, rendered in two places: under a technician on leave, and at
+  // the top of the screen. Each pick there is applied at once.
   const moveList = (rows: FloorBooking[]) => (
     <ul className="divide-y divide-black/[0.06]">
       {rows.map((b) => (
@@ -82,7 +135,7 @@ export default function FloorView({
               this is "move it", not "show who has it". */}
           <TechSelect
             value=""
-            onChange={(to) => run(() => assignTechnician(b.id, to))}
+            onChange={(to) => act(() => assignTechnician(b.id, to))}
             options={data.technicians}
             busyIds={busyDuring(data.rows, b)}
             omitId={b.technicianId}
@@ -182,7 +235,7 @@ export default function FloorView({
                       variant="secondary"
                       size="sm"
                       disabled={pending}
-                      onClick={() => run(() => bringBack(tech.id))}
+                      onClick={() => act(() => bringBack(tech.id))}
                     >
                       {f.bringBack}
                     </Button>
@@ -191,13 +244,7 @@ export default function FloorView({
                       variant="secondary"
                       size="sm"
                       disabled={pending}
-                      onClick={() =>
-                        run(async () => {
-                          const res = await sendHome(tech.id);
-                          if (res.ok && res.released) setAlerted(res.released);
-                          return res;
-                        })
-                      }
+                      onClick={() => setLeaving(tech.id)}
                     >
                       {f.sendHome}
                     </Button>
@@ -234,30 +281,123 @@ export default function FloorView({
         </div>
       )}
 
-      {/* Said out loud, once, at the moment it becomes true. The card above says
-          the same thing and stays until it is done — this is only what stops the
-          desk walking away from a floor that no longer adds up. */}
-      {alerted !== null && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
-        >
-          <Card className="w-full max-w-lg overflow-hidden">
-            <div className="border-b border-black/[0.06] bg-red/5 px-4 py-3">
-              <p className="font-display text-base font-bold text-red">{f.sentHomeTitle}</p>
-              <p className="mt-1 text-xs text-ink/60">{f.sentHomeBody(alerted)}</p>
-            </div>
-            {/* The live list, so a row leaves as soon as it is placed. */}
-            <div className="max-h-[55vh] overflow-y-auto">{moveList(orphans)}</div>
-            <div className="border-t border-black/[0.06] px-4 py-3 text-end">
-              <Button variant="secondary" size="sm" onClick={() => setAlerted(null)}>
-                {f.done}
-              </Button>
-            </div>
-          </Card>
-        </div>
-      )}
+      {/* Asked before anything happens. Every waiting customer gets a technician
+          here, or a new time, and Done sends her home with all of them placed in
+          one call. Cancel — the button, the ×, Escape, the backdrop — leaves the
+          floor untouched. */}
+      <Dialog
+        open={leavingTech !== null}
+        onClose={closeLeaving}
+        title={f.sendHomeTitle(leavingTech?.name ?? "")}
+        className="max-w-lg"
+        footer={
+          <>
+            {/* Why Done is grey, beside it rather than left to guesswork. */}
+            {!allPlaced && (
+              <span className="me-auto text-start text-xs text-ink/50">{f.placeAll}</span>
+            )}
+            <Button variant="secondary" size="sm" onClick={closeLeaving} disabled={pending}>
+              {t.common.cancel}
+            </Button>
+            <Button size="sm" onClick={confirmLeaving} pending={pending} disabled={!allPlaced}>
+              {f.done}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-start text-xs text-ink/60">
+          {waiting.length ? f.sendHomeBody(waiting.length) : f.sendHomeNothing}
+        </p>
+
+        {waiting.length > 0 && (
+          <ul className="mt-3 divide-y divide-black/[0.06] rounded-xl bg-white">
+            {waiting.map((b) => {
+              const busy = busyDuring(planned, b);
+              const anyoneFree = data.technicians.some(
+                (o) => !o.off && o.id !== leaving && !busy.has(o.id),
+              );
+              return (
+                <li key={b.id} className="flex flex-wrap items-center gap-3 px-4 py-3 text-start">
+                  <span className="w-10 shrink-0 font-display text-base font-extrabold text-red">
+                    {b.ticketNo ?? "—"}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-ink">
+                      {b.customerName ?? "—"}
+                    </span>
+                    <span className="block truncate text-xs text-ink/50">
+                      <span className="tabular-nums">
+                        {localTime(b.startsAt)}–{localTime(b.endsAt)}
+                      </span>{" "}
+                      · {pick(b.serviceName, lang)}
+                    </span>
+                  </span>
+
+                  {/* Nobody left who is free at her hour: a technician list of
+                      greyed names is not an answer, a new time is. */}
+                  {anyoneFree || picks[b.id] ? (
+                    <TechSelect
+                      value={picks[b.id] ?? ""}
+                      onChange={(to) => setPicks((p) => ({ ...p, [b.id]: to }))}
+                      options={data.technicians}
+                      busyIds={busy}
+                      omitId={leaving}
+                      emptyLabel={f.moveTo}
+                      className="w-40 shrink-0"
+                    />
+                  ) : canReschedule ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setRescheduling(b)}
+                      className="shrink-0"
+                    >
+                      <CalendarClock className="h-4 w-4" strokeWidth={1.75} />
+                      {t.bookings.reschedule}
+                    </Button>
+                  ) : null}
+
+                  {/* Why the picker became a button. On its own line, under the
+                      booking it is about, so "Change time" is never a mystery. */}
+                  {!anyoneFree && !picks[b.id] && (
+                    <p className="basis-full text-xs text-red">
+                      {canReschedule ? f.noOneFreeMove : f.noOneFreeAsk}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {staysWithLeaving.length > 0 && (
+          <p className="mt-3 text-start text-xs text-ink/50">{f.staysWithHer(staysWithLeaving.length)}</p>
+        )}
+
+        {leaveError && (
+          <p role="alert" className="mt-3 rounded-xl bg-red/10 px-3 py-2 text-start text-xs text-red">
+            {leaveError}
+          </p>
+        )}
+      </Dialog>
+
+      {/* After the send-home dialog, so it opens on top of it. A moved booking is
+          re-dealt by the server; the refresh brings it back into the list only if
+          it landed on her again, and its old pick is dropped either way — a new
+          time is a new question about who is free. */}
+      <RescheduleDialog
+        open={rescheduling !== null}
+        booking={rescheduling}
+        branchId={branchId}
+        onClose={() => setRescheduling(null)}
+        onDone={() => {
+          if (rescheduling) {
+            const { [rescheduling.id]: _dropped, ...rest } = picks;
+            setPicks(rest);
+          }
+          router.refresh();
+        }}
+      />
     </>
   );
 }

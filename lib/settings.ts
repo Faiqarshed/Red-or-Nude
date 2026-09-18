@@ -44,31 +44,50 @@ export const SETTING_DEFAULTS = {
    * will be missed, so keep it comfortably above 15.
    */
   assign_notify_min: 30,
-  /** Discount for booking two guests together, off the combined bill. */
+  /** Discount for booking a group together, off the combined bill. */
   group_discount_percent: 10,
-  /** A refill costs the service price minus this much. */
-  refill_discount_percent: 50,
+  /**
+   * What a refill costs, flat, in halalas. Not a discount off the service — the
+   * same 99 whether the original was 90 SAR or 400.
+   *
+   * There is no floor. A service too cheap to be worth refilling at 99 is kept
+   * out of the offer from the admin side, by leaving its `refill_days` at 0.
+   * That is an operational guard rather than an enforced one: nothing here stops
+   * a 60 SAR service being given a window and then a 99 SAR refill.
+   */
+  refill_price_halalas: 9900,
   /** How many days before a refill window closes to nudge the customer. */
   refill_reminder_days: 3,
   /**
-   * How many riyals earn one loyalty point (brief §2.8).
+   * The loyalty scheme (brief §2.8), as four numbers the salon can retune
+   * without a deploy.
    *
-   * A **divisor**, not a multiplier, and deliberately so. Points are whole
-   * numbers — an integer column, an integer balance, integers on screen — so
-   * the only way to earn less than a point per riyal with a multiplier is a
-   * fractional setting like 0.2, and a fractional setting is a float sitting in
-   * the middle of a money path waiting to be rounded the wrong way by someone
-   * who forgets. Dividing by an integer cannot produce one.
+   * **Milestones, not a rate.** The rule the salon asked for is "spend 199 and
+   * get 50 points, worth 10 riyals — and 50 more every 200 after that". So the
+   * awards land at 199, 399, 599 … and a bill between two thresholds earns what
+   * the lower one earned: 350 riyals is still 50 points, because it has not
+   * reached 399.
    *
-   * What a point is *worth* is the reward ladder in lib/loyalty.ts, not a number
-   * here — a rung is a percentage off, so there is no single exchange rate.
+   * This replaced a linear `loyalty_sar_per_point` divisor and a three-rung
+   * percentage ladder. Both are gone on purpose. A percentage rung could not
+   * answer "what is a point worth" with one number, and a rate could not be
+   * stated to a customer as a target she is approaching.
    *
-   * At 5, a 150 SAR visit earns 30 points and the first rung (100 points, 5%
-   * off) lands after roughly 500 SAR of custom — about 1.5% back. Raise this to
-   * be stingier, lower it to be generous; it is the one knob for the whole
-   * scheme and it needs no deploy.
+   * Every one of these is whole. `loyalty_point_halalas` is in halalas rather
+   * than riyals for the same reason every other money column is: a fractional
+   * setting is a float sitting in the middle of a money path waiting to be
+   * rounded the wrong way by someone who forgets.
+   *
+   * At the defaults a customer gets 10 riyals back per 200 spent — about 5%.
    */
-  loyalty_sar_per_point: 5,
+  /** Spend that earns the first award, in riyals. */
+  loyalty_first_sar: 199,
+  /** Every further award costs this much more spend, in riyals. */
+  loyalty_step_sar: 200,
+  /** Points granted at each milestone, and the unit redemption is counted in. */
+  loyalty_step_points: 50,
+  /** What one point is worth, in halalas. 20 makes 50 points exactly 10.00 SAR. */
+  loyalty_point_halalas: 20,
   /** Seller identity on the invoice. A KSA tax invoice must carry both. */
   business_legal_name: "Red or Nude",
   /** 15 digits from ZATCA. Empty until registration lands; the line is hidden. */

@@ -275,13 +275,26 @@ function refusalMessage(
   }
 }
 
+/** The other members of `row`'s group booking, from a list the screen already holds. */
+export function partyOf(rows: BookingSummary[], row: BookingSummary): BookingSummary[] {
+  return row.groupId ? rows.filter((x) => x.groupId === row.groupId && x.code !== row.code) : [];
+}
+
 export default function BookingCard({
   row,
+  party = [],
   lang,
   onOpenRefill,
   onChanged,
 }: {
   row: BookingSummary;
+  /**
+   * The rest of this booking's group, from the same list the screen already
+   * holds. Shown inside the details dialog, so opening one guest's appointment
+   * shows the whole party rather than a card that says "Booked together" and
+   * leaves her to work out with whom.
+   */
+  party?: BookingSummary[];
   lang: "ar" | "en";
   onOpenRefill: () => void;
   onChanged: () => void;
@@ -297,8 +310,12 @@ export default function BookingCard({
   const [gate, setGate] = useState<
     { kind: "cancel" } | { kind: "reschedule"; startsAt: string } | null
   >(null);
-  /** The booking details dialog. Opened by tapping the card. */
-  const [details, setDetails] = useState(false);
+  /**
+   * The booking the details dialog is showing, or null when it is shut. Opened
+   * on this card's own booking; a tap on another member of the party switches
+   * it there, in place, instead of stacking a second dialog.
+   */
+  const [details, setDetails] = useState<BookingSummary | null>(null);
   /** Success message after a reschedule or cancel. Shown in its own modal. */
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   /** Whether the cancel confirmation dialog is open. */
@@ -329,7 +346,7 @@ export default function BookingCard({
         // the money needs a human, and saying so beats a silent "cancelled".
         setGate(null);
         setConfirmCancel(false);
-        setDetails(false);
+        setDetails(null);
         setSuccessMsg(
           what === "cancel"
             ? data.refunded
@@ -411,34 +428,31 @@ export default function BookingCard({
     else setGate({ kind: "reschedule", startsAt });
   };
 
+  const title = row.serviceName ? pick(row.serviceName, lang) : row.code;
+
   return (
-    <article className="rounded-[20px] bg-white p-5 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
-      {/* The heading area opens the details, not the whole card: the buttons
-          below cancel and move real appointments, and a card-wide tap target
-          would sit underneath them.
-          
-          A div with role/tabIndex rather than a <button>, because the region
-          contains an <h2> and a button may only hold phrasing content. Keyboard
-          activation is therefore ours to provide, hence the Enter/Space handler
-          — without it this would be reachable by tab and impossible to press. */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setDetails(true)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setDetails(true);
-          }
-        }}
-        aria-label={h.detailsOpen}
-        className="-m-1 block w-full cursor-pointer rounded-[16px] p-1 text-start transition-colors hover:bg-black/[0.02] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red/50"
-      >
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    // A column with the heading taking the slack (`mb-auto` below), so when a
+    // grid stretches this card to its neighbour's height, the cancel and
+    // reschedule buttons settle at the foot rather than floating mid-card.
+    //
+    // `relative` anchors the title's stretched tap layer: the whole card opens
+    // the details through one control, and the few real actions on it sit above
+    // that layer on `z-10`. It used to be a role="button" div around the
+    // heading, which could not hold the refill button without nesting one
+    // control inside another.
+    <article className="relative flex flex-col rounded-[20px] bg-white p-5 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)] transition-shadow hover:shadow-[0_14px_36px_rgba(184,0,7,0.12)]">
+      <div className="mb-auto flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="font-display text-lg font-extrabold text-ink">
-              {row.serviceName ? pick(row.serviceName, lang) : row.code}
+              <button
+                type="button"
+                onClick={() => setDetails(row)}
+                aria-label={`${title} — ${h.detailsOpen}`}
+                className="text-start after:absolute after:inset-0 after:rounded-[20px] after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-red/40"
+              >
+                {title}
+              </button>
             </h2>
             {row.isRefill && (
               <span className="rounded-full bg-[#f7e8e8] px-2.5 py-0.5 text-[10px] font-semibold text-red">
@@ -483,24 +497,27 @@ export default function BookingCard({
             <Riyal className="h-3.5 w-3.5 text-red" />
             {row.totalSar}
           </span>
+
+          {/* The whole feature. Absent — not disabled — once the window lapses.
+              A pill in the corner the reference line leaves empty, rather than
+              a full-width bar: the bar made every card with a refill a row
+              taller than its neighbour. Still the one red thing on the card.
+
+              The countdown and price are deliberately NOT here: they come back
+              from the server only after the emailed code is verified, so a
+              forwarded reference alone reveals nothing about the offer. */}
+          {row.hasRefill && (
+            <button
+              type="button"
+              onClick={onOpenRefill}
+              className="relative z-10 -mt-0.5 inline-flex items-center gap-1 rounded-full bg-red-grad px-3 py-1 text-[11px] font-bold text-white transition-opacity hover:opacity-90"
+            >
+              {h.refillAvailable}
+              <span aria-hidden className="rtl:rotate-180">›</span>
+            </button>
+          )}
         </div>
       </div>
-      </div>
-
-      {/* The whole feature. Absent — not disabled — once the window lapses.
-          The countdown and price are deliberately NOT here: they come back from
-          the server only after the emailed code is verified, so a forwarded
-          reference alone reveals nothing about the offer. */}
-      {row.hasRefill && (
-        <button
-          type="button"
-          onClick={onOpenRefill}
-          className="mt-4 flex w-full items-center justify-between gap-3 rounded-[14px] bg-red-grad px-5 py-3 text-start text-sm font-bold text-white transition-opacity hover:opacity-90"
-        >
-          <span>{h.refillAvailable}</span>
-          <span className="text-[12px] font-semibold opacity-90">{h.refillTapToView}</span>
-        </button>
-      )}
 
       {/* Absent rather than disabled once the window shuts, like the refill
           button above — but the deadline stays on screen either way, so a
@@ -512,7 +529,7 @@ export default function BookingCard({
             type="button"
             onClick={() => setPicking(true)}
             disabled={busy !== null}
-            className="rounded-[12px] border border-black/[0.08] px-4 py-2 text-[13px] font-semibold text-ink transition-colors hover:border-red/40 disabled:opacity-40"
+            className="relative z-10 rounded-[12px] border border-black/[0.08] px-4 py-2 text-[13px] font-semibold text-ink transition-colors hover:border-red/40 disabled:opacity-40"
           >
             {busy === "reschedule" ? h.rescheduling : h.reschedule}
           </button>
@@ -520,7 +537,7 @@ export default function BookingCard({
             type="button"
             onClick={onCancelClick}
             disabled={busy !== null}
-            className="rounded-[12px] px-4 py-2 text-[13px] font-semibold text-red transition-colors hover:bg-red/[0.06] disabled:opacity-40"
+            className="relative z-10 rounded-[12px] px-4 py-2 text-[13px] font-semibold text-red transition-colors hover:bg-red/[0.06] disabled:opacity-40"
           >
             {busy === "cancel" ? h.cancelling : h.cancel}
           </button>
@@ -568,13 +585,13 @@ export default function BookingCard({
 
       {/* ── Booking details popup ── */}
       {details && (
-        <Modal onClose={() => setDetails(false)} chrome={false} className="max-w-[420px]">
+        <Modal onClose={() => setDetails(null)} chrome={false} className="max-w-[420px]">
           {/* Main Service Image Header */}
-          {row.serviceImage && (
+          {details.serviceImage && (
             <div className="relative h-36 w-full shrink-0 overflow-hidden bg-black/[0.04] sm:h-44">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={row.serviceImage}
+                src={details.serviceImage}
                 alt=""
                 className="h-full w-full object-cover"
                 loading="lazy"
@@ -588,22 +605,22 @@ export default function BookingCard({
           {/* min-h-0 is load-bearing: a flex child defaults to min-height:auto,
               which refuses to shrink below its content and would push the close
               button off the bottom instead of scrolling. */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-7 pt-7">
+          <div className="min-h-0 flex-1 overflow-y-auto px-7 pb-7 pt-7">
             <h3 className="font-display text-xl font-extrabold text-ink">
-              {row.serviceName ? pick(row.serviceName, lang) : h.detailsTitle}
+              {details.serviceName ? pick(details.serviceName, lang) : h.detailsTitle}
             </h3>
 
             {/* Dedicated Add-ons section with clear image thumbnails & names */}
-            {row.addons.length > 0 && (
+            {details.addons.length > 0 && (
               <div className="mt-4 rounded-[16px] bg-[#FAF8F5] p-3.5 ring-1 ring-black/[0.05]">
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-[12px] font-bold text-ink/70">{h.addonsLabel}</span>
                   <span className="rounded-full bg-black/[0.06] px-2 py-0.5 text-[10px] font-semibold text-ink/60">
-                    {row.addons.length}
+                    {details.addons.length}
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {row.addons.map((addon, idx) => (
+                  {details.addons.map((addon, idx) => (
                     <div
                       key={idx}
                       className="flex items-center gap-2.5 rounded-[12px] bg-white px-2.5 py-1.5 shadow-sm ring-1 ring-black/[0.04]"
@@ -632,12 +649,12 @@ export default function BookingCard({
 
             <dl className="mt-5 space-y-3">
               {[
-                [h.whenLabel, `${formatDateLabel(row.startsAt.slice(0, 10), lang)} · ${localTime(row.startsAt)}`],
-                [h.branchLabel, row.branchName ? pick(row.branchName, lang) : null],
-                [h.technicianLabel, row.technicianName || h.notAssignedYet],
-                [h.durationLabel, h.durationMin.replace("{n}", String(row.durationMin))],
-                [h.ticket, row.ticketNo],
-                [h.statusLabel, h.statuses[row.status] ?? row.status],
+                [h.whenLabel, `${formatDateLabel(details.startsAt.slice(0, 10), lang)} · ${localTime(details.startsAt)}`],
+                [h.branchLabel, details.branchName ? pick(details.branchName, lang) : null],
+                [h.technicianLabel, details.technicianName || h.notAssignedYet],
+                [h.durationLabel, h.durationMin.replace("{n}", String(details.durationMin))],
+                [h.ticket, details.ticketNo],
+                [h.statusLabel, h.statuses[details.status] ?? details.status],
               ]
                 .filter(([, value]) => value)
                 .map(([label, value]) => (
@@ -651,15 +668,72 @@ export default function BookingCard({
                 <dt className="text-[13px] text-ink/55">{h.totalLabel}</dt>
                 <dd className="flex items-center gap-1 font-display text-base font-extrabold text-red">
                   <Riyal className="h-4 w-4" />
-                  {row.totalSar}
+                  {details.totalSar}
                 </dd>
               </div>
             </dl>
 
-            {row.canCancel && (
-              <p className="mt-4 pb-7 text-[11px] text-ink/40">
-                {h.changeBy} {formatDateLabel(row.cancelBy.slice(0, 10), lang)}
+            {details.canCancel && (
+              <p className="mt-4 text-[11px] text-ink/40">
+                {h.changeBy} {formatDateLabel(details.cancelBy.slice(0, 10), lang)}
               </p>
+            )}
+
+            {/* The whole party, in the order they sit. One bill, one cancel for
+                all of them (the cancel route fans out over the group), so the
+                booking she opened is only ever part of the answer. The one on
+                screen is marked rather than dropped, so the list reads as the
+                group and not as "the others". */}
+            {party.length > 0 && (
+              <div className="mt-5 border-t border-black/[0.06] pt-4">
+                <p className="mb-2 text-[12px] font-bold text-ink/70">
+                  {h.groupBadge} ({party.length + 1})
+                </p>
+                <ul className="space-y-1.5">
+                  {[row, ...party]
+                    .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
+                    .map((m) => {
+                      const current = m.code === details.code;
+                      return (
+                        <li key={m.code}>
+                          <button
+                            type="button"
+                            disabled={current}
+                            aria-current={current || undefined}
+                            onClick={() => setDetails(m)}
+                            className={`flex w-full items-center gap-3 rounded-[12px] px-2.5 py-2 text-start ring-1 transition-colors ${
+                              current
+                                ? "bg-[#e6f0f5] ring-[#2c6a88]/30"
+                                : "bg-white ring-black/[0.05] hover:ring-red/40"
+                            }`}
+                          >
+                            <span
+                              className="h-9 w-9 shrink-0 rounded-[8px] bg-[#e7d9c9] bg-cover bg-center bg-no-repeat"
+                              style={m.serviceImage ? { backgroundImage: `url(${m.serviceImage})` } : undefined}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[13px] font-semibold text-ink">
+                                {m.serviceName ? pick(m.serviceName, lang) : m.code}
+                              </span>
+                              <span className="block truncate text-[11px] text-ink/50">
+                                {[localTime(m.startsAt), m.branchName ? pick(m.branchName, lang) : null]
+                                  .filter(Boolean)
+                                  .join(" · ")}
+                              </span>
+                            </span>
+                            <span
+                              className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                STATUS_TONE[m.status] ?? "bg-black/[0.06] text-ink/60"
+                              }`}
+                            >
+                              {h.statuses[m.status] ?? m.status}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                </ul>
+              </div>
             )}
           </div>
 
@@ -667,7 +741,7 @@ export default function BookingCard({
           <div className="shrink-0 border-t border-black/[0.06] p-5">
             <button
               type="button"
-              onClick={() => setDetails(false)}
+              onClick={() => setDetails(null)}
               className="w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
             >
               {c.payment.close}
@@ -703,7 +777,13 @@ export default function BookingCard({
         <IconDialog
           onClose={() => setConfirmCancel(false)}
           tone="warn"
-          message={h.cancelConfirm}
+          // A group cancels as a unit (app/api/my-bookings/cancel), so the
+          // question has to say so — "this booking" was about to cancel four.
+          message={
+            row.groupSize > 1
+              ? h.cancelConfirmGroup.replace("{n}", String(row.groupSize))
+              : h.cancelConfirm
+          }
           icon={
             <svg viewBox="0 0 24 24" width={32} height={32} fill="none" stroke="#B80007" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" />

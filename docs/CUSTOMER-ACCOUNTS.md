@@ -10,7 +10,7 @@ nothing on the booking flow requires signing in.
 
 A customer can now sign in with their email and a six-digit code. Doing so gives
 them `/account`: every booking they have ever made without typing a reference, a
-points balance, and a ladder of rewards they can spend at checkout. Points are
+points balance, and a running reward they can spend at checkout. Points are
 earned when a payment clears and spent when a booking is held. The nav's
 **Bookings** link becomes **Profile** while signed in, and `/my-bookings`
 redirects there.
@@ -21,7 +21,7 @@ redirects there.
 
 | Route | Who | What |
 |---|---|---|
-| `/account` | anyone | Signed out: the sign-in form (which is also the sign-up form). Signed in: wallet, reward ladder, all bookings, profile details, sign out. |
+| `/account` | anyone | Signed out: the sign-in form (which is also the sign-up form). Signed in: wallet, progress to the next reward, all bookings, profile details, sign out. |
 | `/my-bookings` | guests only | Unchanged. A signed-in visitor is redirected to `/account`. |
 | `/booking/payment` | anyone | Gains a reward picker, shown only when signed in. |
 
@@ -129,59 +129,84 @@ On payment confirmation, beside `countPromoUse` in
 [`lib/payments/confirm.ts`](../lib/payments/confirm.ts) — never at hold time, so
 an abandoned checkout mints nothing. One award per bill, so a group earns once.
 
-`loyalty_sar_per_point` (default `5`) is how many riyals buy one point. A
-**divisor, not a multiplier**, deliberately: points are whole numbers
-everywhere — an integer column, an integer balance, an integer on screen — and
-the only way to earn less than a point per riyal with a multiplier is a
-fractional setting like `0.2`. A float sitting in the middle of a money path is
-a rounding bug waiting for someone who forgets. Dividing by an integer and
-flooring cannot produce one, and `scripts/check-loyalty.ts` sweeps a range of
-bills and divisors asserting the result is always a whole number.
+The scheme is four settings rows, not a module constant and not a rate:
 
-**Floored, never rounded**: at 5 SAR a point, a 9.99 SAR bill earns 1, not 2.
-Rounding up is a mint anyone can run by splitting a bill.
+| Setting | Default | Meaning |
+|---|---|---|
+| `loyalty_first_sar` | `199` | spend that earns the first award |
+| `loyalty_step_sar` | `200` | how much more spend each further award costs |
+| `loyalty_step_points` | `50` | points per award, and the unit redemption counts in |
+| `loyalty_point_halalas` | `20` | what one point is worth — 50 points is 10.00 SAR |
+
+**Milestones, not a rate.** Awards land at 199, 399, 599 … and a bill *between*
+two thresholds earns what the lower one earned. A 350 SAR bill is worth 50
+points, not 87, because it has not reached 399. This is the salon's own rule,
+stated in their words: "spend 199 and get 50 points, worth 10 riyals — and if a
+person spends 350 we still give 50, because they haven't touched 399".
+
+This replaced a linear `loyalty_sar_per_point` divisor feeding a three-rung
+percentage ladder (100/200/300 points for 5/10/15% off). Both are gone. A
+percentage rung could not answer "what is a point worth" with one number, and a
+rate could not be stated to a customer as a target she is approaching — which is
+what the account screen now shows, a bar filling toward her next 50.
+
+Every setting is a whole number, and `loyalty_point_halalas` is in halalas
+rather than riyals for the reason every other money column is: a fractional
+setting is a float sitting in the middle of a money path, waiting to be rounded
+the wrong way by someone who forgets. Milestones are counted first and
+multiplied second, so there is no division left to round at all.
+
+At the defaults the scheme returns **10 SAR per 200 spent — about 5%**.
+
+**Per bill, not per lifetime.** One award per bill, so a group earns once, tied
+to the anchor booking. Two separate visits therefore earn two awards: two 199
+SAR visits earn 100 points where one 398 SAR bill earns 50. That is deliberate
+and is marked `ponytail:` in [`lib/rewards.ts`](../lib/rewards.ts) — splitting
+costs the customer a second appointment in a real chair, so it is a per-visit
+scheme rather than a leak. The upgrade path, if the salon ever sees bookings
+split to farm points, is lifetime accrual: milestones over total paid, minus
+points already granted. Note that needs a join through `bookings` (there is no
+`customer_id` on `payments`) and a decision about whose spend a group bill
+counts toward.
 
 Earned on what the customer **paid**, not on the bill before discounts —
 otherwise a discount would partly pay for itself.
 
-### The ladder
+### Spending, and what it costs
 
-| Points | Reward | Roughly |
-|---|---|---|
-| 100 | 5% off | ~500 SAR of custom |
-| 200 | 10% off | ~1000 SAR |
-| 300 | 15% off | ~1500 SAR |
+Redemption is in **whole steps** — 50, 100, 150 — rather than any number the
+customer likes. It keeps the offer describable ("50 points is 10 riyals off"),
+and it means a stray `37` from a hand-edited request is refused rather than
+priced. `rewardRefusal` names which of the two it was: `unknown` for an amount
+that is not a whole step, `locked` for one the balance cannot reach.
 
-**Linear on purpose: every 100 points is another 5%.** The first cut was
-100/250/500 for 5/10/15%, which quietly punished loyalty — value per point is
-`percent ÷ points`, so those rungs ran 0.050, 0.040, 0.033 and the dearest
-reward was the *worst* deal. A customer who saved for the top rung was worse off
-than one who spent at the bottom rung three times. A ladder must never make
-climbing it the losing move, and the check script now asserts that value per
-point never falls as the rungs rise.
+`redeemable()` bounds the offer by the bill as well as the balance, because
+offering 150 points against a 20 riyal bill is offering to burn 30 riyals of
+reward for 20 riyals off. `rewardDiscount` then caps the discount at the bill,
+exactly as `promoDiscount` does: a discount larger than the bill is a refund,
+and a reward must never hand out money that was never taken.
 
-At these numbers the scheme returns roughly **1.5%** of spend. Generosity is one
-integer — `loyalty_sar_per_point` — and it needs no deploy.
 
-A module constant in [`lib/loyalty.ts`](../lib/loyalty.ts), not a settings row —
-`settings.value` is jsonb so a ladder would fit, but `SETTING_DEFAULTS` is a flat
-map of primitives and this changes about as often as the price list. Move it if
-marketing wants to retune rungs without a deploy.
-
-### Spending
-
-Opt-in at checkout: the customer ticks one rung or none, exactly as they type a
-code or don't. Order of operations, and it matters —
+Opt-in at checkout: the customer ticks one amount or none, exactly as she types
+a code or doesn't. Order of operations, and it matters —
 
 ```
-gross → group/refill discount → promo code → reward percentage
+gross → group/refill discount → promo code → points
 ```
 
 The reward is quoted against the **post-promo** total in both the preview
 (`POST /api/loyalty/quote`) and the charge (`createBookings`), which is what
-keeps the number on screen and the number charged identical. Rungs stack with
-promos on purpose: a rung is a thank-you for money already spent, not an
+keeps the number on screen and the number charged identical. Points stack with
+promos on purpose: spending them is a thank-you for money already spent, not an
 alternative to an offer the customer also qualifies for.
+
+The rules themselves now travel to the browser in the `GET /api/loyalty/quote`
+response. They used to be a module constant the checkout imported directly; they
+are settings rows so the salon can retune them without a deploy, and the
+checkout cannot read the database. The *functions* are still imported straight
+from [`lib/rewards.ts`](../lib/rewards.ts) by both sides, which is what keeps the
+figure shown and the figure charged computed the same way. None of it is secret
+— it is the offer, printed on the page.
 
 Debited **at hold time**, inside the booking transaction. That is the opposite of
 how promo uses are counted, deliberately: a promo code is a shared coupon, but
@@ -267,7 +292,9 @@ The things most worth attacking, and what should happen.
 |---|---|
 | Post a `customerId` in the `/api/bookings` body | Ignored — the session cookie is the only source. |
 | Post `redeemPoints: 500` with a balance of 0 | `400 reward-invalid`, `rewardReason: "locked"`. The hold is refused, not priced wrong. |
-| Post `redeemPoints: 300` (between rungs) | `400 reward-invalid`, `rewardReason: "unknown"`. |
+| Post `redeemPoints: 37` (not a whole step) | `400 reward-invalid`, `rewardReason: "unknown"`. |
+| Post `redeemPoints: 50.5` or `-50` | `400 reward-invalid`, `rewardReason: "unknown"` — refused before it is priced. |
+| Tick 100 points against a 5 SAR bill | Never offered (`redeemable` bounds by the bill), and capped at 5 SAR if forced. |
 | Paste the staff `authjs.session-token` into `ron_account` | Refused — different salt, fails to decrypt. |
 | Edit a byte of `ron_account` | Refused, signed out. |
 | Post a **session** token as a signup `ticket` | `401 ticket-expired` — the `signup:` prefix is checked. |

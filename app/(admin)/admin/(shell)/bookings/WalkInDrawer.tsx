@@ -1,9 +1,23 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { Button, Field, Input } from "@/components/admin/ui";
+import { Button, Field, FormErrors, Input, invalidRing } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import TextField from "@/components/admin/TextField";
+import {
+  checkEmail,
+  checkPersonName,
+  collect,
+  EMAIL_MAX,
+  EMAIL_TEXT,
+  focusFirstInvalid,
+  hasErrors,
+  PERSON_NAME_MAX,
+  PERSON_TEXT,
+  typedPhone,
+} from "@/lib/admin/validate";
+import { toStoredPhone, validateSaudiMobile } from "@/lib/phone";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
 import { createWalkIn } from "./actions";
@@ -22,7 +36,13 @@ export default function WalkInDrawer({
   open: boolean;
   branchId: string;
   date: string;
-  catalog: { services: CatalogOption[]; addons: CatalogOption[]; removals: CatalogOption[] };
+  catalog: {
+    services: CatalogOption[];
+    addons: CatalogOption[];
+    /** at_checkout rows — the coffee and the cookie, kept out of the add-ons. */
+    treats: CatalogOption[];
+    removals: CatalogOption[];
+  };
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -32,9 +52,11 @@ export default function WalkInDrawer({
   const [removalId, setRemovalId] = useState<string>("");
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [startsAt, setStartsAt] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tried, setTried] = useState(false);
   const [pending, startTransition] = useTransition();
 
   useEffect(() => {
@@ -44,15 +66,22 @@ export default function WalkInDrawer({
     setRemovalId("");
     setPhone("");
     setName("");
+    setEmail("");
     setStartsAt(null);
     setError(null);
+    setTried(false);
   }, [open, catalog.services]);
 
+  // Both groups go out as one `addonIds` — the split is how they are offered,
+  // not what they are — so every lookup below reads from both.
+  const extras = [...catalog.addons, ...catalog.treats];
+
   // Duration drives which slots actually fit, so it has to be recomputed as the
-  // receptionist adds extras — same rule the customer-facing flow follows.
+  // receptionist adds extras — same rule the customer-facing flow follows. A
+  // treat is 0 minutes by catalogue rule, so ticking one never moves the slot.
   const durationMin =
     (catalog.services.find((s) => s.id === serviceId)?.durationMin ?? 60) +
-    addonIds.reduce((sum, id) => sum + (catalog.addons.find((a) => a.id === id)?.durationMin ?? 0), 0) +
+    addonIds.reduce((sum, id) => sum + (extras.find((a) => a.id === id)?.durationMin ?? 0), 0) +
     (catalog.removals.find((r) => r.id === removalId)?.durationMin ?? 0);
 
   useEffect(() => {
@@ -69,10 +98,28 @@ export default function WalkInDrawer({
     };
   }, [open, branchId, date, durationMin, serviceId]);
 
+  const toggleExtra = (id: string) =>
+    setAddonIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const v = t.validation;
+  const phoneLabel = t.bookings.phone;
+  const check = () => {
+    const phoneError = validateSaudiMobile(phone);
+    return collect({
+      name: checkPersonName(v, t.bookings.customer, name, { required: false }),
+      phone: phoneError === "required" ? v.required(phoneLabel) : phoneError && v.mobile(phoneLabel),
+      email: checkEmail(v, t.customers.email, email),
+      serviceId: !serviceId && v.required(t.bookings.service),
+      startsAt: !startsAt && v.required(t.bookings.time),
+    });
+  };
+  const errors = tried ? check() : {};
+
   const submit = () =>
     startTransition(async () => {
       setError(null);
-      if (!startsAt) return setError(t.bookings.pickTime);
+      setTried(true);
+      if (hasErrors(check()) || !startsAt) return focusFirstInvalid();
       const res = await createWalkIn({
         branchId,
         serviceId,
@@ -80,15 +127,28 @@ export default function WalkInDrawer({
         removalTypeId: removalId || null,
         startsAt,
         name: name.trim() || undefined,
-        phone: phone.trim(),
+        // 05XXXXXXXX, the shape a returning guest is matched on — see lib/phone.ts.
+        phone: toStoredPhone(phone),
+        email: email.trim() || undefined,
       });
       if (res.ok) onCreated();
-      else setError(res.error === "slot-taken" ? t.bookings.slotTaken : t.common.error);
+      else
+        setError(
+          res.error === "slot-taken"
+            ? t.bookings.slotTaken
+            : res.error === "phone"
+              ? v.mobile(phoneLabel)
+              : res.error === "email"
+                ? v.email(t.customers.email)
+                : res.error === "blocked"
+                  ? t.bookings.walkInBlocked
+                  : t.common.error,
+        );
     });
 
   const total =
     (catalog.services.find((s) => s.id === serviceId)?.priceSar ?? 0) +
-    addonIds.reduce((sum, id) => sum + (catalog.addons.find((a) => a.id === id)?.priceSar ?? 0), 0) +
+    addonIds.reduce((sum, id) => sum + (extras.find((a) => a.id === id)?.priceSar ?? 0), 0) +
     (catalog.removals.find((r) => r.id === removalId)?.priceSar ?? 0);
 
   return (
@@ -105,21 +165,27 @@ export default function WalkInDrawer({
           <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
             {t.common.cancel}
           </Button>
-          <Button size="sm" onClick={submit} disabled={pending || !phone.trim() || !startsAt}>
+          <Button size="sm" onClick={submit} disabled={pending}>
             {pending ? t.common.saving : t.bookings.create}
           </Button>
         </>
       }
     >
       <div className="space-y-5">
-        <Field label={t.bookings.customer}>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t.bookings.optional} />
-        </Field>
+        <TextField
+          label={`${t.bookings.customer} (${t.bookings.optional})`}
+          {...PERSON_TEXT}
+          max={PERSON_NAME_MAX}
+          error={errors.name}
+          value={name}
+          onChange={setName}
+        />
 
-        <Field label={`${t.bookings.phone} *`}>
+        <Field label={`${t.bookings.phone} *`} error={errors.phone}>
           <Input
+            aria-invalid={!!errors.phone}
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={(e) => setPhone(typedPhone(e.target.value))}
             dir="ltr"
             inputMode="tel"
             placeholder="05XXXXXXXX"
@@ -127,11 +193,27 @@ export default function WalkInDrawer({
           />
         </Field>
 
-        <Field label={t.bookings.service}>
+        <div>
+          <TextField
+            label={`${t.customers.email} (${t.bookings.optional})`}
+            {...EMAIL_TEXT}
+            max={EMAIL_MAX}
+            error={errors.email}
+            value={email}
+            onChange={setEmail}
+          />
+          <p className="mt-1 text-start text-xs text-ink/45">{t.bookings.walkInEmailHint}</p>
+        </div>
+
+        <Field label={t.bookings.service} error={errors.serviceId}>
           <select
             value={serviceId}
+            aria-invalid={!!errors.serviceId}
             onChange={(e) => setServiceId(e.target.value)}
-            className="h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink outline-none focus:border-sky"
+            className={cn(
+              "h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-sm text-ink outline-none focus:border-sky",
+              invalidRing,
+            )}
           >
             {catalog.services.map((s) => (
               <option key={s.id} value={s.id}>
@@ -141,29 +223,25 @@ export default function WalkInDrawer({
           </select>
         </Field>
 
-        <div className="text-start">
-          <span className="mb-1.5 block text-xs font-medium text-ink/70">{t.bookings.addons}</span>
-          <div className="flex flex-wrap gap-2">
-            {catalog.addons.map((a) => {
-              const on = addonIds.includes(a.id);
-              return (
-                <button
-                  key={a.id}
-                  type="button"
-                  onClick={() =>
-                    setAddonIds((prev) => (on ? prev.filter((x) => x !== a.id) : [...prev, a.id]))
-                  }
-                  className={cn(
-                    "rounded-xl border px-3 py-1.5 text-xs transition-colors",
-                    on ? "border-red bg-red/[0.07] text-red" : "border-black/10 text-ink/70 hover:bg-black/[0.03]",
-                  )}
-                >
-                  {pick(a.name, lang)}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <Chips
+          label={t.bookings.addons}
+          options={catalog.addons}
+          lang={lang}
+          selected={addonIds}
+          onToggle={toggleExtra}
+        />
+
+        {/* Her coffee, asked for as a treat rather than buried among the gel
+            removals. Same ids, same `addonIds`, different heading. */}
+        {catalog.treats.length > 0 && (
+          <Chips
+            label={t.bookings.treats}
+            options={catalog.treats}
+            lang={lang}
+            selected={addonIds}
+            onToggle={toggleExtra}
+          />
+        )}
 
         <Field label={t.bookings.removal}>
           <select
@@ -189,7 +267,7 @@ export default function WalkInDrawer({
           ) : slots.length === 0 ? (
             <p className="py-4 text-center text-xs text-ink/45">{t.bookings.noSlots}</p>
           ) : (
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
               {slots.map((s) => (
                 <button
                   key={s.time}
@@ -198,7 +276,7 @@ export default function WalkInDrawer({
                   disabled={!s.available}
                   onClick={() => setStartsAt(s.startsAt)}
                   className={cn(
-                    "rounded-lg py-2 text-xs tabular-nums transition-colors",
+                    "min-h-[48px] rounded-lg py-2 text-xs tabular-nums transition-colors sm:min-h-0",
                     startsAt === s.startsAt
                       ? "bg-red font-semibold text-white"
                       : s.available
@@ -211,14 +289,50 @@ export default function WalkInDrawer({
               ))}
             </div>
           )}
+          {errors.startsAt ? <p className="mt-1 text-xs text-red">{errors.startsAt}</p> : null}
         </div>
 
-        {error ? (
-          <p role="alert" className="rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
-            {error}
-          </p>
-        ) : null}
+        <FormErrors errors={errors} summary={t.validation.summary} server={error} />
       </div>
     </Drawer>
+  );
+}
+
+/** One heading and a row of toggles. Add-ons and treats differ only in which. */
+function Chips({
+  label,
+  options,
+  lang,
+  selected,
+  onToggle,
+}: {
+  label: string;
+  options: CatalogOption[];
+  lang: "ar" | "en";
+  selected: string[];
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div className="text-start">
+      <span className="mb-1.5 block text-xs font-medium text-ink/70">{label}</span>
+      <div className="flex flex-wrap gap-2">
+        {options.map((a) => {
+          const on = selected.includes(a.id);
+          return (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => onToggle(a.id)}
+              className={cn(
+                "rounded-xl border px-3 py-1.5 text-xs transition-colors",
+                on ? "border-red bg-red/[0.07] text-red" : "border-black/10 text-ink/70 hover:bg-black/[0.03]",
+              )}
+            >
+              {pick(a.name, lang)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

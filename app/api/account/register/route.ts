@@ -12,24 +12,21 @@ import { db } from "@/lib/db";
 import { customers } from "@/lib/db/schema";
 import { isValidSaudiMobile, toStoredPhone } from "@/lib/phone";
 import { ACCOUNT_COOKIE, SESSION_TTL_S, mintSession, readSignupTicket } from "@/lib/account/session";
+import { birthdayField, nameField } from "@/lib/account/fields";
+import { createAccount } from "@/lib/account/create";
 import { clientIp, throttled } from "@/lib/throttle";
 
 export const dynamic = "force-dynamic";
 
 const body = z.object({
   ticket: z.string().min(1).max(4000),
-  name: z.string().trim().min(1).max(120),
+  name: nameField,
   phone: z.string().trim().refine(isValidSaudiMobile, "invalid-phone"),
   /**
    * Brief §2.8 — captured at signup, for reminders and offers. Optional: a
-   * customer who would rather not say still gets an account. `YYYY-MM-DD`,
-   * which is what <input type="date"> submits and what a `date` column stores.
+   * customer who would rather not say still gets an account.
    */
-  birthday: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .nullable()
-    .optional(),
+  birthday: birthdayField.nullable().optional(),
   lang: z.enum(["ar", "en"]).optional(),
 });
 
@@ -67,40 +64,22 @@ export async function POST(request: Request) {
     .limit(1);
   if (taken) return NextResponse.json({ error: "already-registered" }, { status: 409 });
 
-  const phone = toStoredPhone(parsed.data.phone);
-
+  // Every guest booking made under this address comes with her, whatever phone
+  // it used; the phone itself never picks rows. See lib/account/create.ts.
   let customer;
   try {
-    // Conflict on phone, which is the key checkout already upserts on
-    // (lib/bookings.ts). So a customer who has booked as a guest from this
-    // number keeps their row — and with it their booking history — rather than
-    // starting a second one beside it.
-    [customer] = await db
-      .insert(customers)
-      .values({
-        phone,
-        name: parsed.data.name,
-        email,
-        birthday: parsed.data.birthday ?? null,
-        emailVerifiedAt: new Date(),
-        lang: parsed.data.lang ?? "ar",
-      })
-      .onConflictDoUpdate({
-        target: customers.phone,
-        set: {
-          name: parsed.data.name,
-          email,
-          birthday: parsed.data.birthday ?? undefined,
-          emailVerifiedAt: new Date(),
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
+    customer = await createAccount({
+      email,
+      name: parsed.data.name,
+      phone: toStoredPhone(parsed.data.phone),
+      birthday: parsed.data.birthday ?? null,
+      lang: parsed.data.lang ?? "ar",
+    });
   } catch (err) {
-    // Almost certainly the partial unique index: this phone's row already
-    // carries a *different* verified address. One person, one account.
+    // customers_account_email_unique: the same address finished signing up in
+    // another tab a moment ago.
     console.error("[account] could not create an account", err);
-    return NextResponse.json({ error: "phone-in-use" }, { status: 409 });
+    return NextResponse.json({ error: "already-registered" }, { status: 409 });
   }
 
   if (customer.blocked) return NextResponse.json({ error: "blocked" }, { status: 403 });

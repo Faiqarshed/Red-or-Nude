@@ -398,11 +398,12 @@ assert.strictEqual(scopedBranchId("ceo", "branch-1"), null, "the CEO spans branc
 const mid = new Date("2026-08-17T09:30:00.000Z");
 const { start, end } = monthWindow(mid);
 
-assert.strictEqual(start.toISOString(), "2026-08-01T00:00:00.000Z", "the window opens on the 1st");
+// Riyadh months: midnight on the 1st there is 21:00 UTC the evening before.
+assert.strictEqual(start.toISOString(), "2026-07-31T21:00:00.000Z", "the window opens at midnight on the 1st, Riyadh");
 assert.strictEqual(
   end.toISOString(),
-  "2026-09-01T00:00:00.000Z",
-  "and closes as the next month opens — so an unused code lapses by itself",
+  "2026-08-31T21:00:00.000Z",
+  "and closes as the next Riyadh month opens — so an unused code lapses by itself",
 );
 assert.ok(start < mid && mid < end, "the date it was issued on falls inside its own window");
 
@@ -410,16 +411,23 @@ assert.ok(start < mid && mid < end, "the date it was issued on falls inside its 
 const december = monthWindow(new Date("2026-12-09T00:00:00.000Z"));
 assert.strictEqual(
   december.end.toISOString(),
-  "2027-01-01T00:00:00.000Z",
-  "December's window closes in January of the next year",
+  "2026-12-31T21:00:00.000Z",
+  "December's window closes as January opens in Riyadh",
 );
 
 // The same month from either end lands on the same window — that identity is
-// what makes issueMonthlyCode idempotent for a cron that fires late.
+// what makes issueMonthlyCode idempotent for a cron that fires late or daily.
 assert.deepStrictEqual(
-  monthWindow(new Date("2026-08-01T00:00:00.000Z")),
-  monthWindow(new Date("2026-08-31T23:59:59.000Z")),
-  "the 1st and the 31st ask for the same month",
+  monthWindow(new Date("2026-07-31T21:00:00.000Z")),
+  monthWindow(new Date("2026-08-31T20:59:59.000Z")),
+  "the first and last moment of a Riyadh August ask for the same month",
+);
+// 22:00 UTC on 31 August is already 1 September in Riyadh: a UTC month would
+// have kept this on August's code for three more hours.
+assert.strictEqual(
+  monthWindow(new Date("2026-08-31T22:00:00.000Z")).start.toISOString(),
+  "2026-08-31T21:00:00.000Z",
+  "the month turns at Riyadh midnight, not UTC midnight",
 );
 
 assert.ok(

@@ -4,11 +4,24 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, QrCode, Trash2 } from "lucide-react";
-import { Badge, Button, Card, CardHeader, Field, Input, PageHeader } from "@/components/admin/ui";
+import { Badge, Button, Card, CardHeader, Field, Input, invalidRing, PageHeader, touchTargetSm, touchTargetSwitch } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { ConfirmDialog } from "@/components/admin/overlays";
+import TextField from "@/components/admin/TextField";
+import {
+  CHAIR_MAX,
+  CHAIR_TEXT,
+  checkChairLabel,
+  checkClosure,
+  CLOSURE_LIMITS,
+  CLOSURE_TEXT,
+  closureWindow,
+  focusFirstInvalid,
+  hasErrors,
+} from "@/lib/admin/validate";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
-import { closureDays } from "@/lib/time";
+import { closureDays, dayRange, formatDateKey, riyadhDateKey } from "@/lib/time";
 import type { Localized } from "@/lib/db/schema";
 import {
   addClosure,
@@ -47,18 +60,75 @@ export default function AvailabilityView({
   const params = useSearchParams();
   const [, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // A chair or closure waiting on "are you sure": both delete for good.
+  const [doomed, setDoomed] = useState<{ kind: "station" | "closure"; id: string; name: string } | null>(null);
+  const [deleting, startDelete] = useTransition();
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [draft, setDraft] = useState<Hours[]>(hours);
   const [newStation, setNewStation] = useState("");
   const [closure, setClosure] = useState({ from: "", to: "", reasonAr: "", reasonEn: "" });
+  const [stationTried, setStationTried] = useState(false);
+  const [closureTried, setClosureTried] = useState(false);
+
+  const a = t.availability;
+  const v = t.validation;
+
+  // The server's refusals, as sentences. It used to print the code itself.
+  const messageFor = (code?: string) =>
+    code === "closes-before-opens"
+      ? v.after(a.closes, a.opens)
+      : code === "to-before-from"
+        ? v.notBefore(a.to, a.from)
+        : code === "in-use"
+          ? a.stationInUse
+          : t.common.error;
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) =>
     startTransition(async () => {
       setError(null);
       const res = await fn();
-      if (!res.ok) setError(res.error ?? t.common.error);
+      if (!res.ok) setError(messageFor(res.error));
       router.refresh();
     });
+
+  const confirmDelete = () =>
+    startDelete(async () => {
+      if (!doomed) return;
+      setDeleteError(null);
+      const res = doomed.kind === "station" ? await deleteStation(doomed.id) : await deleteClosure(doomed.id);
+      if (!res.ok) return setDeleteError(messageFor(res.error));
+      setDoomed(null);
+      router.refresh();
+    });
+  const askDelete = (d: NonNullable<typeof doomed>) => {
+    setDeleteError(null);
+    setDoomed(d);
+  };
+
+  // Checked as she types, not on a save press: hours save the moment a box
+  // loses focus, so there is no later moment to tell her.
+  const dayError = (day: Hours) =>
+    day.closed
+      ? undefined
+      : !day.opens
+        ? v.required(a.opens)
+        : !day.closes
+          ? v.required(a.closes)
+          : day.closes <= day.opens
+            ? v.after(a.closes, a.opens)
+            : undefined;
+
+  const checkStation = () => checkChairLabel(t, newStation, stations.map((s) => s.label));
+  const stationError = stationTried ? checkStation() : undefined;
+
+  const today = riyadhDateKey();
+  const { earliest, latest } = closureWindow(today);
+  const checkClosureForm = () =>
+    checkClosure(t, { from: closure.from, to: closure.to, reason: closure.reasonAr }, today, (k) =>
+      formatDateKey(k, lang),
+    );
+  const closureErrors = closureTried ? checkClosureForm() : {};
 
   const setBranch = (id: string) => {
     const sp = new URLSearchParams(params.toString());
@@ -72,7 +142,7 @@ export default function AvailabilityView({
 
   const saveDay = (weekday: number) => {
     const day = draft.find((d) => d.weekday === weekday);
-    if (!day) return;
+    if (!day || dayError(day)) return;
     run(() => saveBranchHours({ branchId, ...day }));
   };
 
@@ -119,11 +189,13 @@ export default function AvailabilityView({
                   role="switch"
                   aria-checked={!day.closed}
                   onClick={() => {
-                    updateDay(day.weekday, { closed: !day.closed });
-                    run(() => saveBranchHours({ branchId, ...day, closed: !day.closed }));
+                    const next = { ...day, closed: !day.closed };
+                    updateDay(day.weekday, { closed: next.closed });
+                    if (!dayError(next)) run(() => saveBranchHours({ branchId, ...next }));
                   }}
                   className={cn(
                     "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+                      touchTargetSwitch,
                     !day.closed ? "bg-[#1f7a4d]" : "bg-black/15",
                   )}
                 >
@@ -141,19 +213,34 @@ export default function AvailabilityView({
                   <>
                     <input
                       type="time"
+                      aria-label={a.opens}
+                      aria-invalid={!!dayError(day)}
                       value={day.opens}
                       onChange={(e) => updateDay(day.weekday, { opens: e.target.value })}
                       onBlur={() => saveDay(day.weekday)}
-                      className="h-9 rounded-lg border border-black/10 bg-white px-2 text-sm tabular-nums text-ink outline-none focus:border-sky"
+                      className={cn(
+                        "h-9 rounded-lg border border-black/10 bg-white px-2 text-sm tabular-nums text-ink outline-none focus:border-sky",
+                        invalidRing,
+                      )}
                     />
                     <span className="text-xs text-ink/35">–</span>
                     <input
                       type="time"
+                      aria-label={a.closes}
+                      aria-invalid={!!dayError(day)}
                       value={day.closes}
                       onChange={(e) => updateDay(day.weekday, { closes: e.target.value })}
                       onBlur={() => saveDay(day.weekday)}
-                      className="h-9 rounded-lg border border-black/10 bg-white px-2 text-sm tabular-nums text-ink outline-none focus:border-sky"
+                      className={cn(
+                        "h-9 rounded-lg border border-black/10 bg-white px-2 text-sm tabular-nums text-ink outline-none focus:border-sky",
+                        invalidRing,
+                      )}
                     />
+                    {dayError(day) ? (
+                      <span role="alert" className="text-xs text-red">
+                        {dayError(day)}
+                      </span>
+                    ) : null}
                   </>
                 )}
               </li>
@@ -177,6 +264,7 @@ export default function AvailabilityView({
                   onClick={() => run(() => setStationActive(s.id, !s.active))}
                   className={cn(
                     "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+                      touchTargetSwitch,
                     s.active ? "bg-[#1f7a4d]" : "bg-black/15",
                   )}
                 >
@@ -188,8 +276,8 @@ export default function AvailabilityView({
                   />
                 </button>
                 <button
-                  onClick={() => run(() => deleteStation(s.id))}
-                  className="grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red"
+                  onClick={() => askDelete({ kind: "station", id: s.id, name: s.label })}
+                  className={`relative grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red ${touchTargetSm}`}
                   aria-label={t.catalog.delete}
                 >
                   <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -197,16 +285,26 @@ export default function AvailabilityView({
               </li>
             ))}
           </ul>
-          <div className="flex items-end gap-2 border-t border-black/[0.06] p-4">
-            <Field label={t.availability.stationLabel}>
-              <Input value={newStation} onChange={(e) => setNewStation(e.target.value)} />
-            </Field>
+          <div className="flex items-start gap-2 border-t border-black/[0.06] p-4">
+            <div className="flex-1">
+              <TextField
+                label={a.stationLabel}
+                {...CHAIR_TEXT}
+                max={CHAIR_MAX}
+                error={stationError}
+                value={newStation}
+                onChange={setNewStation}
+              />
+            </div>
             <Button
               size="md"
+              className="mt-6"
               onClick={() => {
-                if (!newStation.trim()) return;
-                run(() => addStation(branchId, newStation));
+                setStationTried(true);
+                if (checkStation()) return focusFirstInvalid();
+                run(() => addStation(branchId, newStation.trim()));
                 setNewStation("");
+                setStationTried(false);
               }}
             >
               <Plus className="h-4 w-4" strokeWidth={2} />
@@ -251,8 +349,8 @@ export default function AvailabilityView({
                   </div>
                   {c.global && <Badge tone="info">all</Badge>}
                   <button
-                    onClick={() => run(() => deleteClosure(c.id))}
-                    className="grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red"
+                    onClick={() => askDelete({ kind: "closure", id: c.id, name: dayRange(from, to) })}
+                    className={`relative grid h-7 w-7 place-items-center rounded-lg text-ink/30 transition-colors hover:bg-red/[0.06] hover:text-red ${touchTargetSm}`}
                     aria-label={t.catalog.delete}
                   >
                     <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -263,34 +361,44 @@ export default function AvailabilityView({
             </ul>
           )}
           <div className="space-y-3 border-t border-black/[0.06] p-4">
-            <div className="grid grid-cols-2 gap-2">
-              <Field label={t.availability.from}>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <Field label={a.from} error={closureErrors.from}>
                 <Input
                   type="date"
+                  min={earliest}
+                  max={latest}
+                  aria-invalid={!!closureErrors.from}
                   value={closure.from}
                   onChange={(e) => setClosure((c) => ({ ...c, from: e.target.value }))}
                 />
               </Field>
-              <Field label={t.availability.to}>
+              <Field label={a.to} error={closureErrors.to}>
                 <Input
                   type="date"
+                  min={closure.from || earliest}
+                  max={latest}
+                  aria-invalid={!!closureErrors.to}
                   value={closure.to}
                   onChange={(e) => setClosure((c) => ({ ...c, to: e.target.value }))}
                 />
               </Field>
             </div>
-            <Field label={t.availability.reason}>
-              <Input
-                value={closure.reasonAr}
-                onChange={(e) => setClosure((c) => ({ ...c, reasonAr: e.target.value }))}
-              />
-            </Field>
+            <TextField
+              label={a.reason}
+              {...CLOSURE_TEXT}
+              max={CLOSURE_LIMITS.reasonMax}
+              error={closureErrors.reason}
+              value={closure.reasonAr}
+              onChange={(reasonAr) => setClosure((c) => ({ ...c, reasonAr }))}
+            />
             <Button
               size="sm"
-              disabled={!closure.from || !closure.to}
               onClick={() => {
-                run(() => addClosure({ branchId, ...closure }));
+                setClosureTried(true);
+                if (hasErrors(checkClosureForm())) return focusFirstInvalid();
+                run(() => addClosure({ branchId, ...closure, reasonAr: closure.reasonAr.trim() }));
                 setClosure({ from: "", to: "", reasonAr: "", reasonEn: "" });
+                setClosureTried(false);
               }}
             >
               <Plus className="h-4 w-4" strokeWidth={2} />
@@ -299,6 +407,16 @@ export default function AvailabilityView({
           </div>
         </Card>
       </div>
+
+      <ConfirmDialog
+        open={!!doomed}
+        title={t.common.deleteNamed(doomed?.name ?? "")}
+        body={doomed?.kind === "station" ? t.common.stationDeleteBody : t.common.closureDeleteBody}
+        pending={deleting}
+        error={deleteError}
+        onClose={() => setDoomed(null)}
+        onConfirm={confirmDelete}
+      />
     </>
   );
 }

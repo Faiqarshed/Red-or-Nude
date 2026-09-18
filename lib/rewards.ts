@@ -1,12 +1,12 @@
-// The loyalty rules (brief §2.8): the ladder, the maths, and the one rule that
-// decides whether a point still counts.
+// The loyalty rules (brief §2.8): the milestones, the maths, and the one rule
+// that decides whether a point still counts.
 //
 // Pure and dependency-free, split from lib/loyalty.ts the way lib/cancellation.ts
 // is split from its lookups. Two reasons, and both are load-bearing:
 //
 //   • **No `server-only`.** The checkout and the profile screen both render the
-//     ladder, and both are client components. Without this split the constant
-//     has to be threaded down as a prop from a server page through three
+//     rules, and both are client components. Without this split the constants
+//     have to be threaded down as props from a server page through three
 //     components and echoed back out of an API response.
 //   • It is testable without a database — scripts/check-loyalty.ts asserts these
 //     functions directly, and they are the same ones the checkout preview and
@@ -14,92 +14,162 @@
 //
 // Points are whole numbers. Money is halalas — see the header of lib/db/schema.ts.
 
-export type Reward = { points: number; percent: number };
+/**
+ * What the salon gives and what it costs, all four numbers in one place.
+ *
+ * These live in `settings` rather than here (see SETTING_DEFAULTS) because the
+ * salon retunes them without a deploy, and every function below takes them as an
+ * argument rather than reading a module constant. That is what lets the checkout
+ * price a reward in the browser with the same function the booking write uses on
+ * the server, the row read once and passed down.
+ */
+export type LoyaltyRules = {
+  /** Spend that earns the first award, in riyals. 199. */
+  firstSar: number;
+  /** Every further award costs this much more spend, in riyals. 200. */
+  stepSar: number;
+  /** Points granted at each milestone. 50. */
+  stepPoints: number;
+  /** What one point is worth, in halalas. 20 — so 50 points is 10.00 SAR. */
+  pointHalalas: number;
+};
 
 /**
- * What points buy. Spending is opt-in at checkout — a customer ticks one rung
- * or none, the way they type a discount code or don't.
+ * How many milestones a single bill reaches.
  *
- * **Linear on purpose: every 100 points is another 5% off.**
+ * **Milestones, not a rate.** The salon's rule is "199 riyals earns 50 points,
+ * and every 200 after that earns 50 more", so the thresholds land at 199, 399,
+ * 599 … and a bill *between* two of them earns what the lower one earned. A 350
+ * SAR bill is worth 50 points, not 87, because it has not reached 399.
  *
- * The first cut of this ladder was 100 / 250 / 500 for 5 / 10 / 15%, which
- * quietly punished loyalty. Value per point is `percent ÷ points`, so those
- * rungs ran 0.050, 0.040, 0.033 — the dearest reward was the *worst* deal, and
- * a customer who saved up for it was worse off than one who spent at the bottom
- * rung three times. A ladder should never make climbing it the losing move.
+ * This deliberately replaces the linear one-point-per-N-riyals rate that was
+ * here before. A milestone is something a customer can be told — "you are 49
+ * riyals from your next reward" — in a way a rate is not.
  *
- * ponytail: a module constant, not a settings row. `settings.value` is jsonb so
- * a ladder would fit, but SETTING_DEFAULTS is a flat map of primitives and this
- * changes about as often as the price list does. Move it if marketing ever
- * wants to retune the rungs without a deploy.
+ * **Per bill, not per lifetime.** A group is one bill and earns once, tied to
+ * the anchor booking; see lib/payments/confirm.ts.
+ *
+ * ponytail: per-bill accrual means two 199 SAR visits earn 100 points where one
+ * 398 SAR visit earns 50. Accepted — splitting costs the customer a second
+ * appointment in a real chair. Move to lifetime accrual (milestones over total
+ * paid, minus points already granted) if the salon ever sees bookings split to
+ * farm points. That needs a join through `bookings`, since `payments` carries no
+ * customer_id, and a decision about whose spend a group bill counts toward.
  */
-export const REWARDS: readonly Reward[] = [
-  { points: 100, percent: 5 },
-  { points: 200, percent: 10 },
-  { points: 300, percent: 15 },
-] as const;
+export function milestonesReached(totalHalalas: number, rules: LoyaltyRules): number {
+  const { firstSar, stepSar } = rules;
+  if (totalHalalas <= 0 || firstSar <= 0 || stepSar <= 0) return 0;
 
-/** The rung costing exactly this many points, or null if there is no such rung. */
-export function rewardFor(points: number): Reward | null {
-  return REWARDS.find((r) => r.points === points) ?? null;
+  const first = firstSar * 100;
+  const step = stepSar * 100;
+  if (totalHalalas < first) return 0;
+  return Math.floor((totalHalalas - first) / step) + 1;
+}
+
+/**
+ * What a paid bill earns.
+ *
+ * Always a whole number: points are an integer column, an integer balance and an
+ * integer on screen, and a fractional point has nowhere to live. Milestones are
+ * counted first and multiplied second, so there is no division left to round.
+ *
+ * Called with what the customer *paid*, not what the bill was before discounts —
+ * earning on the pre-discount figure would make a discount partly pay for itself.
+ */
+export function pointsEarned(totalHalalas: number, rules: LoyaltyRules): number {
+  return milestonesReached(totalHalalas, rules) * Math.max(0, Math.trunc(rules.stepPoints));
+}
+
+/**
+ * Spend still needed to reach the next milestone, in halalas.
+ *
+ * For the line on the account page that says how far off she is. With nothing
+ * reached yet this is the distance to the *first* milestone, so the screen has
+ * something to say to a new customer rather than a bar at zero with no target.
+ */
+export function toNextMilestone(totalHalalas: number, rules: LoyaltyRules): number {
+  const { firstSar, stepSar } = rules;
+  if (firstSar <= 0 || stepSar <= 0) return 0;
+
+  const first = firstSar * 100;
+  const step = stepSar * 100;
+  const spent = Math.max(0, totalHalalas);
+  if (spent < first) return first - spent;
+  return step - ((spent - first) % step);
+}
+
+// ------------------------------------------------------------ redemption ---
+
+/** What `points` are worth off a bill, in halalas, before any cap. */
+export function pointsValue(points: number, rules: LoyaltyRules): number {
+  if (points <= 0) return 0;
+  return Math.trunc(points) * Math.max(0, Math.trunc(rules.pointHalalas));
 }
 
 export type RewardRefusal =
-  /** No rung costs that many points. Also what a hand-edited request looks like. */
+  /** Not a positive whole multiple of the step. Also what a hand-edited request looks like. */
   | "unknown"
-  /** A real rung, but this balance can't reach it yet. */
+  /** A real amount, but this balance cannot reach it. */
   | "locked";
 
 /**
- * Why this rung can't be spent, or `null` if it can.
+ * Why this many points cannot be spent, or `null` if they can.
  *
  * Named reasons rather than a bare false, for the same reason promoRefusal has
- * them: "you need 200 points for that" sends the customer somewhere useful and
- * "invalid" sends them nowhere.
+ * them: "you need 50 more points for that" sends the customer somewhere useful
+ * and "invalid" sends her nowhere.
+ *
+ * Redemption is in whole steps — 50, 100, 150 — rather than any number she
+ * likes. It keeps the offer describable ("50 points is 10 riyals off"), and it
+ * means a stray 37 from a hand-edited request is refused rather than priced.
  */
-export function rewardRefusal(points: number, balance: number): RewardRefusal | null {
-  const reward = rewardFor(points);
-  if (!reward) return "unknown";
-  if (balance < reward.points) return "locked";
+export function rewardRefusal(
+  points: number,
+  balance: number,
+  rules: LoyaltyRules,
+): RewardRefusal | null {
+  const step = Math.trunc(rules.stepPoints);
+  if (step <= 0) return "unknown";
+  if (!Number.isInteger(points) || points <= 0 || points % step !== 0) return "unknown";
+  if (balance < points) return "locked";
   return null;
 }
 
 /**
- * What a rung takes off this bill.
+ * What spending `points` takes off this bill.
  *
  * Capped at the total on purpose, exactly as promoDiscount is: a discount larger
  * than the bill is a refund, and a reward must never be able to hand out money
- * that was never taken.
+ * that was never taken. See redeemable(), which is what stops the checkout
+ * offering an amount she would lose the change on.
  */
-export function rewardDiscount(reward: Reward, totalHalalas: number): number {
+export function rewardDiscount(
+  points: number,
+  totalHalalas: number,
+  rules: LoyaltyRules,
+): number {
   if (totalHalalas <= 0) return 0;
-  const raw = Math.round((totalHalalas * reward.percent) / 100);
-  return Math.max(0, Math.min(raw, totalHalalas));
+  return Math.max(0, Math.min(pointsValue(points, rules), totalHalalas));
 }
 
 /**
- * What a paid bill earns: one point per `sarPerPoint` riyals actually paid.
+ * The amounts worth offering against this bill, smallest first.
  *
- * Two properties this must never lose:
- *
- * **The result is always a whole number.** Points are an integer column, an
- * integer balance and an integer on screen; a fractional point has nowhere to
- * live and would be rounded into existence or out of it somewhere downstream.
- * The floor here is the only place that is decided.
- *
- * **Floored, never rounded.** At one point per 5 SAR, a 9.99 SAR bill earns 1,
- * not 2. Rounding up lets a customer mint a point by splitting a bill, and
- * points are money.
- *
- * Note it is called with what the customer *paid*, not what the bill was before
- * discounts — earning on the pre-discount figure would make a discount partly
- * pay for itself.
+ * Bounded by her balance and by the bill, because offering 150 points against a
+ * 20 riyal bill is offering to burn 30 riyals of reward for 20 riyals off. The
+ * last entry may still overshoot a little — the step that first *covers* the
+ * bill is worth showing, the ones past it are not.
  */
-export function pointsEarned(totalHalalas: number, sarPerPoint: number): number {
-  if (totalHalalas <= 0 || sarPerPoint <= 0) return 0;
-  // One division, then floor. `100 * sarPerPoint` is halalas-per-point, so
-  // there is no intermediate riyal figure to carry a fraction.
-  return Math.floor(totalHalalas / (100 * sarPerPoint));
+export function redeemable(balance: number, totalHalalas: number, rules: LoyaltyRules): number[] {
+  const step = Math.trunc(rules.stepPoints);
+  if (step <= 0 || balance < step || totalHalalas <= 0) return [];
+
+  const out: number[] = [];
+  for (let points = step; points <= balance; points += step) {
+    out.push(points);
+    if (pointsValue(points, rules) >= totalHalalas) break;
+  }
+  return out;
 }
 
 // ------------------------------------------------------------ the balance ---

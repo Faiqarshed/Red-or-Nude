@@ -21,6 +21,11 @@ const body = z.object({
 const STATUS = {
   "not-found": 404,
   expired: 409,
+  // Another attempt already owns this party — the customer's other tab, or this
+  // button a moment ago. 409 like `expired`, because both mean "the thing you
+  // were looking at moved"; the body says which, and only this one is worth
+  // waiting out rather than starting again.
+  "in-progress": 409,
   "payment-declined": 402,
   failed: 500,
 } as const;

@@ -19,6 +19,8 @@ import MyDayView from "./my-day/MyDayView";
 import { loadMyDay, loadMyHistory } from "./my-day/data";
 import { isPeriodKey, loadTechnicianStats } from "@/lib/performance";
 import FrontDeskView from "./front-desk/FrontDeskView";
+import MyCodeCard from "@/components/admin/MyCodeCard";
+import { myStaffCode } from "@/lib/staff-codes";
 import { NO_BRANCH, loadFrontDesk } from "./front-desk/data";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +43,20 @@ export default async function AdminHomePage({
 }) {
   const user = await requireStaff();
 
+  // Her own discount code, above whichever screen her role lands on (client
+  // review, Sep 2026). Started now and awaited at render, so it rides alongside
+  // each role's own reads instead of adding a round trip in front of them.
+  const mine = myStaffCode(user.id);
+  const withCode = async (view: React.ReactNode) => {
+    const code = await mine;
+    return (
+      <>
+        {code && <MyCodeCard code={code} />}
+        {view}
+      </>
+    );
+  };
+
   if (user.role === "technician") {
     // Her own numbers, over the period she picked — the same function the CEO's
     // performance screen calls, narrowed to one person. She sees nobody else's.
@@ -55,7 +71,7 @@ export default async function AdminHomePage({
       loadTechnicianStats({ period, technicianId: user.id }),
     ]);
 
-    return (
+    return withCode(
       <MyDayView
         bookings={bookings}
         history={history}
@@ -73,7 +89,7 @@ export default async function AdminHomePage({
       (await db.select({ id: branches.id }).from(branches).orderBy(asc(branches.sort)).limit(1))[0]
         ?.id;
 
-    return (
+    return withCode(
       <FrontDeskView
         branchId={branchId || ""}
         data={branchId ? await loadFrontDesk(branchId) : NO_BRANCH}
@@ -97,7 +113,7 @@ export default async function AdminHomePage({
           .orderBy(asc(branches.sort))
       ).map((b) => b.id);
 
-  return (
+  return withCode(
     <DashboardView
       name={user.name}
       data={branchIds.length ? await loadDashboard(branchIds) : NO_BRANCHES}

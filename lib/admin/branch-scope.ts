@@ -27,6 +27,21 @@ export type BranchScope = {
   options: BranchOption[];
 };
 
+/**
+ * May this member act on a row belonging to `branchId`?
+ *
+ * `scopedBranchId` filters what a pinned reader *sees*; this is what they may
+ * *touch*, the half that matters once an id can arrive in a request. Anyone it
+ * leaves unpinned — the CEO, a regional admin — is refused nothing.
+ */
+export function inBranchScope(
+  user: { role: StaffRole; branchId: string | null },
+  branchId: string | null,
+): boolean {
+  const pinned = scopedBranchId(user.role, user.branchId);
+  return !pinned || pinned === branchId;
+}
+
 export async function branchScope(
   user: { role: StaffRole; branchId: string | null },
   requested?: string,

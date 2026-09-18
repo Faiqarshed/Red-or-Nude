@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
-import PaymentMethods from "@/components/PaymentMethods";
+import PaymentMethods, { methodIdFor } from "@/components/PaymentMethods";
 import { GiftCardArt } from "@/components/gift/GiftCardArt";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
@@ -20,8 +20,6 @@ import { SAUDI_DIALLING_CODE, formatNational, toStoredPhone } from "@/lib/phone"
 // Delivery is the buyer's tap: the success modal opens WhatsApp with the message
 // ready. An automatic send happens too, but only once a provider is configured —
 // see lib/notify/.
-
-const METHOD_KEYS = ["cardTitle", "madaTitle", "stcTitle", "appleTitle"] as const;
 
 export default function GiftCardPaymentPage() {
   const { c, lang } = useI18n();
@@ -42,12 +40,6 @@ export default function GiftCardPaymentPage() {
 
   const total = selection?.amountSar ?? 0;
 
-  /** Which enum value the API wants for the label the customer clicked. */
-  const methodCode = (): "card" | "mada" | "stc" | "apple" => {
-    const i = METHOD_KEYS.findIndex((k) => p[k] === method);
-    return (["card", "mada", "stc", "apple"] as const)[i === -1 ? 0 : i];
-  };
-
   const confirm = async () => {
     if (!selection || submitting) return;
     setSubmitting(true);
@@ -59,7 +51,7 @@ export default function GiftCardPaymentPage() {
         body: JSON.stringify({
           amountSar: selection.amountSar,
           designId: selection.designId,
-          method: methodCode(),
+          method: methodIdFor(method, p),
           buyerName: selection.senderName || undefined,
           recipientName: selection.recipientName || undefined,
           recipientEmail: selection.recipientEmail || undefined,

@@ -1,14 +1,35 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronUp, ImageIcon, Plus, Sparkles } from "lucide-react";
-import { Badge, Button, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import { Badge, Button, Card, EmptyState, PageHeader, tabItem, tabTone, touchTargetSwitch } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
 import type { Localized } from "@/lib/db/schema";
+import { usePendingAction } from "@/components/admin/use-pending-action";
+import type { AdminStrings } from "@/lib/admin/strings";
 import CatalogDrawer from "./CatalogDrawer";
 import { moveCatalogItem, setCatalogActive, type CatalogKind } from "./actions";
+
+/**
+ * What to tell a person whose catalogue change was refused. Shared by the list
+ * and the drawer, so a refusal reads the same wherever it happened.
+ */
+export function catalogError(t: AdminStrings, code: string): string {
+  switch (code) {
+    case "not-found":
+      return t.validation.notFound;
+    // Two live rows may not share a name. Says which way out rather than "error".
+    case "duplicate-name":
+      return t.catalog.duplicateName;
+    // Booking history holds it (FK restrict); deactivating is the answer.
+    case "in-use":
+      return t.catalog.inUseCannotDelete;
+    default:
+      return t.common.error;
+  }
+}
 
 /** One picture in an add-on's design picker. */
 export type DesignRow = {
@@ -36,19 +57,26 @@ export type CatalogRow = {
   sort: number;
 };
 
-const TABS: { kind: CatalogKind; labelKey: "tabServices" | "tabAddons" | "tabRemovals" }[] = [
+const TABS: {
+  kind: CatalogKind;
+  labelKey: "tabServices" | "tabAddons" | "tabUpsells" | "tabRemovals";
+}[] = [
   { kind: "service", labelKey: "tabServices" },
   { kind: "addon", labelKey: "tabAddons" },
+  { kind: "upsell", labelKey: "tabUpsells" },
   { kind: "removal", labelKey: "tabRemovals" },
 ];
 
 export default function CatalogView({
   services,
   addons,
+  upsells,
   removals,
 }: {
   services: CatalogRow[];
   addons: CatalogRow[];
+  /** Offered at checkout only — the coffee and cookie. Never beside a service. */
+  upsells: CatalogRow[];
   removals: CatalogRow[];
 }) {
   const { t, lang } = useAdminI18n();
@@ -56,18 +84,29 @@ export default function CatalogView({
   const [tab, setTab] = useState<CatalogKind>("service");
   const [editing, setEditing] = useState<CatalogRow | null>(null);
   const [creating, setCreating] = useState(false);
-  const [, startTransition] = useTransition();
+  const { act } = usePendingAction();
+  /** Why the last arrow or switch was refused. Cleared by the next attempt. */
+  const [listError, setListError] = useState<string | null>(null);
 
-  const rows = tab === "service" ? services : tab === "addon" ? addons : removals;
+  const rows =
+    tab === "service" ? services : tab === "addon" ? addons : tab === "upsell" ? upsells : removals;
 
   const newLabel =
-    tab === "service" ? t.catalog.newService : tab === "addon" ? t.catalog.newAddon : t.catalog.newRemoval;
+    tab === "service"
+      ? t.catalog.newService
+      : tab === "addon"
+        ? t.catalog.newAddon
+        : tab === "upsell"
+          ? t.catalog.newUpsell
+          : t.catalog.newRemoval;
 
-  const run = (fn: () => Promise<unknown>) =>
-    startTransition(async () => {
-      await fn();
-      router.refresh();
-    });
+  // Holds through the refresh, not just the action — see
+  // components/admin/use-pending-action. A refusal is shown rather than
+  // swallowed: switching a second row on under a taken name lands here.
+  const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
+    setListError(null);
+    return act(fn, (code) => setListError(catalogError(t, code)));
+  };
 
   return (
     <>
@@ -82,20 +121,33 @@ export default function CatalogView({
         }
       />
 
-      <div className="mb-4 flex gap-1 rounded-xl border border-black/[0.06] bg-white p-1">
+      {/* Two-by-two on a phone. Four across leaves about sixty pixels of text
+          per tab, which breaks the longer labels over two lines and drags the
+          whole strip out of square with them. */}
+      <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-black/[0.06] bg-white p-1 sm:flex">
         {TABS.map(({ kind, labelKey }) => (
           <button
             key={kind}
             onClick={() => setTab(kind)}
             className={cn(
-              "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-              tab === kind ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]",
+              tabItem,
+              "flex-1 py-2 text-sm",
+              tabTone(tab === kind),
             )}
           >
             {t.catalog[labelKey]}
           </button>
         ))}
       </div>
+
+      {listError && (
+        <p
+          role="alert"
+          className="mb-4 rounded-xl bg-red/[0.06] px-4 py-3 text-sm font-medium text-red"
+        >
+          {listError}
+        </p>
+      )}
 
       <Card className="overflow-hidden">
         {rows.length === 0 ? (
@@ -106,7 +158,12 @@ export default function CatalogView({
               <li
                 key={row.id}
                 className={cn(
-                  "flex items-center gap-4 px-4 py-3 transition-colors hover:bg-black/[0.015]",
+                  // Five things on one row leave the name about fifty pixels on
+                  // a phone — enough to cut "Classic manicure" down to
+                  // "Classic" and to stand the "same as English" warning on its
+                  // end, one word per line. Below `sm` the price and the
+                  // controls drop to a second line and give the name the row.
+                  "flex flex-wrap items-center gap-4 px-4 py-3 transition-colors hover:bg-black/[0.015]",
                   !row.active && "opacity-55",
                 )}
               >
@@ -138,53 +195,58 @@ export default function CatalogView({
                   </span>
                 </button>
 
-                <span className="shrink-0 text-sm font-semibold tabular-nums text-ink">
-                  {row.priceSar.toLocaleString("en-US")}
-                  <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
-                </span>
+                {/* Price, reorder and the switch travel together: on a phone
+                    they are the second line, spread across it. */}
+                <div className="flex shrink-0 items-center gap-4 max-sm:w-full max-sm:justify-between">
+                  <span className="shrink-0 text-sm font-semibold tabular-nums text-ink">
+                    {row.priceSar.toLocaleString("en-US")}
+                    <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
+                  </span>
 
-                <div className="flex shrink-0 items-center gap-0.5">
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <button
+                      onClick={() => run(() => moveCatalogItem(tab, row.id, "up"))}
+                      disabled={i === 0}
+                      title={t.common.moveUp}
+                      className="grid h-10 w-10 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent sm:h-7 sm:w-7"
+                    >
+                      <ChevronUp className="h-4 w-4" strokeWidth={2} />
+                    </button>
+                    <button
+                      onClick={() => run(() => moveCatalogItem(tab, row.id, "down"))}
+                      disabled={i === rows.length - 1}
+                      title={t.common.moveDown}
+                      className="grid h-10 w-10 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent sm:h-7 sm:w-7"
+                    >
+                      <ChevronDown className="h-4 w-4" strokeWidth={2} />
+                    </button>
+                  </div>
+
+                  {/* Plain stateful button rather than a peer-styled checkbox:
+                      `peer-checked:` only matches siblings, so it can't drive a
+                      knob nested inside the track. */}
                   <button
-                    onClick={() => run(() => moveCatalogItem(tab, row.id, "up"))}
-                    disabled={i === 0}
-                    title={t.common.moveUp}
-                    className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
+                    role="switch"
+                    aria-checked={row.active}
+                    aria-label={t.catalog.active}
+                    title={t.catalog.activeHint}
+                    onClick={() => run(() => setCatalogActive(tab, row.id, !row.active))}
+                    className={cn(
+                      "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+                      touchTargetSwitch,
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky",
+                      row.active ? "bg-[#1f7a4d]" : "bg-black/15",
+                    )}
                   >
-                    <ChevronUp className="h-4 w-4" strokeWidth={2} />
-                  </button>
-                  <button
-                    onClick={() => run(() => moveCatalogItem(tab, row.id, "down"))}
-                    disabled={i === rows.length - 1}
-                    title={t.common.moveDown}
-                    className="grid h-7 w-7 place-items-center rounded-lg text-ink/35 transition-colors hover:bg-black/[0.05] hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent"
-                  >
-                    <ChevronDown className="h-4 w-4" strokeWidth={2} />
+                    <span
+                      className={cn(
+                        "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all",
+                        // Logical positioning so the knob slides the right way in RTL.
+                        row.active ? "end-0.5" : "start-0.5",
+                      )}
+                    />
                   </button>
                 </div>
-
-                {/* Plain stateful button rather than a peer-styled checkbox:
-                    `peer-checked:` only matches siblings, so it can't drive a
-                    knob nested inside the track. */}
-                <button
-                  role="switch"
-                  aria-checked={row.active}
-                  aria-label={t.catalog.active}
-                  title={t.catalog.activeHint}
-                  onClick={() => run(() => setCatalogActive(tab, row.id, !row.active))}
-                  className={cn(
-                    "relative h-5 w-9 shrink-0 rounded-full transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky",
-                    row.active ? "bg-[#1f7a4d]" : "bg-black/15",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all",
-                      // Logical positioning so the knob slides the right way in RTL.
-                      row.active ? "end-0.5" : "start-0.5",
-                    )}
-                  />
-                </button>
               </li>
             ))}
           </ul>

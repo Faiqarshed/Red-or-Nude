@@ -15,13 +15,31 @@ import { useEffect, useState } from "react";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import PhoneField from "@/components/PhoneField";
-import BookingCard, { RefillDialog } from "@/components/booking/BookingCard";
+import BookingCard, { RefillDialog, partyOf } from "@/components/booking/BookingCard";
 import { Lock, Riyal } from "@/components/icons";
 import OtpInput from "@/components/OtpInput";
+import { ACCOUNT_OTP_TTL_MS } from "@/lib/otp-length";
 import { useI18n } from "@/lib/i18n";
+import Link from "next/link";
+import { pick } from "@/lib/localized";
+import type { Localized } from "@/lib/localized";
+import { formatDateLabel } from "@/lib/booking";
 import type { BookingSummary } from "@/lib/booking";
-import { isValidSaudiMobile, toNationalDigits, toStoredPhone } from "@/lib/phone";
-import { REWARDS } from "@/lib/rewards";
+import { toNationalDigits, toStoredPhone, validateSaudiMobile } from "@/lib/phone";
+import type { LoyaltyRules } from "@/lib/rewards";
+import TextInput from "@/components/TextInput";
+import {
+  birthdayRange,
+  checkBirthday,
+  checkEmail,
+  checkPersonName,
+  EMAIL_MAX,
+  EMAIL_TEXT,
+  PERSON_NAME_MAX,
+  PERSON_TEXT,
+} from "@/lib/admin/validate";
+import { formatDateKey, riyadhDateKey } from "@/lib/time";
+import { validationMessages } from "@/lib/validation-messages";
 
 type Customer = {
   name: string | null;
@@ -30,32 +48,77 @@ type Customer = {
   birthday: string | null;
 };
 
+/** One membership line she can still spend. Serialised, so the date is a string. */
+type Credit = {
+  customerPackId: string;
+  packName: Localized;
+  serviceId: string;
+  serviceName: Localized | null;
+  left: number;
+  granted: number;
+  expiresAt: string;
+};
+
 export default function AccountView({
   customer,
   balance = 0,
+  credits = [],
   history = [],
+  rules,
 }: {
   customer?: Customer;
   balance?: number;
+  credits?: Credit[];
   history?: BookingSummary[];
+  /** The loyalty scheme's four numbers. Needed signed out too — the advert at
+   *  the bottom of the sign-in screen quotes the offer, and that is the whole
+   *  reason to make an account. */
+  rules: LoyaltyRules;
 }) {
   return customer ? (
-    <SignedIn customer={customer} balance={balance} history={history} />
+    <SignedIn
+      customer={customer}
+      balance={balance}
+      credits={credits}
+      history={history}
+      rules={rules}
+    />
   ) : (
-    <SignedOut />
+    <SignedOut rules={rules} />
   );
 }
 
 // ---------------------------------------------------------------- signed in --
 
+/** Bookings shown before "Show all". Three rows of two on a desktop. */
+const BOOKINGS_PREVIEW = 6;
+
+/**
+ * What she can filter her bookings by, each the question she comes with:
+ * what is coming up, what can I refill now, what is behind me. "Refill" reads
+ * the server's own `hasRefill`, so the chip can never offer a refill the refill
+ * button would not.
+ */
+const BOOKING_FILTER_TEST = {
+  all: () => true,
+  upcoming: (r: BookingSummary) => ["pending", "confirmed", "checked_in", "in_progress"].includes(r.status),
+  refill: (r: BookingSummary) => r.hasRefill,
+  past: (r: BookingSummary) => ["completed", "cancelled", "no_show"].includes(r.status),
+};
+type BookingFilter = keyof typeof BOOKING_FILTER_TEST;
+
 function SignedIn({
   customer,
   balance,
+  credits,
   history,
+  rules,
 }: {
   customer: Customer;
   balance: number;
+  credits: Credit[];
   history: BookingSummary[];
+  rules: LoyaltyRules;
 }) {
   const { c, lang } = useI18n();
   const a = c.account;
@@ -63,6 +126,17 @@ function SignedIn({
 
   const [verifying, setVerifying] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<BookingFilter>("all");
+
+  const q = query.trim().toLowerCase();
+  const shown = history.filter(
+    (r) =>
+      BOOKING_FILTER_TEST[filter](r) &&
+      (!q ||
+        [pick(r.serviceName, lang), r.code, r.ticketNo ?? ""].some((s) => s.toLowerCase().includes(q))),
+  );
 
   // Whether a booking can still be cancelled was decided when this page
   // rendered, so a tab left open all afternoon keeps offering a button whose
@@ -99,7 +173,7 @@ function SignedIn({
     <main className="min-h-screen bg-cream">
       <SiteHeader />
 
-      <div className="mx-auto max-w-[760px] px-6 pb-20 pt-[120px] md:px-12">
+      <div className="mx-auto max-w-page px-6 pb-20 pt-[120px] md:px-12 lg:px-16">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="text-start">
             <h1 className="font-display text-3xl font-extrabold text-ink">
@@ -119,34 +193,110 @@ function SignedIn({
           </button>
         </div>
 
-        {/* -- the wallet ------------------------------------------------- */}
-        <Wallet balance={balance} />
+        {/* Two columns from lg: the bookings, which grow without limit, get the
+            width; the wallet, memberships and details, which do not, sit beside
+            them. One 760px column left the sides of a desktop empty and stacked
+            every booking between the wallet and the form.
 
-        {/* -- the bookings ---------------------------------------------- */}
-        <h2 className="mt-10 text-start font-display text-lg font-extrabold text-ink">
-          {a.bookingsTitle}
-        </h2>
+            Three grid items rather than two columns, so a phone still reads
+            wallet → bookings → details: the side panels are split in two, and
+            the bookings span both of their rows. `self-start` on each, or a
+            short panel stretches to the height of the booking list. */}
+        <div className="mt-8 grid items-start gap-8 lg:grid-cols-[1fr_380px] lg:grid-rows-[auto_1fr]">
+          {/* -- the wallet and her memberships ------------------------------ */}
+          <div className="space-y-6 self-start lg:col-start-2 lg:row-start-1">
+            <Wallet balance={balance} rules={rules} />
+            <Memberships credits={credits} />
+          </div>
 
-        <div className="mt-4 space-y-4">
-          {history.length === 0 && <p className="text-start text-sm text-ink/55">{a.noBookings}</p>}
+          {/* -- the bookings ---------------------------------------------- */}
+          <section className="self-start lg:col-start-1 lg:row-span-2 lg:row-start-1">
+            <h2 className="text-start font-display text-lg font-extrabold text-ink">
+              {a.bookingsTitle}
+            </h2>
 
-          {history.map((r) => (
-            <BookingCard
-              key={r.code}
-              row={r}
-              lang={lang}
-              onOpenRefill={() => setVerifying(r.code)}
-              // The page is a server component, so re-reading it *is* the
-              // refresh — a cancellation changes the status, the time and the
-              // chair at once, and the server is the only thing that knows all
-              // three. It also re-reads the balance, which a cancellation moves.
-              onChanged={() => router.refresh()}
-            />
-          ))}
+            {history.length === 0 && (
+              <p className="mt-4 text-start text-sm text-ink/55">{a.noBookings}</p>
+            )}
+
+            {/* Find one: by name, reference or ticket, and by what she can do
+                with it. In the browser — the page already holds her whole
+                history (50 at most), so a query per keystroke buys nothing.
+                Only once there is enough to need finding. */}
+            {history.length > BOOKINGS_PREVIEW && (
+              <div className="mt-4 space-y-3">
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder={a.searchBookings}
+                  aria-label={a.searchBookings}
+                  className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-start text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40"
+                />
+                <div className="flex flex-wrap gap-2">
+                  {(Object.keys(BOOKING_FILTER_TEST) as BookingFilter[]).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      aria-pressed={filter === key}
+                      onClick={() => setFilter(key)}
+                      className={`rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition-colors ${
+                        filter === key
+                          ? "bg-red text-white"
+                          : "bg-white text-ink/70 ring-1 ring-black/[0.08] hover:ring-red/40"
+                      }`}
+                    >
+                      {a.bookingFilters[key]} ({history.filter(BOOKING_FILTER_TEST[key]).length})
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {history.length > 0 && shown.length === 0 && (
+              <p className="mt-4 text-start text-sm text-ink/55">{a.noMatch}</p>
+            )}
+
+            {/* Side by side once there is room for two cards at a readable
+                width, which halves how far a long history scrolls. Cards in a
+                row stretch to one height, so their buttons line up. */}
+            <div className="mt-4 grid gap-4 xl:grid-cols-2">
+              {(showAll ? shown : shown.slice(0, BOOKINGS_PREVIEW)).map((r) => (
+                <BookingCard
+                  key={r.code}
+                  row={r}
+                  // From the full history, not the visible slice: a party split
+                  // by "Show all" is still one party.
+                  party={partyOf(history, r)}
+                  lang={lang}
+                  onOpenRefill={() => setVerifying(r.code)}
+                  // The page is a server component, so re-reading it *is* the
+                  // refresh — a cancellation changes the status, the time and the
+                  // chair at once, and the server is the only thing that knows all
+                  // three. It also re-reads the balance, which a cancellation moves.
+                  onChanged={() => router.refresh()}
+                />
+              ))}
+            </div>
+
+            {/* The rest behind one tap. Newest first, so what is hidden is the
+                oldest — the visits she is least likely to be looking for. */}
+            {shown.length > BOOKINGS_PREVIEW && (
+              <button
+                type="button"
+                onClick={() => setShowAll((v) => !v)}
+                className="mt-4 w-full rounded-[12px] border border-black/[0.08] bg-white py-3 text-center text-[13px] font-semibold text-ink transition-colors hover:border-red/40"
+              >
+                {showAll ? a.showFewer : a.showAll.replace("{n}", String(shown.length))}
+              </button>
+            )}
+          </section>
+
+          {/* -- the details ----------------------------------------------- */}
+          <div className="self-start lg:col-start-2 lg:row-start-2">
+            <ProfileForm customer={customer} />
+          </div>
         </div>
-
-        {/* -- the details ----------------------------------------------- */}
-        <ProfileForm customer={customer} />
       </div>
 
       {verifying && <RefillDialog code={verifying} onClose={() => setVerifying(null)} />}
@@ -157,144 +307,188 @@ function SignedIn({
 }
 
 /**
- * The wallet, as a ladder you can see yourself climbing.
+ * What her memberships have left, grouped by the membership she bought.
  *
- * One track from zero to the dearest rung, with a marker at each reward. The
- * markers sit at their *true* proportion of the track (100 points is a fifth of
- * the way to 500, and looks it) rather than at even thirds — even spacing would
- * flatter the numbers and make the last rung look one step away when it is
- * twice the distance of the one before.
+ * The shelf shows this too, but the shelf is where she goes to *buy* one. This
+ * is where she goes to check — and until this section existed, a customer who
+ * bought a membership had nowhere to see it except the page that sold it to her,
+ * which reads as the purchase not having landed.
  *
- * Everything here is direction-agnostic: `insetInlineStart` rather than `left`,
- * so the bar fills right-to-left in Arabic without a second code path.
+ * Grouped by purchase rather than listed flat, because credits are per service
+ * and not interchangeable (lib/packs.ts): three gel polishes and one manicure is
+ * two lines under one heading, never four of anything. A flat list of services
+ * would imply a single pool, which is exactly the thing the ledger refuses.
+ *
+ * Empty renders nothing at all — an account page is not the place to advertise,
+ * and the shelf is one tap away from the header card either way.
  */
-function Wallet({ balance }: { balance: number }) {
+function Memberships({ credits }: { credits: Credit[] }) {
+  const { c, lang } = useI18n();
+  const k = c.packs;
+
+  if (credits.length === 0) return null;
+
+  // One block per purchase, in the order packCredits sorted them: nearest
+  // deadline first, so the one she should spend next is the one she reads first.
+  const byPurchase = new Map<string, Credit[]>();
+  for (const credit of credits) {
+    byPurchase.set(credit.customerPackId, [...(byPurchase.get(credit.customerPackId) ?? []), credit]);
+  }
+
+  return (
+    <section className="rounded-[20px] bg-white p-6 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-display text-lg font-extrabold text-ink">{k.yours}</h2>
+        <Link
+          href="/memberships"
+          className="shrink-0 text-[13px] font-semibold text-red transition-opacity hover:opacity-70"
+        >
+          {k.browse}
+        </Link>
+      </div>
+
+      <div className="mt-4 space-y-4">
+        {[...byPurchase.values()].map((lines) => (
+          <div key={lines[0].customerPackId} className="rounded-[14px] bg-cream/60 p-4">
+            <p className="font-display text-base font-extrabold text-red">
+              {pick(lines[0].packName, lang)}
+            </p>
+            <ul className="mt-2 space-y-2.5">
+              {lines.map((credit) => {
+                // What she has spent, from what she was sold. Never negative: a
+                // credit handed back on a cancellation can only bring `left`
+                // back up to what the purchase granted, never past it.
+                const used = Math.max(0, credit.granted - credit.left);
+                const pct = credit.granted > 0 ? (used / credit.granted) * 100 : 0;
+                return (
+                  <li key={credit.serviceId}>
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="truncate text-ink">
+                        {credit.serviceName ? pick(credit.serviceName, lang) : "—"}
+                      </span>
+                      <span className="shrink-0 font-semibold text-ink">
+                        {k.leftCount.replace("{n}", String(credit.left))}
+                      </span>
+                    </div>
+                    {/* How far through it she is, with the count on the bar's
+                        own line — two lines a service rather than three, so a
+                        membership of many services stays short.
+                        `insetInlineStart` rather than `left`, so it fills
+                        right-to-left in Arabic with no second code path — the
+                        wallet bar above does the same. */}
+                    <div className="mt-1 flex items-center gap-3">
+                      <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-black/[0.06]">
+                        <div
+                          className="absolute top-0 h-full rounded-full bg-red/70"
+                          style={{ insetInlineStart: 0, width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="shrink-0 text-[11px] text-ink/45">
+                        {k.usedOf
+                          .replace("{used}", String(used))
+                          .replace("{n}", String(credit.granted))}
+                      </span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            {/* The deadline, because a credit is dead the moment it passes and
+                nothing sweeps it — she is owed the date, not a surprise. In
+                red with a countdown for the last two weeks, which is when the
+                date alone stops being enough to act on. */}
+            {(() => {
+              const days = Math.ceil((Date.parse(lines[0].expiresAt) - Date.now()) / 86_400_000);
+              return (
+                <p className={`mt-3 text-[12px] ${days <= 14 ? "font-semibold text-red" : "text-ink/50"}`}>
+                  {k.expiresOn.replace("{date}", formatDateLabel(lines[0].expiresAt.slice(0, 10), lang))}
+                  {days <= 14 && ` · ${c.history.daysLeft.replace("{n}", String(days))}`}
+                </p>
+              );
+            })()}
+          </div>
+        ))}
+      </div>
+
+      {/* A purchase that runs out vanishes from this list — packCredits keeps
+          only what can still be spent. Said once, so a membership that is gone
+          reads as finished rather than lost. */}
+      <p className="mt-4 text-[11px] text-ink/40">{k.dropOff}</p>
+    </section>
+  );
+}
+
+/**
+ * The wallet: money she already has, not a rank she has reached.
+ *
+ * **There is deliberately no progress bar here.** Two designs were tried and
+ * both were wrong for the same reason. A track from zero to a top rung made the
+ * scheme look like tiers, and tiers would need a ceiling and would imply
+ * benefits for standing at a level. A bar filling with the points balance was
+ * worse: points are spent, so redeeming 100 of them slid the bar *backwards*
+ * and the customer was shown a demotion for using the thing she earned.
+ *
+ * Points here are a currency, so this screen is a balance — the riyal figure
+ * first and largest, because that is the part she can spend and the part that
+ * makes "spendable" obvious without a sentence explaining it. The point count is
+ * the subtitle: it is the unit, not the point.
+ *
+ * The thing worth gamifying — "24 riyals more and you earn 50 points" — is a
+ * fact about the bill in front of her, not about this balance, because accrual
+ * is per bill. It lives at checkout, where she can act on it. See the earn
+ * progress strip in app/(site)/booking/payment/page.tsx.
+ */
+function Wallet({ balance, rules }: { balance: number; rules: LoyaltyRules }) {
   const { c } = useI18n();
   const a = c.account;
 
-  const top = REWARDS.length ? REWARDS[REWARDS.length - 1].points : 0;
-  const pct = (n: number) => (top > 0 ? Math.min(100, (n / top) * 100) : 0);
-  const next = REWARDS.find((r) => r.points > balance) ?? null;
-
-  // Animate the fill up from zero on mount. The bar arriving already full is a
-  // static image; watching it climb is the whole point of showing progress.
-  // Two lines and a CSS transition — no animation library for one bar.
-  const [grown, setGrown] = useState(false);
-  useEffect(() => setGrown(true), []);
+  const { stepPoints, pointHalalas, firstSar } = rules;
+  const worthSar = (balance * pointHalalas) / 100;
+  const stepSar = (stepPoints * pointHalalas) / 100;
 
   return (
-    <section className="mt-8 overflow-hidden rounded-[20px] bg-white text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
+    <section className="overflow-hidden rounded-[20px] bg-white text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
       <div className="bg-gradient-to-b from-[#fbeaea] to-transparent p-6 pb-7">
         <h2 className="font-display text-lg font-extrabold text-ink">{a.walletTitle}</h2>
 
-        <p className="mt-3 font-display text-4xl font-extrabold text-red">
-          {a.walletPoints.replace("{n}", String(balance))}
-        </p>
-
-        <p className="mt-1.5 text-[12px] text-ink/55">
-          {balance === 0
-            ? a.walletEmpty
-            : next
-              ? a.nextReward
-                  .replace("{n}", String(next.points - balance))
-                  .replace("{percent}", String(next.percent))
-              : a.allUnlocked}
-        </p>
-
-        {/* the track */}
-        <div className="relative mt-7 h-2.5 rounded-full bg-black/[0.07]">
-          <div
-            className="absolute inset-y-0 rounded-full bg-red-grad transition-[width] duration-1000 ease-out"
-            style={{ insetInlineStart: 0, width: `${grown ? pct(balance) : 0}%` }}
-          />
-
-          {REWARDS.map((r) => {
-            const unlocked = balance >= r.points;
-            return (
-              <span
-                key={r.points}
-                // Nudged back by half its own width rather than translated:
-                // a -50% transform would push it the wrong way under RTL.
-                style={{ insetInlineStart: `${pct(r.points)}%`, marginInlineStart: -7 }}
-                className={`absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full border-2 transition-colors duration-500 ${
-                  unlocked ? "border-red bg-white" : "border-black/[0.12] bg-white"
-                }`}
-              >
-                {unlocked && (
-                  <span className="absolute inset-[2px] rounded-full bg-red-grad" />
-                )}
-              </span>
-            );
-          })}
-        </div>
-
-        {/* the numbers under it */}
-        <div className="relative mt-2.5 h-4">
-          {REWARDS.map((r) => (
-            <span
-              key={r.points}
-              style={{ insetInlineStart: `${pct(r.points)}%`, marginInlineStart: -20, width: 40 }}
-              className={`absolute text-center text-[11px] font-semibold tabular-nums ${
-                balance >= r.points ? "text-red" : "text-ink/35"
-              }`}
-              dir="ltr"
-            >
-              {r.points}
-            </span>
-          ))}
-        </div>
+        {balance > 0 ? (
+          <>
+            {/* The money, first and largest. A tier badge says what you are; a
+                balance in riyals says what you have. */}
+            <p className="mt-3 flex items-baseline gap-1.5 font-display text-4xl font-extrabold text-red">
+              <Riyal className="h-6 w-6 shrink-0" />
+              {worthSar}
+            </p>
+            <p className="mt-1 text-[13px] font-semibold text-ink/60">
+              {a.walletPoints.replace("{n}", String(balance))}
+            </p>
+            <p className="mt-3 inline-flex rounded-full bg-red/[0.07] px-3 py-1 text-[12px] font-semibold text-red">
+              {a.walletSpendable}
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="mt-3 font-display text-4xl font-extrabold text-ink/25">
+              {a.walletPoints.replace("{n}", "0")}
+            </p>
+            <p className="mt-1.5 text-[12px] text-ink/55">{a.walletEmpty}</p>
+          </>
+        )}
       </div>
 
-      {/* The rungs. Locked ones are shown, never hidden — a reward you can see
-          is the reason to come back, which is the whole point of the scheme. */}
+      {/* The deal, stated once. The ladder of locked rungs that used to live
+          here was three rows saying what one sentence says, and it stopped
+          being true the moment rewards became a currency rather than tiers. */}
       <div className="px-6 pb-6">
         <h3 className="text-[12px] font-semibold uppercase tracking-wider text-ink/45">
           {a.ladderTitle}
         </h3>
-        <ul className="mt-3 space-y-2">
-          {REWARDS.map((r) => {
-            const unlocked = balance >= r.points;
-            return (
-              <li
-                key={r.points}
-                className={`flex items-center justify-between gap-3 rounded-[14px] px-4 py-3 text-[13px] transition-colors ${
-                  unlocked ? "bg-[#e8f3ec] text-[#2f7a4d]" : "bg-black/[0.04] text-ink/50"
-                }`}
-              >
-                <span className="flex items-center gap-2.5 font-semibold">
-                  <span
-                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
-                      unlocked ? "bg-[#2f7a4d] text-white" : "bg-black/[0.08] text-ink/40"
-                    }`}
-                  >
-                    {unlocked ? (
-                      <svg viewBox="0 0 24 24" className="h-3 w-3" aria-hidden>
-                        <path
-                          d="M20 6L9 17l-5-5"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="3.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    ) : (
-                      <Lock className="h-2.5 w-2.5" />
-                    )}
-                  </span>
-                  {a.rewardRow
-                    .replace("{points}", String(r.points))
-                    .replace("{percent}", String(r.percent))}
-                </span>
-                <span className="shrink-0 text-[11px] font-semibold">
-                  {unlocked
-                    ? a.ladderUnlocked
-                    : a.ladderLocked.replace("{n}", String(r.points - balance))}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+        <p className="mt-2 text-[13px] text-ink/60">
+          {a.walletHowTo
+            .replace("{first}", String(firstSar))
+            .replace("{points}", String(stepPoints))
+            .replace("{sar}", String(stepSar))}
+        </p>
       </div>
     </section>
   );
@@ -317,6 +511,7 @@ function ProfileForm({ customer }: { customer: Customer }) {
   const [phone, setPhone] = useState(toNationalDigits(customer.phone));
   const [birthday, setBirthday] = useState(customer.birthday ?? "");
   const [phoneTouched, setPhoneTouched] = useState(false);
+  const [tried, setTried] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -330,10 +525,13 @@ function ProfileForm({ customer }: { customer: Customer }) {
     toStoredPhone(phone) !== customer.phone ||
     (birthday || null) !== customer.birthday;
 
-  const canSave = dirty && !busy && Boolean(name.trim()) && isValidSaudiMobile(phone);
+  const errors = profileErrors(lang, a, { name, phone, birthday });
+  const canSave = dirty && !busy;
 
   const save = async () => {
     if (!canSave) return;
+    setTried(true);
+    if (errors.name || errors.phone || errors.birthday) return;
     setBusy(true);
     setError(null);
     setSaved(false);
@@ -364,7 +562,7 @@ function ProfileForm({ customer }: { customer: Customer }) {
   };
 
   return (
-    <section className="mt-10 rounded-[20px] bg-white p-6 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
+    <section className="rounded-[20px] bg-white p-6 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
       <h2 className="font-display text-lg font-extrabold text-ink">{a.myDetails}</h2>
 
       <form
@@ -374,18 +572,19 @@ function ProfileForm({ customer }: { customer: Customer }) {
         }}
         className="mt-4 space-y-4"
       >
-        <label className="block">
-          <span className="mb-1.5 block text-[12px] text-ink/55">{a.nameLabel}</span>
-          <input
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value.slice(0, 120));
-              setSaved(false);
-            }}
-            autoComplete="name"
-            className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-sm text-ink outline-none focus:border-red/40"
-          />
-        </label>
+        <TextInput
+          label={a.nameLabel}
+          opts={PERSON_TEXT}
+          max={PERSON_NAME_MAX}
+          error={errors.name}
+          showError={tried}
+          autoComplete="name"
+          value={name}
+          onChange={(v) => {
+            setName(v);
+            setSaved(false);
+          }}
+        />
 
         <PhoneField
           label={a.phoneLabel}
@@ -395,27 +594,18 @@ function ProfileForm({ customer }: { customer: Customer }) {
             setSaved(false);
           }}
           required
-          showError={phoneTouched}
+          showError={phoneTouched || tried}
           onBlur={() => setPhoneTouched(true)}
         />
 
-        <label className="block">
-          <span className="mb-1.5 block text-[12px] text-ink/55">{a.birthdayLabel}</span>
-          {/* The browser's own date input: it localises, it validates, and it
-              hands back the YYYY-MM-DD the `date` column stores. */}
-          <input
-            value={birthday}
-            onChange={(e) => {
-              setBirthday(e.target.value);
-              setSaved(false);
-            }}
-            type="date"
-            max={new Date().toISOString().slice(0, 10)}
-            dir="ltr"
-            className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-left text-sm text-ink outline-none focus:border-red/40"
-          />
-          <span className="mt-1.5 block text-[11px] text-ink/40">{a.birthdayNote}</span>
-        </label>
+        <BirthdayInput
+          value={birthday}
+          error={errors.birthday}
+          onChange={(v) => {
+            setBirthday(v);
+            setSaved(false);
+          }}
+        />
 
         <button
           type="submit"
@@ -462,10 +652,15 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tried, setTried] = useState(false);
+  const timer = useCodeTimer();
+  useEffect(() => {
+    if (timer.expired) setCode("");
+  }, [timer.expired]);
 
-  const emailOk =
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) &&
-    email.trim().toLowerCase() !== currentEmail.toLowerCase();
+  const emailError =
+    checkEmail(validationMessages[lang], a.emailLabel, email, { required: true }) ??
+    (email.trim().toLowerCase() === currentEmail.toLowerCase() ? a.errors.sameEmail : undefined);
 
   const say = (key: string | undefined): string =>
     (a.errors as Record<string, string>)[toCamel(key ?? "failed")] ?? a.errors.failed;
@@ -476,10 +671,13 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
     setEmail("");
     setCode("");
     setError(null);
+    setTried(false);
   };
 
   const request = async () => {
-    if (busy || !emailOk) return;
+    if (busy) return;
+    setTried(true);
+    if (emailError) return;
     setBusy(true);
     setError(null);
     try {
@@ -496,6 +694,7 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
       setSentTo(data.sentTo ?? null);
       setCode("");
       setStep("code");
+      timer.start();
     } catch {
       setError(a.errors.failed);
     } finally {
@@ -504,7 +703,7 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
   };
 
   const confirm = async () => {
-    if (busy || code.length !== 6) return;
+    if (busy || code.length !== 6 || timer.expired) return;
     setBusy(true);
     setError(null);
     try {
@@ -560,17 +759,17 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
 
           {step === "email" ? (
             <>
-              <input
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                type="email"
-                inputMode="email"
-                dir="ltr"
-                maxLength={200}
+              <TextInput
+                label={a.emailLabel}
+                opts={EMAIL_TEXT}
+                max={EMAIL_MAX}
+                error={emailError}
+                showError={tried}
                 placeholder={a.newEmailPlaceholder}
-                className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-left text-sm text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
+                value={email}
+                onChange={setEmail}
               />
-              <Submit disabled={busy || !emailOk} label={busy ? a.sending : a.sendCode} />
+              <Submit disabled={busy} label={busy ? a.sending : a.sendCode} />
             </>
           ) : (
             <>
@@ -578,7 +777,11 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
                 {a.codeSentTo.replace("{email}", sentTo ?? email)}
               </p>
               <OtpInput value={code} onChange={setCode} />
-              <Submit disabled={busy || code.length !== 6} label={busy ? a.sending : a.verify} />
+              <CodeCountdown timer={timer} />
+              <Submit disabled={busy || code.length !== 6 || timer.expired} label={busy ? a.sending : a.verify} />
+              <div className="mt-4 text-[12px]">
+                <ResendButton timer={timer} busy={busy} onClick={() => void request()} />
+              </div>
             </>
           )}
 
@@ -597,7 +800,7 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
 
 type Step = "email" | "code" | "profile";
 
-function SignedOut() {
+function SignedOut({ rules }: { rules: LoyaltyRules }) {
   const { c, lang } = useI18n();
   const a = c.account;
 
@@ -614,17 +817,26 @@ function SignedOut() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [emailTried, setEmailTried] = useState(false);
+  const [profileTried, setProfileTried] = useState(false);
+  const timer = useCodeTimer();
+  // The server has discarded it; a half-typed one would only earn "expired".
+  useEffect(() => {
+    if (timer.expired) setCode("");
+  }, [timer.expired]);
 
-  // Loose on purpose — the server's zod schema is the real check. This only
-  // decides whether the button is clickable.
-  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  // The same checks the API runs (lib/account/fields.ts), said before sending.
+  const emailError = checkEmail(validationMessages[lang], a.emailLabel, email, { required: true });
+  const errors = profileErrors(lang, a, { name, phone, birthday });
 
   /** Map a server error code to a sentence. Unknown codes fall back rather than blank. */
   const say = (key: string | undefined): string =>
     (a.errors as Record<string, string>)[toCamel(key ?? "failed")] ?? a.errors.failed;
 
   const sendCode = async () => {
-    if (busy || !emailOk) return;
+    if (busy) return;
+    setEmailTried(true);
+    if (emailError) return;
     setBusy(true);
     setError(null);
     try {
@@ -641,6 +853,7 @@ function SignedOut() {
       setSentTo(data.sentTo ?? null);
       setCode("");
       setStep("code");
+      timer.start();
     } catch {
       setError(a.errors.failed);
     } finally {
@@ -649,7 +862,7 @@ function SignedOut() {
   };
 
   const verify = async () => {
-    if (busy || code.length !== 6) return;
+    if (busy || code.length !== 6 || timer.expired) return;
     setBusy(true);
     setError(null);
     try {
@@ -673,7 +886,7 @@ function SignedOut() {
 
       // Signed in. A full document navigation so the layout re-renders with the
       // Profile pill — see the note in signOut above.
-      window.location.assign("/account");
+      window.location.assign(nextPath());
     } catch {
       setError(a.errors.failed);
     } finally {
@@ -682,7 +895,9 @@ function SignedOut() {
   };
 
   const register = async () => {
-    if (busy || !ticket || !name.trim() || !isValidSaudiMobile(phone)) return;
+    if (busy || !ticket) return;
+    setProfileTried(true);
+    if (errors.name || errors.phone || errors.birthday) return;
     setBusy(true);
     setError(null);
     try {
@@ -708,7 +923,7 @@ function SignedOut() {
         }
         return;
       }
-      window.location.assign("/account");
+      window.location.assign(nextPath());
     } catch {
       setError(a.errors.failed);
     } finally {
@@ -736,20 +951,18 @@ function SignedOut() {
                 void sendCode();
               }}
             >
-              <label className="block">
-                <span className="mb-1.5 block text-[12px] text-ink/55">{a.emailLabel}</span>
-                <input
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  type="email"
-                  inputMode="email"
-                  autoComplete="email"
-                  dir="ltr"
-                  maxLength={200}
-                  className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-left text-sm text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
-                />
-              </label>
-              <Submit disabled={busy || !emailOk} label={busy ? a.sending : a.sendCode} />
+              <TextInput
+                label={a.emailLabel}
+                opts={EMAIL_TEXT}
+                max={EMAIL_MAX}
+                error={emailError}
+                showError={emailTried}
+                hint={a.emailIdentityNote}
+                autoComplete="email"
+                value={email}
+                onChange={setEmail}
+              />
+              <Submit disabled={busy} label={busy ? a.sending : a.sendCode} />
             </form>
           )}
 
@@ -767,17 +980,11 @@ function SignedOut() {
                 <span className="mb-1.5 block text-[12px] text-ink/55">{a.codeLabel}</span>
                 <OtpInput value={code} onChange={setCode} />
               </label>
-              <Submit disabled={busy || code.length !== 6} label={busy ? a.sending : a.verify} />
+              <CodeCountdown timer={timer} />
+              <Submit disabled={busy || code.length !== 6 || timer.expired} label={busy ? a.sending : a.verify} />
 
               <div className="mt-4 flex items-center justify-between gap-3 text-[12px]">
-                <button
-                  type="button"
-                  onClick={() => void sendCode()}
-                  disabled={busy}
-                  className="text-ink/45 underline underline-offset-4 hover:text-red disabled:opacity-40"
-                >
-                  {a.resend}
-                </button>
+                <ResendButton timer={timer} busy={busy} onClick={() => void sendCode()} />
                 <button
                   type="button"
                   onClick={() => {
@@ -800,37 +1007,22 @@ function SignedOut() {
               }}
               className="space-y-4"
             >
-              <label className="block">
-                <span className="mb-1.5 block text-[12px] text-ink/55">{a.nameLabel}</span>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value.slice(0, 120))}
-                  autoComplete="name"
-                  className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-sm text-ink outline-none focus:border-red/40"
-                />
-              </label>
-
-              <PhoneField label={a.phoneLabel} value={phone} onChange={setPhone} required />
-
-              <label className="block">
-                <span className="mb-1.5 block text-[12px] text-ink/55">{a.birthdayLabel}</span>
-                {/* The browser's own date input: it localises, it validates, and
-                    it hands back the YYYY-MM-DD the `date` column stores. */}
-                <input
-                  value={birthday}
-                  onChange={(e) => setBirthday(e.target.value)}
-                  type="date"
-                  max={new Date().toISOString().slice(0, 10)}
-                  dir="ltr"
-                  className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-left text-sm text-ink outline-none focus:border-red/40"
-                />
-                <span className="mt-1.5 block text-[11px] text-ink/40">{a.birthdayNote}</span>
-              </label>
-
-              <Submit
-                disabled={busy || !name.trim() || !isValidSaudiMobile(phone)}
-                label={busy ? a.sending : a.createAccount}
+              <TextInput
+                label={a.nameLabel}
+                opts={PERSON_TEXT}
+                max={PERSON_NAME_MAX}
+                error={errors.name}
+                showError={profileTried}
+                autoComplete="name"
+                value={name}
+                onChange={setName}
               />
+
+              <PhoneField label={a.phoneLabel} value={phone} onChange={setPhone} required showError={profileTried} />
+
+              <BirthdayInput value={birthday} error={errors.birthday} onChange={setBirthday} />
+
+              <Submit disabled={busy} label={busy ? a.sending : a.createAccount} />
             </form>
           )}
 
@@ -843,29 +1035,131 @@ function SignedOut() {
 
         {/* The advert. Shown signed out on purpose — this is the reason to make
             an account, so hiding it behind one would be backwards. */}
-        <section className="mt-8 rounded-[20px] bg-white/60 p-6 text-start">
-          <h2 className="flex items-center gap-2 font-display text-lg font-extrabold text-ink">
-            <Riyal className="h-4 w-4 text-red" />
+        {/* One row of tiles, not a stacked list: it sits under the form and
+            must not outweigh it. */}
+        <section className="mt-6 rounded-[20px] bg-white/60 px-5 py-4 text-start">
+          <h2 className="flex items-center gap-2 font-display text-base font-extrabold text-ink">
+            <Riyal className="h-3.5 w-3.5 text-red" />
             {a.walletTitle}
           </h2>
-          <p className="mt-2 text-[12px] text-ink/50">{a.walletHowTo}</p>
-          <ul className="mt-4 space-y-2">
-            {REWARDS.map((r) => (
-              <li
-                key={r.points}
-                className="rounded-[14px] bg-black/[0.04] px-4 py-3 text-[13px] font-semibold text-ink/60"
-              >
-                {a.rewardRow
-                  .replace("{points}", String(r.points))
-                  .replace("{percent}", String(r.percent))}
-              </li>
-            ))}
-          </ul>
+          {/* One sentence, not three tiles of percentages. The tiles were the
+              old ladder and there are no rungs any more — the offer is a rate,
+              and a rate is a sentence. */}
+          <p className="mt-1 text-[13px] text-ink/60">
+            {a.walletHowTo
+              .replace("{first}", String(rules.firstSar))
+              .replace("{points}", String(rules.stepPoints))
+              .replace("{sar}", String((rules.stepPoints * rules.pointHalalas) / 100))}
+          </p>
         </section>
       </div>
 
       <SiteFooter />
     </main>
+  );
+}
+
+/**
+ * The profile's checks, shared by sign-up and "My details" and matching
+ * lib/account/fields.ts. `phone` is PhoneField's own code; it says the sentence.
+ */
+function profileErrors(
+  lang: "ar" | "en",
+  a: { nameLabel: string; birthdayLabel: string },
+  f: { name: string; phone: string; birthday: string },
+) {
+  const v = validationMessages[lang];
+  return {
+    name: checkPersonName(v, a.nameLabel, f.name),
+    phone: validateSaudiMobile(f.phone) ?? undefined,
+    birthday: checkBirthday(v, a.birthdayLabel, f.birthday, riyadhDateKey(), (k) => formatDateKey(k, lang)),
+  };
+}
+
+/** The browser's own date input, bounded to the range checkBirthday accepts. */
+function BirthdayInput({ value, error, onChange }: { value: string; error?: string; onChange: (v: string) => void }) {
+  const { c } = useI18n();
+  const { earliest, latest } = birthdayRange(riyadhDateKey());
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-[12px] text-ink/55">{c.account.birthdayLabel}</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        type="date"
+        min={earliest}
+        max={latest}
+        dir="ltr"
+        aria-invalid={error ? true : undefined}
+        className={`w-full rounded-[12px] border bg-white px-4 py-3 text-left text-sm text-ink outline-none ${
+          error ? "border-red/60" : "border-black/[0.08] focus:border-red/40"
+        }`}
+      />
+      <span className={`mt-1.5 block text-[11px] ${error ? "text-red" : "text-ink/40"}`}>
+        {error ?? c.account.birthdayNote}
+      </span>
+    </label>
+  );
+}
+
+type CodeTimer = { left: number; expired: boolean; time: string; start: () => void };
+
+/**
+ * The code's minute, counted down. It starts when a code is sent and matches
+ * ACCOUNT_OTP_TTL_MS, the moment the server discards that code.
+ */
+function useCodeTimer(): CodeTimer {
+  const [endsAt, setEndsAt] = useState(0);
+  const [now, setNow] = useState(0);
+
+  useEffect(() => {
+    if (!endsAt) return;
+    const id = setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= endsAt) clearInterval(id);
+    }, 250);
+    return () => clearInterval(id);
+  }, [endsAt]);
+
+  const left = endsAt ? Math.max(0, Math.ceil((endsAt - now) / 1000)) : 0;
+  return {
+    left,
+    expired: endsAt > 0 && left === 0,
+    time: `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`,
+    start: () => {
+      const t = Date.now();
+      setNow(t);
+      setEndsAt(t + ACCOUNT_OTP_TTL_MS);
+    },
+  };
+}
+
+function CodeCountdown({ timer }: { timer: CodeTimer }) {
+  const { c } = useI18n();
+  return timer.expired ? (
+    <p role="alert" className="mt-2 text-start text-[12px] text-red">
+      {c.account.codeExpired}
+    </p>
+  ) : (
+    <p className="mt-2 text-start text-[12px] tabular-nums text-ink/45">
+      {c.account.codeExpiresIn.replace("{time}", timer.time)}
+    </p>
+  );
+}
+
+/** Held until the current code has expired, so only one code is ever live. */
+function ResendButton({ timer, busy, onClick }: { timer: CodeTimer; busy: boolean; onClick: () => void }) {
+  const { c } = useI18n();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy || !timer.expired}
+      className="text-ink/45 underline underline-offset-4 hover:text-red disabled:cursor-not-allowed disabled:no-underline disabled:opacity-40"
+    >
+      {timer.expired ? c.account.resend : `${c.account.resend} (${timer.time})`}
+    </button>
   );
 }
 
@@ -881,6 +1175,21 @@ function Submit({ disabled, label }: { disabled: boolean; label: string }) {
       {label}
     </button>
   );
+}
+
+/**
+ * Where to go once signed in: `?next=` when a page sent her here to sign in
+ * (the membership checkout does), else the account itself.
+ *
+ * Resolved against this origin and refused if it lands anywhere else, so a
+ * crafted link cannot use the sign-in form to bounce a customer off-site —
+ * `//evil.example` and `/\evil.example` both parse to another host.
+ */
+function nextPath(): string {
+  const next = new URLSearchParams(window.location.search).get("next");
+  if (!next) return "/account";
+  const url = new URL(next, window.location.origin);
+  return url.origin === window.location.origin ? url.pathname + url.search : "/account";
 }
 
 /** `too-many` → `tooMany`, so an API error code indexes the strings directly. */

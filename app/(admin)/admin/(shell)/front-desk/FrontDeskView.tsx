@@ -18,6 +18,7 @@ import { pick } from "@/lib/localized";
 import { formatCountdown, formatDuration, localTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import { busyDuring } from "@/lib/slots";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import type { Localized } from "@/lib/db/schema";
 import type { FrontDeskData, FrontDeskRow, TechnicianOption } from "./data";
 import {
@@ -119,7 +120,17 @@ export default function FrontDeskView({
   const [match, setMatch] = useState<TicketMatch | null>(null);
   const [chosenTech, setChosenTech] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // `busy` covers the ticket *search*, which is a read and refreshes nothing.
+  // Every mutation below goes through `run`, which additionally holds `pending`
+  // until the refreshed render lands — see components/admin/use-pending-action.
   const [busy, setBusy] = useState(false);
+  const { pending, run } = usePendingAction();
+  const working = busy || pending;
+  // Which lane card is mid-action. `working` disables every row so two
+  // mutations cannot overlap, but only the row that was actually clicked shows
+  // a spinner — a spinner on all twenty says the whole board is thinking, which
+  // is both untrue and worse than no feedback at all.
+  const [actingId, setActingId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [now, setNow] = useState(() => Date.now());
   /** The booking whose detail drawer is open, if any. */
@@ -135,8 +146,14 @@ export default function FrontDeskView({
   //
   // ponytail: polling, not push. 20 seconds is well inside "she's still drying
   // her hands"; swap in a websocket only if that ever stops being true.
+  //
+  // The hidden-tab guard is the one /admin/bookings already carries and this
+  // screen was missing. The front desk tablet is never closed, so overnight an
+  // unguarded timer is thousands of loadFrontDesk() calls — and that loader
+  // calls sweepNoShows(), so they are writes, not just reads.
   useEffect(() => {
     const id = setInterval(() => {
+      if (document.hidden) return;
       setNow(Date.now());
       router.refresh();
     }, 20_000);
@@ -186,27 +203,26 @@ export default function FrontDeskView({
 
   async function doCheckIn() {
     if (!match) return;
-    setBusy(true);
     setError(null);
-    const res = await checkInTicket(match.id, chosenTech || null);
-    setBusy(false);
-
-    if (!res.ok) {
-      setError(
-        res.error === "already-checked-in"
-          ? f.alreadyIn
-          : res.error === "too-early"
-            ? `${f.tooEarly} ${localTime(match.checkInOpensAt)} · ${opensIn(match)}`
-            : f.failed,
-      );
-      return;
-    }
-    // Cleared, focused, ready for the next customer. Nobody should have to
-    // reach for the mouse between two people in a queue.
-    setMatch(null);
-    setTicket("");
-    inputRef.current?.focus();
-    router.refresh();
+    await run(async () => {
+      const res = await checkInTicket(match.id, chosenTech || null);
+      if (!res.ok) {
+        setError(
+          res.error === "already-checked-in"
+            ? f.alreadyIn
+            : res.error === "too-early"
+              ? `${f.tooEarly} ${localTime(match.checkInOpensAt)} · ${opensIn(match)}`
+              : f.failed,
+        );
+        // Nothing changed on the server, so there is nothing to re-read.
+        return false;
+      }
+      // Cleared, focused, ready for the next customer. Nobody should have to
+      // reach for the mouse between two people in a queue.
+      setMatch(null);
+      setTicket("");
+      inputRef.current?.focus();
+    });
   }
 
   /**
@@ -218,28 +234,38 @@ export default function FrontDeskView({
    * rather than a control that silently does nothing.
    */
   async function doCheckInRow(id: string) {
-    setBusy(true);
     setError(null);
-    const res = await checkInTicket(id);
-    setBusy(false);
-    if (!res.ok) {
-      setError(
-        res.error === "already-checked-in"
-          ? f.alreadyIn
-          : res.error === "too-early"
-            ? f.notCheckable
-            : f.failed,
-      );
+    setActingId(id);
+    try {
+      await run(async () => {
+        const res = await checkInTicket(id);
+        if (!res.ok) {
+          setError(
+            res.error === "already-checked-in"
+              ? f.alreadyIn
+              : res.error === "too-early"
+                ? f.notCheckable
+                : f.failed,
+          );
+        }
+        // Refreshes either way on purpose: "already checked in" means somebody
+        // else did it from another machine, so this screen is the stale one.
+      });
+    } finally {
+      setActingId(null);
     }
-    router.refresh();
   }
 
   async function doClose(id: string) {
-    setBusy(true);
-    const res = await closeTicket(id);
-    setBusy(false);
-    if (!res.ok) setError(f.failed);
-    router.refresh();
+    setActingId(id);
+    try {
+      await run(async () => {
+        const res = await closeTicket(id);
+        if (!res.ok) setError(f.failed);
+      });
+    } finally {
+      setActingId(null);
+    }
   }
 
   // Only ever *to* somebody. Clearing a technician is not on offer here: an
@@ -248,22 +274,22 @@ export default function FrontDeskView({
   // signal.
   async function doReassign(id: string, technicianId: string) {
     if (!technicianId) return;
-    setBusy(true);
-    const res = await assignTechnician(id, technicianId);
-    setBusy(false);
-    // "Already finished" is the one a person can make sense of: she finished
-    // between this page's last refresh and the click. Saying so beats "try
-    // again", which invites exactly the retry that will fail the same way.
-    if (!res.ok) {
-      setError(
-        res.error === "no-show"
-          ? f.techNoShow
-          : res.error === "already-finished"
-            ? f.techLocked
-            : f.failed,
-      );
-    }
-    router.refresh();
+    await run(async () => {
+      const res = await assignTechnician(id, technicianId);
+      // "Already finished" is the one a person can make sense of: she finished
+      // between this page's last refresh and the click. Saying so beats "try
+      // again", which invites exactly the retry that will fail the same way.
+      if (!res.ok) {
+        setError(
+          res.error === "no-show"
+            ? f.techNoShow
+            : res.error === "already-finished"
+              ? f.techLocked
+              : f.failed,
+        );
+      }
+      // Refreshes either way: both refusals mean this screen is out of date.
+    });
   }
 
   // The found ticket is one of today's rows, which is where its hours live —
@@ -330,7 +356,8 @@ export default function FrontDeskView({
                 graceMin={data.graceMin}
                 f={f}
                 lang={lang}
-                busy={busy}
+                busy={working}
+                acting={actingId === r.id}
                 onOpen={() => setOpenId(r.id)}
                 onCheckIn={() => doCheckInRow(r.id)}
                 onClose={() => doClose(r.id)}
@@ -342,7 +369,7 @@ export default function FrontDeskView({
 
       <Card className="mb-6 p-5">
         <form onSubmit={search} className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[200px] flex-1 text-start">
+          <div className="w-full flex-1 text-start sm:w-auto sm:min-w-[200px]">
             <label htmlFor="ticket" className="mb-1.5 block text-xs font-medium text-ink/60">
               {f.ticketLabel}
             </label>
@@ -354,10 +381,16 @@ export default function FrontDeskView({
               value={ticket}
               onChange={(e) => setTicket(e.target.value)}
               placeholder={f.ticketPlaceholder}
-              className="h-16 w-full rounded-2xl border border-black/10 bg-white px-4 text-center font-display text-3xl font-extrabold uppercase tracking-wider text-ink outline-none focus:border-sky focus:ring-2 focus:ring-sky/20"
+              // One step down on a phone: "A12 OR RON-4F2" at 30px with wide
+              // tracking runs the full width of a 375px screen and the
+              // placeholder clips at both ends.
+              className="h-16 w-full rounded-2xl border border-black/10 bg-white px-4 text-center font-display text-2xl font-extrabold uppercase tracking-wider text-ink outline-none focus:border-sky focus:ring-2 focus:ring-sky/20 sm:text-3xl"
             />
           </div>
-          <Button type="submit" disabled={busy} className="h-16 px-8 text-base">
+          {/* Under the field on a phone rather than beside it: the ticket box is
+              deliberately huge, and squeezing a button next to it leaves both
+              too narrow to hit while someone waits at the counter. */}
+          <Button type="submit" pending={working} className="h-16 px-8 text-base max-sm:w-full">
             {f.search}
           </Button>
         </form>
@@ -443,7 +476,7 @@ export default function FrontDeskView({
 
             {matchRow.status === "confirmed" ? (
               <div className="mt-3 flex flex-wrap items-end gap-3">
-                <div className="min-w-[180px] flex-1">
+                <div className="w-full flex-1 sm:w-auto sm:min-w-[180px]">
                   <label htmlFor="tech" className="mb-1.5 block text-xs font-medium text-ink/60">
                     {f.changeTech}
                   </label>
@@ -468,7 +501,8 @@ export default function FrontDeskView({
                 </div>
                 <Button
                   onClick={doCheckIn}
-                  disabled={busy || tooEarly(match)}
+                  pending={working}
+                  disabled={tooEarly(match)}
                   className="h-12 px-8 text-base"
                 >
                   {/* The wait goes on the button, not only in the notice above:
@@ -535,18 +569,21 @@ export default function FrontDeskView({
                   <button
                     type="button"
                     onClick={() => setOpenId(r.id)}
-                    className="flex min-w-0 flex-1 items-center gap-3 text-start"
+                    className="flex min-w-0 flex-1 flex-wrap items-center gap-3 text-start"
                   >
                     <span className="w-14 shrink-0 font-display text-lg font-extrabold text-red">
                       {r.ticketNo ?? "—"}
                     </span>
-                    <span className="w-12 shrink-0 text-xs tabular-nums text-ink/50">
+                    <span className="shrink-0 text-xs tabular-nums text-ink/50 sm:w-12">
                       {localTime(r.startsAt)}
                     </span>
 
                     <Thumb src={r.imageUrl} size="sm" />
 
-                    <span className="min-w-0 flex-1">
+                    {/* Its own line below `sm`. Sharing the row with the ticket,
+                        the time and the thumbnail left it about eighty pixels,
+                        and the name ran back over the picture. */}
+                    <span className="min-w-0 flex-1 max-sm:w-full max-sm:flex-none">
                       <span className="block truncate text-sm font-medium text-ink">
                         {r.customerName ?? "—"}
                       </span>
@@ -599,7 +636,7 @@ export default function FrontDeskView({
                   )}
 
                   {ready ? (
-                    <Button size="sm" onClick={() => doClose(r.id)} disabled={busy}>
+                    <Button size="sm" onClick={() => doClose(r.id)} pending={working}>
                       {f.close}
                     </Button>
                   ) : (
@@ -625,6 +662,10 @@ export default function FrontDeskView({
         partners={
           open?.groupId ? data.rows.filter((r) => r.groupId === open.groupId && r.id !== open.id) : []
         }
+        partnersElsewhere={
+          open?.groupId ? data.partnersElsewhere.filter((p) => p.groupId === open.groupId) : []
+        }
+        branchName={data.branchName}
         canSetStatus={canSetStatus}
         canReschedule={canReschedule}
         // Never from the desk, whoever is signed in. Deleting is a records job
@@ -784,6 +825,7 @@ function LaneRow({
   f,
   lang,
   busy,
+  acting,
   onOpen,
   onCheckIn,
   onClose,
@@ -794,7 +836,10 @@ function LaneRow({
   graceMin: number;
   f: ReturnType<typeof useAdminI18n>["t"]["frontDesk"];
   lang: "ar" | "en";
+  /** Any row is mid-action — everything is disabled while one is in flight. */
   busy: boolean;
+  /** *This* row is the one in flight, and the only one that spins. */
+  acting: boolean;
   onOpen: () => void;
   onCheckIn: () => void;
   onClose: () => void;
@@ -886,12 +931,22 @@ function LaneRow({
               {f.took} {formatDuration(tookMs, lang)}
             </span>
           ) : null}
-          <Button onClick={onClose} disabled={busy} className="h-11 shrink-0 px-5 text-sm">
+          <Button
+            onClick={onClose}
+            disabled={busy}
+            pending={acting}
+            className="h-11 shrink-0 px-5 text-sm"
+          >
             {f.close}
           </Button>
         </>
       ) : (
-        <Button onClick={onCheckIn} disabled={busy} className="h-11 shrink-0 px-5 text-sm">
+        <Button
+          onClick={onCheckIn}
+          disabled={busy}
+          pending={acting}
+          className="h-11 shrink-0 px-5 text-sm"
+        >
           {f.checkIn}
         </Button>
       )}

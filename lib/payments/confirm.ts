@@ -12,7 +12,7 @@
 
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers, payments, staff, stations, type Localized } from "@/lib/db/schema";
 import { allocateTickets } from "@/lib/bookings";
@@ -20,7 +20,7 @@ import { utcToLocalDate } from "@/lib/availability";
 import { notify } from "@/lib/notify";
 import { sendBookingInvoice } from "@/lib/invoice/send";
 import { countPromoUse } from "@/lib/promo";
-import { awardPoints } from "@/lib/loyalty";
+import { awardPoints, loyaltyRules } from "@/lib/loyalty";
 import { pointsEarned } from "@/lib/rewards";
 import { getSettings } from "@/lib/settings";
 import { assignIfToday } from "@/lib/assign";
@@ -44,7 +44,29 @@ export type ConfirmedTicket = {
 
 export type ConfirmResult =
   | { ok: true; tickets: ConfirmedTicket[]; totalHalalas: number }
-  | { ok: false; error: "not-found" | "expired" | "payment-declined" | "failed" };
+  | {
+      ok: false;
+      /**
+       * `in-progress` is the one that is not the customer's problem: another tab
+       * — or the same button, twice — is already paying for this party. Separate
+       * from `expired` because the answer is different. Expired means pick a slot
+       * again; this means wait a moment and look at your bookings, because the
+       * other attempt is probably about to succeed.
+       */
+      error: "not-found" | "expired" | "in-progress" | "payment-declined" | "failed";
+    };
+
+/**
+ * Two taps on Pay, or two tabs. The status read cannot catch it — both see the
+ * party pending — so `payments_booking_live_unique` decides which one owns the
+ * attempt, and the loser lands here before either has charged anything.
+ */
+function isLiveAttemptConflict(err: unknown): boolean {
+  for (let e = err; e instanceof Error; e = e.cause) {
+    if (e.message.includes("payments_booking_live_unique")) return true;
+  }
+  return false;
+}
 
 export type ConfirmInput = {
   /** Any member's booking code; a group is resolved from it. */
@@ -79,32 +101,108 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
   const driver = getDriver();
   const ref = randomUUID();
 
-  await db.insert(payments).values(
-    members.map((m) => ({
-      bookingId: m.id,
-      provider: driver.name,
-      providerRef: ref,
-      method: input.method,
-      amountHalalas: m.totalHalalas,
-      status: "pending" as const,
-    })),
-  );
+  // Bury attempts nobody is still on.
+  //
+  // Every failure path below flips its row to `failed`, so a declined card
+  // retries fine. The one that does not is the process dying mid-charge, or the
+  // request being cancelled while the gateway call is in flight: that `pending`
+  // row survives, keeps `payments_booking_live_unique` to itself, and every
+  // attempt after it is refused as `in-progress` forever — the customer loses a
+  // slot whose hold has not even expired. Older than the hold window is the same
+  // clock sweepExpiredHolds uses, and past it there is no checkout left to
+  // protect.
+  //
+  // Inside the window she is still refused, deliberately: a charge that died in
+  // flight may have landed, and a retry could take the money twice. Do not turn
+  // this into an immediate retry without a gateway lookup that can say whether
+  // the first attempt settled.
+  const { booking_hold_min: holdMin } = await getSettings(["booking_hold_min"]);
+  await db
+    .update(payments)
+    .set({ status: "failed", updatedAt: new Date() })
+    .where(
+      and(
+        inArray(
+          payments.bookingId,
+          members.map((m) => m.id),
+        ),
+        eq(payments.status, "pending"),
+        lt(payments.createdAt, new Date(Date.now() - holdMin * 60_000)),
+      ),
+    );
 
-  let charge;
+  // Claiming the party, not just recording it.
+  //
+  // The status read above is the polite check; this is the one that holds. Both
+  // halves of a double tap get past that read — it is a read, and nothing stops
+  // the other tab between it and here — but only one of them can own the live
+  // `payments` row for a booking, because `payments_booking_live_unique` says
+  // so. The loser lands in the catch below.
+  //
+  // Deliberately before the charge. The old order read, charged, and then wrote,
+  // so the loser of the race discovered it had lost only after the customer's
+  // card had been debited a second time. Nothing here has touched money yet.
   try {
-    charge = await driver.charge({
-      ref,
-      amountHalalas: billTotal,
-      method: input.method,
-      simulate: input.simulate,
-    });
+    await db.insert(payments).values(
+      members.map((m) => ({
+        bookingId: m.id,
+        provider: driver.name,
+        providerRef: ref,
+        method: input.method,
+        amountHalalas: m.totalHalalas,
+        status: "pending" as const,
+      })),
+    );
   } catch (err) {
-    console.error("[payments] charge threw", err);
-    await db
-      .update(payments)
-      .set({ status: "failed", updatedAt: new Date() })
-      .where(eq(payments.providerRef, ref));
+    if (isLiveAttemptConflict(err)) {
+      // Somebody is already paying for this party — the other tab, or the same
+      // button a moment ago. Not an error the customer caused, and not one a
+      // retry should make worse.
+      return { ok: false, error: "in-progress" };
+    }
+    console.error("[payments] could not record the attempt", err);
     return { ok: false, error: "failed" };
+  }
+
+  // A bill of nothing never reaches a gateway.
+  //
+  // A membership credit can cover the whole service line, and a full reward or a
+  // 100% code can do the same — in every case there is no money to move, and
+  // presenting a real PSP with a zero authorisation is how you collect a decline
+  // for a booking that was always going to be free. Worse, the customer was
+  // being asked for a card to pay nothing with.
+  //
+  // The `payments` row above still stands, at zero: it is what
+  // `payments_booking_live_unique` keys the double-tap guard on, and a confirmed
+  // booking with no payment row at all would be a hole in the day's takings
+  // rather than a zero in it.
+  let charge;
+  if (billTotal === 0) {
+    // `ref` carried through rather than left undefined: the update below
+    // writes this back onto the row it matches *by* provider_ref, and the
+    // refund path keys on the same column. Relying on the driver dropping an
+    // undefined key would leave a paid booking with nothing to refund against.
+    charge = {
+      status: "paid" as const,
+      providerRef: ref,
+      raw: { free: true, reason: "nothing-to-charge" },
+    };
+  } else {
+    try {
+      charge = await driver.charge({
+        ref,
+        amountHalalas: billTotal,
+        method: input.method,
+        simulate: input.simulate,
+      });
+    } catch (err) {
+      console.error("[payments] charge threw", err);
+      await db
+        .update(payments)
+        .set({ status: "failed", updatedAt: new Date() })
+        .where(eq(payments.providerRef, ref));
+      return { ok: false, error: "failed" };
+    }
   }
 
   if (charge.status !== "paid") {
@@ -117,8 +215,23 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     return { ok: false, error: "payment-declined" };
   }
 
+  // A party may now sit at more than one branch, and `ticket_counters` is keyed
+  // (branch_id, day) — so group the guests by the queue each will actually be
+  // standing in. Used twice below: to issue the numbers, and to deal each of
+  // those floors afterwards. The same rule createBookings applies to a walk-in,
+  // which is confirmed on the spot and so never reaches this file.
+  const byQueue = new Map<string, number[]>();
+  members.forEach((m, i) => {
+    const key = `${m.branchId}:${utcToLocalDate(m.startsAt)}`;
+    byQueue.set(key, [...(byQueue.get(key) ?? []), i]);
+  });
+
+  // Only the transaction may answer `expired`. This `try` used to cover the reads
+  // below it too, so a blip on a station label told a customer whose booking was
+  // confirmed, paid and ticketed to go and book it again.
+  let tickets: string[];
   try {
-    const tickets = await db.transaction(async (tx) => {
+    tickets = await db.transaction(async (tx) => {
       await tx
         .update(payments)
         .set({
@@ -129,12 +242,21 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
         })
         .where(eq(payments.providerRef, ref));
 
-      const numbers = await allocateTickets(
-        tx,
-        anchor.branchId,
-        utcToLocalDate(anchor.startsAt),
-        members.length,
-      );
+      // One call per queue, and each run's numbers put back beside the guest
+      // who asked for them, so `numbers[i]` still belongs to `members[i]`. A
+      // guest at another salon takes that salon's next number rather than one
+      // from a queue she will never be standing in.
+      const numbers: string[] = new Array(members.length);
+      for (const indexes of byQueue.values()) {
+        const lead = members[indexes[0]];
+        const issued = await allocateTickets(
+          tx,
+          lead.branchId,
+          utcToLocalDate(lead.startsAt),
+          indexes.length,
+        );
+        indexes.forEach((at, k) => (numbers[at] = issued[k]));
+      }
 
       for (const [i, member] of members.entries()) {
         const moved = await tx
@@ -150,10 +272,30 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
 
       return numbers;
     });
+  } catch (err) {
+    // The charge went through but we couldn't confirm. Money was taken for a
+    // booking that no longer exists, so this must be loud — a refund is owed.
+    console.error(`[payments] charged ${ref} but could not confirm; refund owed`, err);
+    return { ok: false, error: "expired" };
+  }
 
+  // Past here the booking is real whatever happens. Each of these already
+  // swallows its own errors; the wrapper is for the plain reads between them,
+  // which had none and do not deserve to be able to unsay a confirmation.
+  const labelOf = new Map<string, string>();
+  const techOf = new Map<string, string | null>();
+
+  try {
     // Real work on today's floor now, so it gets a technician now. Next week is
-    // dawn's job, on the day. One pass covers a whole group.
-    await assignIfToday(anchor.branchId, anchor.startsAt);
+    // dawn's job, on the day.
+    //
+    // One pass per floor the party actually touches. A guest booked at another
+    // branch is real work there too, and dealing only the anchor's floor would
+    // leave her on nobody's list until the next morning's run.
+    for (const indexes of byQueue.values()) {
+      const lead = members[indexes[0]];
+      await assignIfToday(lead.branchId, lead.startsAt);
+    }
 
     const chairs = await db
       .select({ id: stations.id, label: stations.label })
@@ -164,7 +306,7 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
           members.map((m) => m.stationId).filter(Boolean) as string[],
         ),
       );
-    const labelOf = new Map(chairs.map((c) => [c.id, c.label]));
+    for (const c of chairs) labelOf.set(c.id, c.label);
 
     // Read back rather than taken off `members`: those rows were loaded before
     // assignIfToday ran just above, so a booking taken for today has a
@@ -172,20 +314,17 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     // the ticket the browser shows and the confirmation message. The invoice
     // looks the same thing up inside buildBookingInvoice, which has callers of
     // its own and should not need one handed in.
-    const techOf = new Map(
-      (
-        await db
-          .select({ id: bookings.id, name: staff.name })
-          .from(bookings)
-          .leftJoin(staff, eq(staff.id, bookings.technicianId))
-          .where(
-            inArray(
-              bookings.id,
-              members.map((m) => m.id),
-            ),
-          )
-      ).map((r) => [r.id, r.name]),
-    );
+    const assigned = await db
+      .select({ id: bookings.id, name: staff.name })
+      .from(bookings)
+      .leftJoin(staff, eq(staff.id, bookings.technicianId))
+      .where(
+        inArray(
+          bookings.id,
+          members.map((m) => m.id),
+        ),
+      );
+    for (const r of assigned) techOf.set(r.id, r.name);
 
     // Two separate messages, on purpose. sendConfirmations is the customer's
     // "you're booked" note and goes through the notify() seam, which is still
@@ -212,32 +351,33 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     // the anchor booking, which means cancelling it later revokes these points
     // by the same balance filter that returns spent ones.
     if (anchor.customerId) {
-      const { loyalty_sar_per_point: sarPerPoint } = await getSettings(["loyalty_sar_per_point"]);
-      await awardPoints(anchor.customerId, anchor.id, pointsEarned(billTotal, sarPerPoint));
+      // Milestones, not a rate: 199 SAR is 50 points, and so is 350 — the next
+      // 50 lands at 399. See lib/rewards.ts milestonesReached.
+      await awardPoints(anchor.customerId, anchor.id, pointsEarned(billTotal, await loyaltyRules()));
     }
 
     await sendConfirmations(members, tickets, labelOf, techOf);
     await sendBookingInvoice(members.map((m) => m.id));
-
-    return {
-      ok: true,
-      totalHalalas: billTotal,
-      tickets: members.map((m, i) => ({
-        code: m.code,
-        ticketNo: tickets[i],
-        stationLabel: m.stationId ? (labelOf.get(m.stationId) ?? null) : null,
-        technicianName: techOf.get(m.id) ?? null,
-        serviceName: m.serviceName,
-        startsAt: m.startsAt.toISOString(),
-        totalHalalas: m.totalHalalas,
-      })),
-    };
   } catch (err) {
-    // The charge went through but we couldn't confirm. Money was taken for a
-    // booking that no longer exists, so this must be loud — a refund is owed.
-    console.error(`[payments] charged ${ref} but could not confirm; refund owed`, err);
-    return { ok: false, error: "expired" };
+    // She is booked and her ticket is in `tickets`. What failed is a chair label
+    // or a receipt, so it is logged and the confirmation still goes back — with
+    // whatever the maps above managed to fill in.
+    console.error(`[payments] ${ref} confirmed; a step after the commit failed`, err);
   }
+
+  return {
+    ok: true,
+    totalHalalas: billTotal,
+    tickets: members.map((m, i) => ({
+      code: m.code,
+      ticketNo: tickets[i],
+      stationLabel: m.stationId ? (labelOf.get(m.stationId) ?? null) : null,
+      technicianName: techOf.get(m.id) ?? null,
+      serviceName: m.serviceName,
+      startsAt: m.startsAt.toISOString(),
+      totalHalalas: m.totalHalalas,
+    })),
+  };
 }
 
 /**

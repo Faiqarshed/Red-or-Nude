@@ -8,6 +8,12 @@
 //   2. the booking currently running on it gives the projected finish time
 //   3. stationFreeWindow() gives how long each chair stays free after that
 //
+// And one thing that is not about a later appointment at all: while somebody is
+// actually in the chair, the page also sells a coffee for the visit she is in.
+// That is the salon's answer to "if she decides she wants coffee after arriving,
+// how does she order it" — the sticker is already on her table. See
+// lib/station-treat.ts; it is a separate purchase and never touches ends_at.
+//
 // Every active chair in the branch is measured, not just the scanned one, so a
 // chair that is booked straight after does not dead-end the customer: the same
 // page offers the tables that *are* free at that moment and books one of them.
@@ -124,6 +130,10 @@ export default async function StationPage({ params }: { params: { token: string 
       customerName={current?.customerName ?? null}
       options={options}
       services={catalog.services}
+      // Only while somebody is in the chair. An empty table has no visit to add
+      // a coffee to, and offering one there would sell a drink to nobody.
+      treats={current ? catalog.checkoutAddons : []}
+      token={params.token}
     />
   );
 }

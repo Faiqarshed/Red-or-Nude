@@ -2,10 +2,35 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Ban, Search, Users } from "lucide-react";
-import { Badge, Button, Card, EmptyState, Field, Input, PageHeader } from "@/components/admin/ui";
+import { AlertTriangle, Ban, Search, Users } from "lucide-react";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  FormErrors,
+  Input,
+  invalidRing,
+  PageHeader,
+} from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
+import { AdminTable } from "@/components/admin/Table";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import TextField from "@/components/admin/TextField";
+import {
+  checkCustomer,
+  EMAIL_MAX,
+  EMAIL_TEXT,
+  typedPhone,
+  focusFirstInvalid,
+  hasErrors,
+  NOTES_MAX,
+  NOTES_TEXT,
+  PERSON_NAME_MAX,
+  PERSON_TEXT,
+} from "@/lib/admin/validate";
+import { cn } from "@/lib/cn";
 import { pick } from "@/lib/localized";
 import type { Localized } from "@/lib/db/schema";
 import { STATUS_TONE, type BookingStatus } from "../bookings/BookingsView";
@@ -25,6 +50,8 @@ export type CustomerRow = {
   name: string | null;
   phone: string;
   email: string | null;
+  /** Verified email: she signs in with it. */
+  hasAccount: boolean;
   notes: string | null;
   blocked: boolean;
   bookingsCount: number;
@@ -72,59 +99,63 @@ export default function CustomersView({
         {customers.length === 0 ? (
           <EmptyState title={t.customers.empty} icon={<Users className="h-8 w-8" strokeWidth={1.25} />} />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-sm">
-              <thead>
-                <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                  {[
-                    t.customers.name,
-                    t.customers.phone,
-                    t.customers.bookingsCount,
-                    t.customers.lifetime,
-                    t.customers.lastVisit,
-                  ].map((h) => (
-                    <th key={h} className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {customers.map((c) => (
-                  <tr
-                    key={c.id}
-                    onClick={() => setSelected(c)}
-                    className="cursor-pointer border-b border-black/[0.04] last:border-0 hover:bg-black/[0.015]"
-                  >
-                    <td className="px-4 py-3 text-start">
-                      <span className="flex items-center gap-2">
-                        <span className="text-ink">{c.name || "—"}</span>
-                        {c.blocked && <Badge tone="danger">{t.customers.blocked}</Badge>}
-                        {/* Repeat no-shows are the thing a receptionist most
-                            wants to spot before confirming another booking. */}
-                        {c.noShows > 0 && (
-                          <Badge tone="warning">
-                            {c.noShows} {t.customers.noShows}
-                          </Badge>
-                        )}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-start tabular-nums text-ink/70" dir="ltr">
-                      {c.phone}
-                    </td>
-                    <td className="px-4 py-3 text-start tabular-nums text-ink/70">{c.bookingsCount}</td>
-                    <td className="px-4 py-3 text-start font-semibold tabular-nums text-ink">
-                      {c.lifetimeSar.toLocaleString("en-US")}
-                      <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
-                    </td>
-                    <td className="px-4 py-3 text-start text-xs tabular-nums text-ink/50" dir="ltr">
-                      {c.lastVisit ? c.lastVisit.slice(0, 10) : t.customers.never}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <AdminTable
+            rows={customers}
+            rowKey={(c) => c.id}
+            minWidth="min-w-[760px]"
+            onRowClick={(c) => setSelected(c)}
+            columns={[
+              {
+                key: "name",
+                header: t.customers.name,
+                primary: true,
+                cell: (c) => (
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-ink">{c.name || "—"}</span>
+                    {c.blocked && <Badge tone="danger">{t.customers.blocked}</Badge>}
+                    {/* Repeat no-shows are the thing a receptionist most
+                        wants to spot before confirming another booking. */}
+                    {c.noShows > 0 && (
+                      <Badge tone="warning">
+                        {c.noShows} {t.customers.noShows}
+                      </Badge>
+                    )}
+                  </span>
+                ),
+              },
+              {
+                key: "phone",
+                header: t.customers.phone,
+                className: "tabular-nums text-ink/70",
+                dir: "ltr",
+                cell: (c) => c.phone,
+              },
+              {
+                key: "bookings",
+                header: t.customers.bookingsCount,
+                className: "tabular-nums text-ink/70",
+                cell: (c) => c.bookingsCount,
+              },
+              {
+                key: "lifetime",
+                header: t.customers.lifetime,
+                className: "font-semibold tabular-nums text-ink",
+                cell: (c) => (
+                  <>
+                    {c.lifetimeSar.toLocaleString("en-US")}
+                    <span className="ms-1 text-xs font-normal text-ink/45">{t.common.riyal}</span>
+                  </>
+                ),
+              },
+              {
+                key: "lastVisit",
+                header: t.customers.lastVisit,
+                className: "text-xs tabular-nums text-ink/50",
+                dir: "ltr",
+                cell: (c) => (c.lastVisit ? c.lastVisit.slice(0, 10) : t.customers.never),
+              },
+            ]}
+          />
         )}
       </Card>
 
@@ -153,19 +184,55 @@ function CustomerDrawer({
   const [pending, startTransition] = useTransition();
   const [loadedId, setLoadedId] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
   const [blocked, setBlocked] = useState(false);
+  const [tried, setTried] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (customer && loadedId !== customer.id) {
     setLoadedId(customer.id);
     setName(customer.name ?? "");
+    setPhone(customer.phone);
     setEmail(customer.email ?? "");
     setNotes(customer.notes ?? "");
     setBlocked(customer.blocked);
+    setTried(false);
+    setError(null);
   }
 
   if (!customer) return null;
+
+  const check = () => checkCustomer(t, { name, phone, email, notes });
+  const emailChanged = email.trim().toLowerCase() !== (customer.email ?? "").toLowerCase();
+  const errors = tried ? check() : {};
+
+  const save = () =>
+    startTransition(async () => {
+      setError(null);
+      setTried(true);
+      if (hasErrors(check())) return focusFirstInvalid();
+      // It used to close whatever came back, so a refused save looked like a
+      // successful one.
+      const res = await updateCustomer({
+        id: customer.id,
+        name: name.trim(),
+        phone,
+        email: email.trim(),
+        notes: notes.trim(),
+        blocked,
+      });
+      if (res.ok) onSaved();
+      else
+        setError(
+          res.error === "phone-taken"
+            ? t.customers.phoneTaken
+            : res.error === "not-found"
+              ? t.validation.notFound
+              : t.common.error,
+        );
+    });
 
   return (
     <Drawer
@@ -178,16 +245,7 @@ function CustomerDrawer({
           <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
             {t.common.cancel}
           </Button>
-          <Button
-            size="sm"
-            disabled={pending}
-            onClick={() =>
-              startTransition(async () => {
-                await updateCustomer({ id: customer.id, name, email, notes, blocked });
-                onSaved();
-              })
-            }
-          >
+          <Button size="sm" disabled={pending} onClick={save}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>
@@ -208,28 +266,58 @@ function CustomerDrawer({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t.customers.name}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
-          </Field>
-          <Field label={t.customers.phone}>
-            {/* The phone is the customer's identity key — changing it here would
-                silently split their history. */}
-            <Input value={customer.phone} dir="ltr" className="text-left" disabled />
+          <TextField
+            label={t.customers.name}
+            {...PERSON_TEXT}
+            max={PERSON_NAME_MAX}
+            error={errors.name}
+            value={name}
+            onChange={setName}
+          />
+          <Field label={t.customers.phone} error={errors.phone}>
+            {/* Checkout finds a returning customer by this number, so it is
+                saved as 05XXXXXXXX whatever shape is typed, and the server
+                refuses one that already belongs to someone else. */}
+            <Input
+              inputMode="tel"
+              dir="ltr"
+              className="text-left tabular-nums"
+              aria-invalid={!!errors.phone}
+              value={phone}
+              onChange={(e) => setPhone(typedPhone(e.target.value))}
+            />
           </Field>
         </div>
 
-        <Field label={t.customers.email}>
-          <Input type="email" dir="ltr" className="text-left" value={email} onChange={(e) => setEmail(e.target.value)} />
-        </Field>
-
-        <Field label={t.customers.notes}>
-          <textarea
-            rows={3}
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            className="w-full resize-none rounded-xl border border-black/10 bg-white px-3 py-2 text-start text-sm text-ink outline-none focus:border-sky focus:ring-2 focus:ring-sky/20"
+        <div>
+          <TextField
+            label={t.customers.email}
+            {...EMAIL_TEXT}
+            max={EMAIL_MAX}
+            error={errors.email}
+            value={email}
+            onChange={setEmail}
           />
-        </Field>
+          {/* Said before Save, not after: changing a sign-in address signs her out. */}
+          {customer.hasAccount && emailChanged ? (
+            <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-[#b7791f]/12 px-3 py-2 text-start text-xs text-[#8a5a06]">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+              {t.customers.accountEmailNote}
+            </p>
+          ) : null}
+        </div>
+
+        <TextField
+          label={t.customers.notes}
+          {...NOTES_TEXT}
+          rows={3}
+          max={NOTES_MAX}
+          error={errors.notes}
+          value={notes}
+          onChange={setNotes}
+        />
+
+        <FormErrors errors={errors} summary={t.validation.summary} server={error} />
 
         <label className="flex items-start justify-between gap-4 rounded-xl border border-black/[0.06] bg-white px-4 py-3">
           <span className="text-start">

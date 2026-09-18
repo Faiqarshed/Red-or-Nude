@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState } from "react";
 import { content, type Content } from "./dictionary";
+import { LANG_COOKIE } from "./localized";
 
 export type Lang = "ar" | "en";
 
@@ -15,19 +16,35 @@ type Ctx = {
 
 const LanguageContext = createContext<Ctx | null>(null);
 
-const STORAGE_KEY = "ron-lang";
 
-export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  // Server + first client render default to Arabic (matches <html lang="ar">).
-  const [lang, setLangState] = useState<Lang>("ar");
+function remember(l: Lang) {
+  document.cookie = `${LANG_COOKIE}=${l}; path=/; max-age=31536000; samesite=lax`;
+}
 
-  // Adopt the persisted choice after mount. We never WRITE localStorage from an
-  // effect — only from setLang below — so this read can't be clobbered by the
-  // initial "ar" value (which also avoids a StrictMode double-invoke race).
+export function LanguageProvider({
+  children,
+  initialLang,
+}: {
+  children: React.ReactNode;
+  /** From the cookie, via the layout — the same value the server rendered with. */
+  initialLang: Lang;
+}) {
+  const [lang, setLangState] = useState<Lang>(initialLang);
+
+  // A choice made before the cookie existed lives only in localStorage. Carried
+  // over once, into the cookie, so the next refresh renders it server-side too.
   useEffect(() => {
-    const saved = (typeof window !== "undefined" && localStorage.getItem(STORAGE_KEY)) as Lang | null;
-    if (saved === "en" || saved === "ar") setLangState(saved);
-  }, []);
+    try {
+      const old = localStorage.getItem(LANG_COOKIE);
+      localStorage.removeItem(LANG_COOKIE);
+      if ((old === "en" || old === "ar") && old !== initialLang) {
+        remember(old);
+        setLangState(old);
+      }
+    } catch {
+      /* storage blocked — the cookie is all there is */
+    }
+  }, [initialLang]);
 
   // Keep <html> dir/lang in sync with the active language (no persistence here).
   useEffect(() => {
@@ -39,11 +56,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
 
   const setLang = (l: Lang) => {
     setLangState(l);
-    try {
-      localStorage.setItem(STORAGE_KEY, l);
-    } catch {
-      /* ignore */
-    }
+    remember(l);
   };
 
   const value: Ctx = {

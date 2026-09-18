@@ -1,12 +1,42 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Gift, Plus, Trash2 } from "lucide-react";
-import { Badge, Button, Card, CardHeader, EmptyState, Field, Input, PageHeader } from "@/components/admin/ui";
-import { Drawer } from "@/components/admin/overlays";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  Field,
+  FormErrors,
+  PageHeader, tabItem, tabTone} from "@/components/admin/ui";
+import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
+import { usePendingAction } from "@/components/admin/use-pending-action";
+import { AdminTable } from "@/components/admin/Table";
 import MediaPicker from "@/components/admin/MediaPicker";
+import TextField, { NumberField, TextPair } from "@/components/admin/TextField";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import {
+  ADJUST_MAX,
+  ADJUST_REASON_MAX,
+  ADJUST_TEXT,
+  arScript,
+  checkNote,
+  checkPersonName,
+  collect,
+  EMAIL_MAX,
+  EMAIL_TEXT,
+  focusFirstInvalid,
+  GIFT_MESSAGE_MAX,
+  hasErrors,
+  NAME_MAX,
+  NOTES_TEXT,
+  PERSON_NAME_MAX,
+  PERSON_TEXT,
+  rules,
+} from "@/lib/admin/validate";
 import { pick } from "@/lib/localized";
 import { cn } from "@/lib/cn";
 import type { Localized } from "@/lib/db/schema";
@@ -63,7 +93,7 @@ export default function GiftCardsView({
 }) {
   const { t, lang } = useAdminI18n();
   const router = useRouter();
-  const [, startTransition] = useTransition();
+  const { act } = usePendingAction();
 
   const [tab, setTab] = useState<"issued" | "setup">("issued");
   const [issuing, setIssuing] = useState(false);
@@ -71,12 +101,38 @@ export default function GiftCardsView({
   const [editDesign, setEditDesign] = useState<DesignRow | null>(null);
   const [newDesign, setNewDesign] = useState(false);
   const [newValue, setNewValue] = useState("");
+  const [valueTried, setValueTried] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [doomedValue, setDoomedValue] = useState<{ id: string; amountSar: number } | null>(null);
+  const { pending: deletingValue, run: refreshAfterDelete } = usePendingAction();
+  const [valueDeleteError, setValueDeleteError] = useState<string | null>(null);
 
-  const run = (fn: () => Promise<{ ok: boolean }>) =>
-    startTransition(async () => {
-      await fn();
+  // Holds through the refresh, not just the action — see
+  // components/admin/use-pending-action.
+  const run = (fn: () => Promise<{ ok: boolean }>) => {
+    setSetupError(null);
+    return act(fn, () => setSetupError(t.common.error));
+  };
+
+  const deleteValue = () =>
+    refreshAfterDelete(async () => {
+      if (!doomedValue) return false;
+      setValueDeleteError(null);
+      const res = await deleteGiftValue(doomedValue.id);
+      if (!res.ok) return setValueDeleteError(t.common.error);
+      setDoomedValue(null);
       router.refresh();
     });
+
+  // Same ceiling a card can be issued at — a value nobody can buy is no use.
+  // Whole riyals: these are the buttons on the public page, and a duplicate
+  // would show the same amount twice.
+  const valueCheck =
+    rules(t.validation).number(t.giftCards.amount, newValue, { int: true, positive: true, max: ADJUST_MAX }) ??
+    (values.some((v) => v.amountSar === Number(newValue))
+      ? t.giftCards.valueTaken(Number(newValue).toLocaleString("en-US"))
+      : undefined);
+  const valueError = valueTried ? valueCheck : undefined;
 
   return (
     <>
@@ -97,8 +153,9 @@ export default function GiftCardsView({
             key={v}
             onClick={() => setTab(v)}
             className={cn(
-              "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-              tab === v ? "bg-red/[0.07] text-red" : "text-ink/55 hover:bg-black/[0.03]",
+              tabItem,
+              "flex-1 py-2 text-sm",
+              tabTone(tab === v),
             )}
           >
             {v === "issued" ? t.giftCards.tabIssued : t.giftCards.tabSetup}
@@ -106,50 +163,66 @@ export default function GiftCardsView({
         ))}
       </div>
 
+      {setupError ? (
+        <p role="alert" className="mb-4 rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
+          {setupError}
+        </p>
+      ) : null}
+
       {tab === "issued" ? (
         <Card className="overflow-hidden">
           {cards.length === 0 ? (
             <EmptyState title={t.giftCards.empty} icon={<Gift className="h-8 w-8" strokeWidth={1.25} />} />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-sm">
-                <thead>
-                  <tr className="border-b border-black/[0.06] bg-black/[0.015]">
-                    {[t.giftCards.code, t.giftCards.recipient, t.giftCards.balance, t.giftCards.status, t.giftCards.issuedAt].map((h) => (
-                      <th key={h} className="px-4 py-2.5 text-start text-[11px] font-semibold uppercase tracking-wide text-ink/45">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {cards.map((c) => (
-                    <tr
-                      key={c.id}
-                      onClick={() => setSelected(c)}
-                      className="cursor-pointer border-b border-black/[0.04] last:border-0 hover:bg-black/[0.015]"
-                    >
-                      <td className="px-4 py-3 text-start font-medium tabular-nums text-ink" dir="ltr">
-                        {c.code}
-                      </td>
-                      <td className="px-4 py-3 text-start text-ink/70">
-                        {c.recipientName || c.recipientEmail || "—"}
-                      </td>
-                      <td className="px-4 py-3 text-start tabular-nums">
-                        <span className="font-semibold text-ink">{c.balanceSar.toLocaleString("en-US")}</span>
-                        <span className="text-ink/35"> / {c.initialSar.toLocaleString("en-US")}</span>
-                      </td>
-                      <td className="px-4 py-3 text-start">
-                        <Badge tone={STATUS_TONE[c.status]}>{t.giftCards.statuses[c.status]}</Badge>
-                      </td>
-                      <td className="px-4 py-3 text-start text-xs tabular-nums text-ink/50" dir="ltr">
-                        {c.createdAt.slice(0, 10)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <AdminTable
+              rows={cards}
+              rowKey={(c) => c.id}
+              minWidth="min-w-[720px]"
+              onRowClick={(c) => setSelected(c)}
+              columns={[
+                {
+                  key: "code",
+                  header: t.giftCards.code,
+                  primary: true,
+                  className: "font-medium tabular-nums text-ink",
+                  dir: "ltr",
+                  cell: (c) => c.code,
+                },
+                {
+                  key: "recipient",
+                  header: t.giftCards.recipient,
+                  className: "text-ink/70",
+                  cell: (c) => c.recipientName || c.recipientEmail || "—",
+                },
+                {
+                  key: "balance",
+                  header: t.giftCards.balance,
+                  className: "tabular-nums",
+                  cell: (c) => (
+                    <>
+                      <span className="font-semibold text-ink">
+                        {c.balanceSar.toLocaleString("en-US")}
+                      </span>
+                      <span className="text-ink/35"> / {c.initialSar.toLocaleString("en-US")}</span>
+                    </>
+                  ),
+                },
+                {
+                  key: "status",
+                  header: t.giftCards.status,
+                  cell: (c) => (
+                    <Badge tone={STATUS_TONE[c.status]}>{t.giftCards.statuses[c.status]}</Badge>
+                  ),
+                },
+                {
+                  key: "issuedAt",
+                  header: t.giftCards.issuedAt,
+                  className: "text-xs tabular-nums text-ink/50",
+                  dir: "ltr",
+                  cell: (c) => c.createdAt.slice(0, 10),
+                },
+              ]}
+            />
           )}
         </Card>
       ) : (
@@ -167,7 +240,10 @@ export default function GiftCardsView({
                   </span>
                   {canAdjust && (
                     <button
-                      onClick={() => run(() => deleteGiftValue(v.id))}
+                      onClick={() => {
+                        setValueDeleteError(null);
+                        setDoomedValue(v);
+                      }}
                       className="text-ink/30 transition-colors hover:text-red"
                       aria-label={t.catalog.delete}
                     >
@@ -178,23 +254,24 @@ export default function GiftCardsView({
               ))}
             </ul>
             {canAdjust && (
-              <div className="flex items-end gap-2 border-t border-black/[0.06] p-4">
-                <Field label={t.giftCards.amount}>
-                  <Input
-                    type="number"
-                    min={1}
-                    dir="ltr"
-                    className="text-left tabular-nums"
+              <div className="flex items-start gap-2 border-t border-black/[0.06] p-4">
+                <div className="flex-1">
+                  <NumberField
+                    label={`${t.giftCards.amount} (${t.common.riyal})`}
+                    error={valueError}
+                    maxDigits={5}
                     value={newValue}
-                    onChange={(e) => setNewValue(e.target.value)}
+                    onChange={setNewValue}
                   />
-                </Field>
+                </div>
                 <Button
+                  className="mt-6"
                   onClick={() => {
-                    const n = Number(newValue);
-                    if (!n) return;
-                    run(() => addGiftValue(n));
+                    setValueTried(true);
+                    if (valueCheck) return focusFirstInvalid();
+                    run(() => addGiftValue(Number(newValue)));
                     setNewValue("");
+                    setValueTried(false);
                   }}
                 >
                   <Plus className="h-4 w-4" strokeWidth={2} />
@@ -243,18 +320,32 @@ export default function GiftCardsView({
         </div>
       )}
 
-      <IssueDrawer
-        open={issuing}
-        designs={designs}
-        values={values}
-        onClose={() => setIssuing(false)}
-        onDone={() => {
-          setIssuing(false);
-          router.refresh();
-        }}
+      <ConfirmDialog
+        open={!!doomedValue}
+        title={t.common.deleteNamed(doomedValue ? `${doomedValue.amountSar.toLocaleString("en-US")} ${t.common.riyal}` : "")}
+        body={t.common.valueDeleteBody}
+        pending={deletingValue}
+        error={valueDeleteError}
+        onClose={() => setDoomedValue(null)}
+        onConfirm={deleteValue}
       />
 
+      {/* Mounted only while open, so every card starts from a blank form. */}
+      {issuing && (
+        <IssueDrawer
+          open
+          designs={designs}
+          values={values}
+          onClose={() => setIssuing(false)}
+          onDone={() => {
+            setIssuing(false);
+            router.refresh();
+          }}
+        />
+      )}
+
       <CardDrawer
+        key={selected?.id ?? "none"}
         card={selected}
         canAdjust={canAdjust}
         onClose={() => setSelected(null)}
@@ -303,18 +394,36 @@ function IssueDrawer({
   const [message, setMessage] = useState("");
   const [issued, setIssued] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
+  const [tried, setTried] = useState(false);
+  const { pending, run } = usePendingAction();
+
+  const amountLabel = `${t.giftCards.amount} (${t.common.riyal})`;
+  const r = rules(t.validation);
+  const check = () =>
+    collect({
+      amount: r.number(amountLabel, amount, { int: true, min: 1, max: ADJUST_MAX }),
+      buyerName: checkPersonName(t.validation, t.giftCards.buyer, buyerName, { required: false }),
+      recipientName: checkPersonName(t.validation, t.giftCards.recipient, recipientName, { required: false }),
+      recipientEmail: r.email(t.customers.email, recipientEmail, { max: EMAIL_MAX }),
+      message: checkNote(t.validation, t.giftCards.message, message, { required: false, max: GIFT_MESSAGE_MAX }),
+    });
+  const errors = tried ? check() : {};
 
   const submit = () =>
-    startTransition(async () => {
+    run(async () => {
       setError(null);
+      setTried(true);
+      if (hasErrors(check())) {
+        focusFirstInvalid();
+        return false;
+      }
       const res = await issueCard({
         amountSar: amount,
         designId: designId || null,
-        buyerName,
-        recipientName,
-        recipientEmail,
-        message,
+        buyerName: buyerName.trim(),
+        recipientName: recipientName.trim(),
+        recipientEmail: recipientEmail.trim(),
+        message: message.trim(),
       });
       if (res.ok && res.code) setIssued(res.code);
       else setError(t.common.error);
@@ -323,10 +432,7 @@ function IssueDrawer({
   return (
     <Drawer
       open={open}
-      onClose={() => {
-        setIssued(null);
-        onClose();
-      }}
+      onClose={onClose}
       title={t.giftCards.issue}
       footer={
         issued ? (
@@ -338,7 +444,7 @@ function IssueDrawer({
             <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
               {t.common.cancel}
             </Button>
-            <Button size="sm" onClick={submit} disabled={pending || !Number(amount)}>
+            <Button size="sm" onClick={submit} disabled={pending}>
               {pending ? t.common.saving : t.giftCards.issue}
             </Button>
           </>
@@ -354,16 +460,7 @@ function IssueDrawer({
         </div>
       ) : (
         <div className="space-y-5">
-          <Field label={`${t.giftCards.amount} (${t.common.riyal})`}>
-            <Input
-              type="number"
-              min={1}
-              dir="ltr"
-              className="text-left tabular-nums"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-            />
-          </Field>
+          <NumberField label={amountLabel} error={errors.amount} maxDigits={5} value={amount} onChange={setAmount} />
 
           {values.length > 0 && (
             <div className="flex flex-wrap gap-2">
@@ -395,30 +492,41 @@ function IssueDrawer({
             </select>
           </Field>
 
-          <Field label={t.giftCards.buyer}>
-            <Input value={buyerName} onChange={(e) => setBuyerName(e.target.value)} />
-          </Field>
-          <Field label={t.giftCards.recipient}>
-            <Input value={recipientName} onChange={(e) => setRecipientName(e.target.value)} />
-          </Field>
-          <Field label={t.customers.email}>
-            <Input
-              type="email"
-              dir="ltr"
-              className="text-left"
-              value={recipientEmail}
-              onChange={(e) => setRecipientEmail(e.target.value)}
-            />
-          </Field>
-          <Field label={t.giftCards.message}>
-            <Input value={message} onChange={(e) => setMessage(e.target.value)} />
-          </Field>
+          <TextField
+            label={t.giftCards.buyer}
+            {...PERSON_TEXT}
+            max={PERSON_NAME_MAX}
+            error={errors.buyerName}
+            value={buyerName}
+            onChange={setBuyerName}
+          />
+          <TextField
+            label={t.giftCards.recipient}
+            {...PERSON_TEXT}
+            max={PERSON_NAME_MAX}
+            error={errors.recipientName}
+            value={recipientName}
+            onChange={setRecipientName}
+          />
+          <TextField
+            label={t.customers.email}
+            {...EMAIL_TEXT}
+            max={EMAIL_MAX}
+            error={errors.recipientEmail}
+            value={recipientEmail}
+            onChange={setRecipientEmail}
+          />
+          <TextField
+            label={t.giftCards.message}
+            {...NOTES_TEXT}
+            rows={3}
+            max={GIFT_MESSAGE_MAX}
+            error={errors.message}
+            value={message}
+            onChange={setMessage}
+          />
 
-          {error ? (
-            <p role="alert" className="rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
-              {error}
-            </p>
-          ) : null}
+          <FormErrors errors={errors} summary={t.validation.summary} server={error} />
         </div>
       )}
     </Drawer>
@@ -440,16 +548,51 @@ function CardDrawer({
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
+  const [tried, setTried] = useState(false);
+  const { pending, run } = usePendingAction();
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   if (!card) return null;
 
+  const r = rules(t.validation);
+  const sar = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  const delta = Number(amount);
+  const check = () =>
+    collect({
+      amount:
+        r.number(t.giftCards.adjustAmount, amount, { min: -ADJUST_MAX, max: ADJUST_MAX, decimals: 2 }) ||
+        (delta === 0 && t.validation.nonZero(t.giftCards.adjustAmount)) ||
+        // The server refuses this too ("insufficient"); saying it here names the number.
+        (card.balanceSar + delta < 0 && t.giftCards.deductTooMuch(sar(card.balanceSar))),
+      reason: r.text(t.giftCards.adjustReason, reason, { min: 3, max: ADJUST_REASON_MAX, script: "any" }),
+    });
+  const errors = tried ? check() : {};
+  // What the balance becomes, while she types, once the amount is a real one.
+  const preview =
+    amount && amount !== "-" && Number.isFinite(delta) && delta !== 0 && card.balanceSar + delta >= 0
+      ? t.giftCards.newBalance(sar(card.balanceSar + delta))
+      : undefined;
+
   const apply = () =>
-    startTransition(async () => {
+    run(async () => {
       setError(null);
-      const res = await adjustCard({ id: card.id, amountSar: amount, reason });
+      setTried(true);
+      if (hasErrors(check())) {
+        focusFirstInvalid();
+        return false;
+      }
+      const res = await adjustCard({ id: card.id, amountSar: amount, reason: reason.trim() });
       if (res.ok) onChanged();
-      else setError(res.error === "insufficient" ? t.giftCards.insufficient : t.common.error);
+      else
+        setError(
+          res.error === "insufficient"
+            ? t.giftCards.insufficient
+            : res.error === "not-found"
+              ? t.validation.notFound
+              : t.common.error,
+        );
+      // onChanged() closes this drawer and refreshes the list itself.
+      return false;
     });
 
   return (
@@ -518,43 +661,63 @@ function CardDrawer({
 
         {canAdjust && card.status !== "cancelled" ? (
           <div className="space-y-3 border-t border-black/[0.06] pt-4">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label={t.giftCards.adjustAmount}>
-                <Input
-                  type="number"
-                  dir="ltr"
-                  className="text-left tabular-nums"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                />
-              </Field>
-              <Field label={t.giftCards.adjustReason}>
-                <Input value={reason} onChange={(e) => setReason(e.target.value)} />
-              </Field>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <NumberField
+                label={t.giftCards.adjustAmount}
+                hint={preview}
+                error={errors.amount}
+                maxDigits={5}
+                decimals={2}
+                signed
+                value={amount}
+                onChange={setAmount}
+              />
+              <TextField
+                label={t.giftCards.adjustReason}
+                {...ADJUST_TEXT}
+                max={ADJUST_REASON_MAX}
+                error={errors.reason}
+                value={reason}
+                onChange={setReason}
+              />
             </div>
             <div className="flex gap-2">
-              <Button size="sm" onClick={apply} disabled={pending || !Number(amount) || !reason.trim()}>
+              <Button size="sm" onClick={apply} disabled={pending}>
                 {t.giftCards.adjust}
               </Button>
               <Button
                 size="sm"
                 variant="secondary"
                 disabled={pending}
-                onClick={() => startTransition(async () => {
-                  await cancelCard(card.id);
-                  onChanged();
-                })}
+                onClick={() => setConfirmCancel(true)}
               >
                 {t.giftCards.cancelCard}
               </Button>
             </div>
-            {error ? (
-              <p role="alert" className="rounded-xl bg-red/[0.07] px-3 py-2 text-start text-xs text-red">
-                {error}
-              </p>
-            ) : null}
+            <FormErrors errors={errors} summary={t.validation.summary} server={error} />
           </div>
         ) : null}
+
+        {/* Cancelling strands whatever is left on the card, and nothing in the
+            panel undoes it, so it gets asked once, with the amount named. */}
+        <ConfirmDialog
+          open={confirmCancel}
+          title={t.giftCards.cancelTitle}
+          body={t.giftCards.cancelBody(card.code, sar(card.balanceSar))}
+          confirmLabel={t.giftCards.cancelCard}
+          cancelLabel={t.giftCards.keepCard}
+          pending={pending}
+          onClose={() => setConfirmCancel(false)}
+          onConfirm={() =>
+            run(async () => {
+              const res = await cancelCard(card.id);
+              setConfirmCancel(false);
+              if (res.ok) onChanged();
+              else setError(t.common.error);
+              return false;
+            })
+          }
+        />
       </div>
     </Drawer>
   );
@@ -571,12 +734,16 @@ function DesignDrawer({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { t } = useAdminI18n();
+  const { t, lang } = useAdminI18n();
   const [nameAr, setNameAr] = useState("");
   const [nameEn, setNameEn] = useState("");
   const [image, setImage] = useState<string | null>(null);
   const [active, setActive] = useState(true);
-  const [pending, startTransition] = useTransition();
+  const [tried, setTried] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { pending, run } = usePendingAction();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Reset when the drawer opens onto a different design.
   const key = design?.id ?? "new";
@@ -587,10 +754,47 @@ function DesignDrawer({
     setNameEn(design?.name.en ?? "");
     setImage(design?.image ?? null);
     setActive(design?.active ?? true);
+    setTried(false);
+    setError(null);
+    setConfirmDelete(false);
   }
   if (!open && loadedKey !== null) setLoadedKey(null);
 
   if (!open) return null;
+
+  const r = rules(t.validation);
+  const check = () =>
+    collect({
+      nameAr: r.text(t.catalog.nameAr, nameAr, { min: 2, max: NAME_MAX, script: arScript(nameAr, nameEn) }),
+      nameEn: r.text(t.catalog.nameEn, nameEn, { min: 2, max: NAME_MAX, script: "en" }),
+      // A design is its picture; without one the public page shows an empty tile.
+      image: !image && t.giftCards.imageRequired,
+    });
+  const errors = tried ? check() : {};
+
+  const save = () =>
+    run(async () => {
+      setError(null);
+      setTried(true);
+      if (hasErrors(check()) || !image) {
+        focusFirstInvalid();
+        return false;
+      }
+      const res = await saveGiftDesign({ id: design?.id, nameAr: nameAr.trim(), nameEn: nameEn.trim(), image, active });
+      if (res.ok) onSaved();
+      else setError(res.error === "bad-image" ? t.giftCards.imageRequired : t.common.error);
+      return false;
+    });
+
+  const remove = () =>
+    run(async () => {
+      if (!design) return false;
+      setDeleteError(null);
+      const res = await deleteGiftDesign(design.id);
+      if (res.ok) onSaved();
+      else setDeleteError(res.error === "in-use" ? t.giftCards.designInUse : t.common.error);
+      return false;
+    });
 
   return (
     <Drawer
@@ -601,11 +805,12 @@ function DesignDrawer({
         <>
           {design ? (
             <button
-              onClick={() => startTransition(async () => {
-                await deleteGiftDesign(design.id);
-                onSaved();
-              })}
-              className="me-auto text-xs text-red hover:underline"
+              onClick={() => {
+                setDeleteError(null);
+                setConfirmDelete(true);
+              }}
+              disabled={pending}
+              className="me-auto text-xs text-red hover:underline disabled:opacity-50"
             >
               {t.catalog.delete}
             </button>
@@ -613,29 +818,24 @@ function DesignDrawer({
           <Button variant="secondary" size="sm" onClick={onClose}>
             {t.common.cancel}
           </Button>
-          <Button
-            size="sm"
-            disabled={pending || !nameAr.trim() || !nameEn.trim()}
-            onClick={() => startTransition(async () => {
-              await saveGiftDesign({ id: design?.id, nameAr, nameEn, image, active });
-              onSaved();
-            })}
-          >
+          <Button size="sm" disabled={pending} onClick={save}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>
       }
     >
       <div className="space-y-5">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={t.catalog.nameAr}>
-            <Input dir="rtl" value={nameAr} onChange={(e) => setNameAr(e.target.value)} />
-          </Field>
-          <Field label={t.catalog.nameEn}>
-            <Input dir="ltr" className="text-left" value={nameEn} onChange={(e) => setNameEn(e.target.value)} />
-          </Field>
+        <TextPair
+          labels={[t.catalog.nameAr, t.catalog.nameEn]}
+          max={NAME_MAX}
+          errors={[errors.nameAr, errors.nameEn]}
+          values={[nameAr, nameEn]}
+          onChange={[setNameAr, setNameEn]}
+        />
+        <div>
+          <MediaPicker label={t.catalog.image} value={image} onChange={setImage} />
+          {errors.image ? <p className="mt-1 text-start text-xs text-red">{errors.image}</p> : null}
         </div>
-        <MediaPicker label={t.catalog.image} value={image} onChange={setImage} />
         <label className="flex items-center gap-2 text-sm text-ink">
           <input
             type="checkbox"
@@ -645,6 +845,18 @@ function DesignDrawer({
           />
           {t.catalog.active}
         </label>
+
+        <FormErrors errors={errors} summary={t.validation.summary} server={error} />
+
+        <ConfirmDialog
+          open={confirmDelete}
+          title={t.common.deleteNamed(design ? pick(design.name, lang) : "")}
+          body={t.common.designDeleteBody}
+          pending={pending}
+          error={deleteError}
+          onClose={() => setConfirmDelete(false)}
+          onConfirm={remove}
+        />
       </div>
     </Drawer>
   );

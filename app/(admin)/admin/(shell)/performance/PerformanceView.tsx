@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Card, EmptyState, PageHeader, Badge, BranchFilter } from "@/components/admin/ui";
+import { Card, EmptyState, PageHeader, Badge, BranchFilter, tabItem } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
 import type { Localized } from "@/lib/db/schema";
@@ -60,7 +60,7 @@ export default function PerformanceView({
                 key={key}
                 href={href({ period: key })}
                 className={cn(
-                  "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                  tabItem,
                   period === key ? "bg-white text-ink shadow-sm" : "text-ink/55 hover:text-ink",
                 )}
               >
@@ -85,29 +85,48 @@ export default function PerformanceView({
               <span className="w-28 text-end">{p.avgWait}</span>
             </div>
 
+            {/* The headings above are `sm:flex` — gone on a phone, which left
+                four bare numbers wrapping under a truncated name and nothing to
+                say which was which. Below `sm` each figure carries its own
+                label; `sm:contents` then dissolves the list back into the flex
+                row the desk sees, unchanged. */}
             <ul className="divide-y divide-black/[0.06]">
               {stats.map((s) => (
-                <li key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                  <span className="min-w-0 flex-1 truncate text-start text-sm font-medium text-ink">
+                <li
+                  key={s.id}
+                  className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3"
+                >
+                  <span className="min-w-0 flex-1 text-start text-sm font-medium text-ink sm:truncate">
                     {s.name}
                   </span>
-                  <span className="w-24 text-end text-sm tabular-nums text-ink">{s.services}</span>
-                  <span className="w-32 text-end text-sm tabular-nums text-ink">
-                    {s.avgServiceMin} {p.minutes}
-                  </span>
-                  <span className="w-32 text-end">
-                    {s.avgVsExpectedMin === null ? (
-                      <span className="text-xs text-ink/35">—</span>
-                    ) : (
-                      <Badge tone={s.avgVsExpectedMin <= 0 ? "success" : "warning"}>
-                        {Math.abs(s.avgVsExpectedMin)} {p.minutes}{" "}
-                        {s.avgVsExpectedMin <= 0 ? p.faster : p.slower}
-                      </Badge>
-                    )}
-                  </span>
-                  <span className="w-28 text-end text-sm tabular-nums text-ink/60">
-                    {s.avgWaitMin === null ? "—" : `${s.avgWaitMin} ${p.minutes}`}
-                  </span>
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs sm:contents">
+                    <dt className="text-ink/45 sm:hidden">{p.services}</dt>
+                    <dd className="text-start text-sm tabular-nums text-ink sm:w-24 sm:text-end">
+                      {s.services}
+                    </dd>
+
+                    <dt className="text-ink/45 sm:hidden">{p.avgService}</dt>
+                    <dd className="text-start text-sm tabular-nums text-ink sm:w-32 sm:text-end">
+                      {s.avgServiceMin} {p.minutes}
+                    </dd>
+
+                    <dt className="text-ink/45 sm:hidden">{p.avgExpected}</dt>
+                    <dd className="text-start sm:w-32 sm:text-end">
+                      {s.avgVsExpectedMin === null ? (
+                        <span className="text-xs text-ink/35">—</span>
+                      ) : (
+                        <Badge tone={s.avgVsExpectedMin <= 0 ? "success" : "warning"}>
+                          {Math.abs(s.avgVsExpectedMin)} {p.minutes}{" "}
+                          {s.avgVsExpectedMin <= 0 ? p.faster : p.slower}
+                        </Badge>
+                      )}
+                    </dd>
+
+                    <dt className="text-ink/45 sm:hidden">{p.avgWait}</dt>
+                    <dd className="text-start text-sm tabular-nums text-ink/60 sm:w-28 sm:text-end">
+                      {s.avgWaitMin === null ? "—" : `${s.avgWaitMin} ${p.minutes}`}
+                    </dd>
+                  </dl>
                 </li>
               ))}
             </ul>

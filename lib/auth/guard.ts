@@ -34,10 +34,32 @@ async function devFallbackStaff(): Promise<SessionStaff | null> {
   return { id: row.id, name: row.name, email: row.email, role: row.role, branchId: row.branchId };
 }
 
+/**
+ * Who is signed in on the staff side, read from the row and not from the token.
+ *
+ * The session is a 12-hour JWT carrying `role` and `branchId`, stamped at
+ * sign-in. Trusting that stamp meant a member kept whatever authority they had
+ * when they logged in for the rest of the shift: demote someone, move them to
+ * another branch or switch them off entirely and nothing happened until the
+ * token lapsed. The panel can refuse to deactivate the last CEO and still hand
+ * a deactivated technician twelve more hours of the floor.
+ *
+ * So the token now proves only *who*, and the row decides *what* — which is
+ * exactly how currentCustomer() has always treated `customers.blocked`, and for
+ * the same reason. The read costs nothing new: every caller loads staff data
+ * anyway, and the alternative is a revocation that doesn't revoke.
+ */
 export async function currentStaff(): Promise<SessionStaff | null> {
   const session = await auth();
   const user = (session?.user as SessionStaff | undefined) ?? null;
-  return user ?? devFallbackStaff();
+  if (!user?.id) return devFallbackStaff();
+
+  const [row] = await db.select().from(staff).where(eq(staff.id, user.id)).limit(1);
+  // Deleted, or switched off since they signed in. Either way the next request
+  // is signed out rather than carrying yesterday's authority.
+  if (!row || !row.active) return null;
+
+  return { id: row.id, name: row.name, email: row.email, role: row.role, branchId: row.branchId };
 }
 
 /** For pages: bounce to login when signed out. */

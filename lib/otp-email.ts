@@ -21,7 +21,7 @@ const T = {
     subject: (code: string) => `${code} — رمز التحقق من ريد أور نيود`,
     title: "رمز التحقق",
     intro: "استخدمي هذا الرمز لعرض تفاصيل حجزك:",
-    minutes: (n: number) => `الرمز صالح لمدة ${n} دقائق، ولمرة واحدة فقط.`,
+    minutes: (n: number) => `الرمز صالح لمدة ${n === 1 ? "دقيقة واحدة" : `${n} دقائق`}، ولمرة واحدة فقط.`,
     ignore: "إذا لم تطلبي هذا الرمز، تجاهلي هذه الرسالة — لم يتم فتح أي شيء.",
     footer: "هذه رسالة آلية، يُرجى عدم الرد عليها.",
   },
@@ -29,7 +29,7 @@ const T = {
     subject: (code: string) => `${code} — your Red or Nude verification code`,
     title: "Verification code",
     intro: "Use this code to see your booking details:",
-    minutes: (n: number) => `It works once, and expires in ${n} minutes.`,
+    minutes: (n: number) => `It works once, and expires in ${n === 1 ? "1 minute" : `${n} minutes`}.`,
     ignore: "If you didn't ask for this code, ignore this email — nothing was opened.",
     footer: "This is an automated message — please don't reply.",
   },
@@ -44,11 +44,13 @@ export async function sendOtpEmail(input: {
   toName?: string | null;
   code: string;
   lang: "ar" | "en";
+  /** The lifetime the code was issued with, so the email says the truth. */
+  ttlMs?: number;
 }): Promise<SendMailResult> {
   const t = T[input.lang];
   const rtl = input.lang === "ar";
   const start = rtl ? "right" : "left";
-  const minutes = Math.round(OTP_TTL_MS / 60_000);
+  const minutes = Math.round((input.ttlMs ?? OTP_TTL_MS) / 60_000);
 
   const html = `<!DOCTYPE html>
 <html lang="${input.lang}" dir="${rtl ? "rtl" : "ltr"}">

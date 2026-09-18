@@ -25,10 +25,12 @@ Lash Extensions, 0 on a Classic Manicure. There is deliberately no service
 category or "refill service" row in the catalogue: the only question anyone asks
 is *does it have a refill and for how long*, and a column answers it.
 
-**What a refill costs.** One salon-wide percentage, `refill_discount_percent`
-(default 50) in [lib/settings.ts](../lib/settings.ts). Add-ons and removal are
-charged in full — they are the same work either way — so only the service line
-moves. The chair is held for the same duration as the full service.
+**What a refill costs.** One salon-wide flat price, `refill_price_halalas`
+(default 9900 — 99 SAR) in [lib/settings.ts](../lib/settings.ts). It replaced the
+old `refill_discount_percent` rather than joining it, so there is only one way to
+price a refill. Add-ons and removal are charged in full — they are the same work
+either way — so only the service line moves. The chair is held for the same
+duration as the full service.
 
 **The one rule, in one place.** `refillDaysLeft()` in
 [lib/refill.ts](../lib/refill.ts) returns the days remaining, where **0 means no

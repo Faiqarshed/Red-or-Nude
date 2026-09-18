@@ -10,23 +10,21 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { customers } from "@/lib/db/schema";
 import { currentCustomer } from "@/lib/account/guard";
+import { birthdayField, nameField } from "@/lib/account/fields";
 import { isValidSaudiMobile, toStoredPhone } from "@/lib/phone";
 import { clientIp, throttled } from "@/lib/throttle";
 
 export const dynamic = "force-dynamic";
 
 const body = z.object({
-  name: z.string().trim().min(1).max(120),
+  name: nameField,
   phone: z.string().trim().refine(isValidSaudiMobile, "invalid-phone"),
   /**
-   * `YYYY-MM-DD`, or null to clear it. Nullable rather than optional: a
-   * customer who filled this in once must be able to take it back out, and an
-   * omitted field would silently mean "leave it".
+   * Null to clear it. Nullable rather than optional: a customer who filled this
+   * in once must be able to take it back out, and an omitted field would
+   * silently mean "leave it".
    */
-  birthday: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .nullable(),
+  birthday: birthdayField.nullable(),
 });
 
 export async function POST(request: Request) {
@@ -52,36 +50,18 @@ export async function POST(request: Request) {
     );
   }
 
-  const phone = toStoredPhone(parsed.data.phone);
-
-  // `customers.phone` is unique and is what guest checkout upserts on, so
-  // moving onto a number that already belongs to someone else would merge two
-  // people. Checked before the write so the customer gets a sentence rather
-  // than a 500 out of the constraint.
-  if (phone !== customer.phone) {
-    const [taken] = await db
-      .select({ id: customers.id })
-      .from(customers)
-      .where(eq(customers.phone, phone))
-      .limit(1);
-    if (taken) return NextResponse.json({ error: "phone-in-use" }, { status: 409 });
-  }
-
-  try {
-    await db
-      .update(customers)
-      .set({
-        name: parsed.data.name,
-        phone,
-        birthday: parsed.data.birthday,
-        updatedAt: new Date(),
-      })
-      .where(eq(customers.id, customer.id));
-  } catch (err) {
-    // Lost the race against another request claiming that number.
-    console.error("[account] could not save the profile", err);
-    return NextResponse.json({ error: "phone-in-use" }, { status: 409 });
-  }
+  // The phone is a contact detail on an account, not its identity, so another
+  // row with the same number is no conflict and says nothing to anyone
+  // (customers_guest_phone_unique only covers guest rows).
+  await db
+    .update(customers)
+    .set({
+      name: parsed.data.name,
+      phone: toStoredPhone(parsed.data.phone),
+      birthday: parsed.data.birthday,
+      updatedAt: new Date(),
+    })
+    .where(eq(customers.id, customer.id));
 
   return NextResponse.json({ ok: true });
 }

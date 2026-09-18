@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { bookings, customers } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
 import { halalasToSar } from "@/lib/money";
+import { recentPerCustomer } from "./data";
 import CustomersView, { type CustomerRow } from "./CustomersView";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +28,7 @@ export default async function CustomersPage({
       name: customers.name,
       phone: customers.phone,
       email: customers.email,
+      emailVerifiedAt: customers.emailVerifiedAt,
       notes: customers.notes,
       blocked: customers.blocked,
       createdAt: customers.createdAt,
@@ -44,21 +46,7 @@ export default async function CustomersPage({
     .limit(200);
 
   const ids = rows.map((r) => r.id);
-  const history = ids.length
-    ? await db
-        .select({
-          id: bookings.id,
-          customerId: bookings.customerId,
-          code: bookings.code,
-          startsAt: bookings.startsAt,
-          status: bookings.status,
-          serviceName: bookings.serviceName,
-          totalHalalas: bookings.totalHalalas,
-        })
-        .from(bookings)
-        .orderBy(desc(bookings.startsAt))
-        .limit(500)
-    : [];
+  const history = await recentPerCustomer(ids);
 
   return (
     <CustomersView
@@ -69,6 +57,7 @@ export default async function CustomersPage({
           name: r.name,
           phone: r.phone,
           email: r.email,
+          hasAccount: r.emailVerifiedAt !== null,
           notes: r.notes,
           blocked: r.blocked,
           bookingsCount: r.bookingsCount,

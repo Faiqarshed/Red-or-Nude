@@ -1,0 +1,12 @@
+-- A treat bought mid-visit, from the sticker on the customer's own table.
+--
+-- The payment for it cannot go in `booking_id`. That column is watched by
+-- `payments_booking_live_unique`, which permits exactly one live payment per
+-- booking and is what stops a double-tapped checkout charging the card twice.
+-- A treat top-up is a real second charge against a booking that is already
+-- paid for, so it needs somewhere else to live — relaxing that index to make
+-- room would re-arm the double-charge it was added to prevent.
+--
+-- Plain uuid with no foreign key, matching `gift_card_id` and
+-- `customer_pack_id` beside it: a receipt must outlive the thing it paid for.
+ALTER TABLE "payments" ADD COLUMN "treat_booking_id" uuid;

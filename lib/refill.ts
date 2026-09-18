@@ -73,8 +73,6 @@ export function refillDaysLeft(b: RefillInput, now: Date = new Date()): number {
   return Math.ceil(msLeft / DAY_MS);
 }
 
-/** What a refill costs: the service price less the salon's refill discount. */
-export function refillPriceHalalas(servicePriceHalalas: number, discountPercent: number): number {
-  const pct = Math.min(Math.max(discountPercent, 0), 100);
-  return servicePriceHalalas - Math.round((servicePriceHalalas * pct) / 100);
-}
+// What a refill costs used to live here, as the service price less a
+// percentage. It is a flat price now — `refill_price_halalas` in lib/settings.ts
+// — and a flat price needs no function.
