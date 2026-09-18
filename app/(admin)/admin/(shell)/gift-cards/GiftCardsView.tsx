@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Gift, Plus, Trash2 } from "lucide-react";
 import {
@@ -13,6 +13,7 @@ import {
   FormErrors,
   PageHeader, tabItem, tabTone} from "@/components/admin/ui";
 import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { AdminTable } from "@/components/admin/Table";
 import MediaPicker from "@/components/admin/MediaPicker";
 import TextField, { NumberField, TextPair } from "@/components/admin/TextField";
@@ -92,7 +93,7 @@ export default function GiftCardsView({
 }) {
   const { t, lang } = useAdminI18n();
   const router = useRouter();
-  const [, startTransition] = useTransition();
+  const { act } = usePendingAction();
 
   const [tab, setTab] = useState<"issued" | "setup">("issued");
   const [issuing, setIssuing] = useState(false);
@@ -103,20 +104,19 @@ export default function GiftCardsView({
   const [valueTried, setValueTried] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [doomedValue, setDoomedValue] = useState<{ id: string; amountSar: number } | null>(null);
-  const [deletingValue, startDeleteValue] = useTransition();
+  const { pending: deletingValue, run: refreshAfterDelete } = usePendingAction();
   const [valueDeleteError, setValueDeleteError] = useState<string | null>(null);
 
-  const run = (fn: () => Promise<{ ok: boolean }>) =>
-    startTransition(async () => {
-      setSetupError(null);
-      const res = await fn();
-      if (!res.ok) setSetupError(t.common.error);
-      router.refresh();
-    });
+  // Holds through the refresh, not just the action — see
+  // components/admin/use-pending-action.
+  const run = (fn: () => Promise<{ ok: boolean }>) => {
+    setSetupError(null);
+    return act(fn, () => setSetupError(t.common.error));
+  };
 
   const deleteValue = () =>
-    startDeleteValue(async () => {
-      if (!doomedValue) return;
+    refreshAfterDelete(async () => {
+      if (!doomedValue) return false;
       setValueDeleteError(null);
       const res = await deleteGiftValue(doomedValue.id);
       if (!res.ok) return setValueDeleteError(t.common.error);
@@ -395,7 +395,7 @@ function IssueDrawer({
   const [issued, setIssued] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
-  const [pending, startTransition] = useTransition();
+  const { pending, run } = usePendingAction();
 
   const amountLabel = `${t.giftCards.amount} (${t.common.riyal})`;
   const r = rules(t.validation);
@@ -410,10 +410,13 @@ function IssueDrawer({
   const errors = tried ? check() : {};
 
   const submit = () =>
-    startTransition(async () => {
+    run(async () => {
       setError(null);
       setTried(true);
-      if (hasErrors(check())) return focusFirstInvalid();
+      if (hasErrors(check())) {
+        focusFirstInvalid();
+        return false;
+      }
       const res = await issueCard({
         amountSar: amount,
         designId: designId || null,
@@ -546,7 +549,7 @@ function CardDrawer({
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
-  const [pending, startTransition] = useTransition();
+  const { pending, run } = usePendingAction();
   const [confirmCancel, setConfirmCancel] = useState(false);
 
   if (!card) return null;
@@ -571,10 +574,13 @@ function CardDrawer({
       : undefined;
 
   const apply = () =>
-    startTransition(async () => {
+    run(async () => {
       setError(null);
       setTried(true);
-      if (hasErrors(check())) return focusFirstInvalid();
+      if (hasErrors(check())) {
+        focusFirstInvalid();
+        return false;
+      }
       const res = await adjustCard({ id: card.id, amountSar: amount, reason: reason.trim() });
       if (res.ok) onChanged();
       else
@@ -585,6 +591,8 @@ function CardDrawer({
               ? t.validation.notFound
               : t.common.error,
         );
+      // onChanged() closes this drawer and refreshes the list itself.
+      return false;
     });
 
   return (
@@ -701,11 +709,12 @@ function CardDrawer({
           pending={pending}
           onClose={() => setConfirmCancel(false)}
           onConfirm={() =>
-            startTransition(async () => {
+            run(async () => {
               const res = await cancelCard(card.id);
               setConfirmCancel(false);
               if (res.ok) onChanged();
               else setError(t.common.error);
+              return false;
             })
           }
         />
@@ -732,7 +741,7 @@ function DesignDrawer({
   const [active, setActive] = useState(true);
   const [tried, setTried] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
+  const { pending, run } = usePendingAction();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -764,22 +773,27 @@ function DesignDrawer({
   const errors = tried ? check() : {};
 
   const save = () =>
-    startTransition(async () => {
+    run(async () => {
       setError(null);
       setTried(true);
-      if (hasErrors(check()) || !image) return focusFirstInvalid();
+      if (hasErrors(check()) || !image) {
+        focusFirstInvalid();
+        return false;
+      }
       const res = await saveGiftDesign({ id: design?.id, nameAr: nameAr.trim(), nameEn: nameEn.trim(), image, active });
       if (res.ok) onSaved();
       else setError(res.error === "bad-image" ? t.giftCards.imageRequired : t.common.error);
+      return false;
     });
 
   const remove = () =>
-    startTransition(async () => {
-      if (!design) return;
+    run(async () => {
+      if (!design) return false;
       setDeleteError(null);
       const res = await deleteGiftDesign(design.id);
-      if (res.ok) return onSaved();
-      setDeleteError(res.error === "in-use" ? t.giftCards.designInUse : t.common.error);
+      if (res.ok) onSaved();
+      else setDeleteError(res.error === "in-use" ? t.giftCards.designInUse : t.common.error);
+      return false;
     });
 
   return (

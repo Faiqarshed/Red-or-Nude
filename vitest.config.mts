@@ -4,8 +4,12 @@ import { fileURLToPath } from "node:url";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
-// Local-only test harness. Nothing in next.config, package.json or CI refers to
-// it — `npx vitest run` is the whole entry point.
+// The test harness. `npm test` runs it; `npm run test:mutations` checks that the
+// suite actually fails when a fix it claims to cover is reverted.
+//
+// Still no CI: nothing runs on push, so these are only as good as the habit of
+// running them. See docs/ for the per-feature manual guides that stand in for a
+// browser layer.
 export default defineConfig({
   resolve: {
     alias: {

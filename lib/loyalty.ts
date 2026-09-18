@@ -11,12 +11,38 @@ import { db } from "@/lib/db";
 import { bookings, loyaltyTxns } from "@/lib/db/schema";
 import { getSettings } from "@/lib/settings";
 import {
+  pointsValue,
   rewardDiscount,
-  rewardFor,
   rewardRefusal,
   spendableBalance,
+  type LoyaltyRules,
   type RewardRefusal,
 } from "@/lib/rewards";
+
+/**
+ * The scheme's four numbers, read from `settings` in one go.
+ *
+ * Every rule function in lib/rewards.ts takes these as an argument rather than
+ * reading them itself, so the one place they are fetched is here and the one
+ * place they are defaulted is SETTING_DEFAULTS. The checkout gets the same
+ * object over the wire from /api/loyalty/quote and prices with the same
+ * functions, which is what keeps the figure on screen and the figure charged
+ * from ever disagreeing.
+ */
+export async function loyaltyRules(): Promise<LoyaltyRules> {
+  const s = await getSettings([
+    "loyalty_first_sar",
+    "loyalty_step_sar",
+    "loyalty_step_points",
+    "loyalty_point_halalas",
+  ]);
+  return {
+    firstSar: s.loyalty_first_sar,
+    stepSar: s.loyalty_step_sar,
+    stepPoints: s.loyalty_step_points,
+    pointHalalas: s.loyalty_point_halalas,
+  };
+}
 
 /**
  * The spendable balance.
@@ -45,7 +71,10 @@ export async function loyaltyBalance(customerId: string): Promise<number> {
 }
 
 export type RewardQuote =
-  | { ok: true; points: number; percent: number; discountHalalas: number }
+  /** `valueHalalas` is what the points are worth; `discountHalalas` is what the
+   *  bill can actually absorb. They differ only when the reward is larger than
+   *  the bill, which is why both are reported rather than one. */
+  | { ok: true; points: number; valueHalalas: number; discountHalalas: number }
   | { ok: false; reason: RewardRefusal; balance: number };
 
 /**
@@ -62,16 +91,15 @@ export async function quoteReward(
   points: number,
   totalHalalas: number,
 ): Promise<RewardQuote> {
-  const balance = await loyaltyBalance(customerId);
-  const refusal = rewardRefusal(points, balance);
+  const [balance, rules] = await Promise.all([loyaltyBalance(customerId), loyaltyRules()]);
+  const refusal = rewardRefusal(points, balance, rules);
   if (refusal) return { ok: false, reason: refusal, balance };
 
-  const reward = rewardFor(points)!;
   return {
     ok: true,
-    points: reward.points,
-    percent: reward.percent,
-    discountHalalas: rewardDiscount(reward, totalHalalas),
+    points,
+    valueHalalas: pointsValue(points, rules),
+    discountHalalas: rewardDiscount(points, totalHalalas, rules),
   };
 }
 

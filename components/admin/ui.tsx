@@ -11,7 +11,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, TrendingDown, TrendingUp } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, TrendingDown, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 // ------------------------------------------------------------- surfaces ----
@@ -92,17 +92,38 @@ const buttonSizes = {
   md: "h-12 px-4 text-sm sm:h-10",
 } as const;
 
+/**
+ * `pending` is the button's own answer to "did my click do anything?".
+ *
+ * It disables and shows a spinner in one prop, so a call site cannot do half of
+ * it. Every screen in the panel used to hand-roll this pair, and they drifted:
+ * the common shape was `setBusy(false)` immediately after the server action
+ * returned, followed by an un-awaited `router.refresh()`. That re-enabled the
+ * button while the screen still showed pre-mutation data, so the receptionist
+ * saw a dead interval and clicked again. Driving this from a `useTransition`
+ * `isPending` instead keeps it true until the fresh render is actually on
+ * screen, which is the moment she is waiting for.
+ *
+ * `disabled` still works and is OR-ed with this — a button can be both pending
+ * and unavailable for its own reasons.
+ */
 export function Button({
   variant = "primary",
   size = "md",
   className,
+  pending = false,
+  disabled,
+  children,
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: keyof typeof buttonVariants;
   size?: keyof typeof buttonSizes;
+  pending?: boolean;
 }) {
   return (
     <button
+      disabled={disabled || pending}
+      aria-busy={pending || undefined}
       className={cn(
         "inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-colors",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky",
@@ -112,7 +133,10 @@ export function Button({
         className,
       )}
       {...props}
-    />
+    >
+      {pending ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" /> : null}
+      {children}
+    </button>
   );
 }
 

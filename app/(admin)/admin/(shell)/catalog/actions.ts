@@ -11,6 +11,7 @@ import { revalidatePath } from "next/cache";
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { violatedConstraint } from "@/lib/db/errors";
 import { addons, designs, removalTypes, services, type Localized } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { diffOf, recordAudit } from "@/lib/audit";
@@ -199,9 +200,22 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
     revalidateAll();
     return { ok: true, id: row.id };
   } catch (err) {
+    if (isDuplicateName(err)) return { ok: false, error: "duplicate-name" };
     console.error("[catalog] save failed", err);
     return { ok: false, error: "save-failed" };
   }
+}
+
+/**
+ * The `*_active_name_*_unique` indexes (drizzle/0025) refusing a second live
+ * row under a name that is already taken.
+ *
+ * Matched on the index name rather than on SQLSTATE 23505: these tables carry
+ * other unique constraints, and "that name is taken" is a different sentence
+ * from "that save failed".
+ */
+function isDuplicateName(err: unknown): boolean {
+  return /_active_name_(en|ar)_unique$/.test(violatedConstraint(err) ?? "");
 }
 
 export async function setCatalogActive(
@@ -212,7 +226,15 @@ export async function setCatalogActive(
   const actor = await requireCan("catalog.manage");
   const table = TABLES[kind];
 
-  await db.update(table).set({ active, updatedAt: new Date() }).where(eq(table.id, id));
+  // Switching one *on* is the other way to end up with two live rows under one
+  // name — the drawer is not the only door — so the same refusal lands here.
+  try {
+    await db.update(table).set({ active, updatedAt: new Date() }).where(eq(table.id, id));
+  } catch (err) {
+    if (isDuplicateName(err)) return { ok: false, error: "duplicate-name" };
+    console.error("[catalog] activate failed", err);
+    return { ok: false, error: "save-failed" };
+  }
   await recordAudit(actor, {
     action: "update",
     entity: ENTITY[kind],

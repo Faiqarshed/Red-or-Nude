@@ -123,6 +123,68 @@ sent with the notes.
 `booking_addons` still records it and the invoice still renders it, unchanged.
 The only pricing code is the one line that keeps them out of the discounts.
 
+### 4.1 Hot and cold, and swapping the treat each month
+
+The salon asked for two pictures — "one hot with treats, second is cold with
+treat" — and to change the sweet thing every month.
+
+Neither needs code. The checkout renders **every** active `at_checkout` row as
+its own card, so two rows are two cards, and each row carries its own `image`.
+Migration `0023_hot_and_cold_treats.sql` makes sure both exist on a database
+that is already live: it renames whichever single upsell `0016` left behind to
+the hot one and inserts the cold one beside it. The rename keeps the original
+row's id, so bookings already linked to it keep their link — and nothing is lost
+either way, because `booking_addons` snapshots the name and price at the time of
+sale. An old ticket still reads as what was actually bought.
+
+**The monthly swap, for the salon:**
+
+1. Admin → Catalog → **Treats** (the tab was called "At checkout" until the
+   salon asked for its own word)
+2. Click the row to edit — "Hot coffee & a treat" or "Iced coffee & a treat"
+3. Change the Arabic and English names to whatever the treat is this month
+4. Swap the picture with the media picker, and Save
+
+`revalidateAll()` in `catalog/actions.ts` refreshes `/booking` and `/`, so it is
+live immediately with no deploy. There is no scheduling: a monthly edit is a
+monthly edit, and a scheduler would be a calendar to maintain for something that
+takes four clicks.
+
+Two rules the form already enforces, worth knowing before editing:
+
+- **`duration_min` stays 0**, forced by `saveCatalogItem` and hidden from the
+  upsell form. A treat with a duration would move `ends_at` under a booking that
+  is already being held.
+- **Two live treats may not share a name.** `addons_active_name_en_unique` and
+  its Arabic twin (`drizzle/0025`) refuse it, and the drawer says so. Switch the
+  old one off first, or rename it — which is how a name gets reused without
+  losing what was sold under it.
+- **A row that has been sold cannot be deleted.** `addon_id` is half of
+  `booking_addons`' primary key, so the delete is refused and the panel says
+  "in use". Deactivate it instead — it disappears from checkout and every past
+  ticket keeps its line. (Note the column also declares `on delete set null`,
+  which can never fire for exactly that reason; the two clauses contradict each
+  other and `tests/treats.test.ts` pins which one wins.)
+
+### 4.2 What the technician sees
+
+The half that *was* missing, and the salon's actual complaint: "she will see she
+added coffee and treats so she will provide it for her".
+
+`loadMyDay` read `booking_addons.name` with no join onto the catalogue, so a
+coffee arrived in the same grey pill row as a gel removal with nothing to say
+one was a drink to fetch. It now joins `addons.at_checkout` and splits the
+payload into `addons` and `treats`, and My Day renders treats as their own warm
+row with the picture from the catalogue — she is fetching a *specific* drink.
+
+The same split reaches the front desk and the shared booking drawer, where it
+shows only when there is one: an empty "Bring her: none" on every ticket is a
+row staff learn to skip, and then miss on the ticket that has one.
+
+**No price goes with it.** `loadMyDay` still selects no price column —
+technicians don't see revenue — and `tests/treats.test.ts` asserts the payload
+shape rather than trusting the eye.
+
 ---
 
 ## 5. Group booking: four guests, each with a branch and a time

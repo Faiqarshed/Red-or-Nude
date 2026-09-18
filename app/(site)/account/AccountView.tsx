@@ -26,7 +26,7 @@ import type { Localized } from "@/lib/localized";
 import { formatDateLabel } from "@/lib/booking";
 import type { BookingSummary } from "@/lib/booking";
 import { toNationalDigits, toStoredPhone, validateSaudiMobile } from "@/lib/phone";
-import { REWARDS } from "@/lib/rewards";
+import type { LoyaltyRules } from "@/lib/rewards";
 import TextInput from "@/components/TextInput";
 import {
   birthdayRange,
@@ -64,16 +64,27 @@ export default function AccountView({
   balance = 0,
   credits = [],
   history = [],
+  rules,
 }: {
   customer?: Customer;
   balance?: number;
   credits?: Credit[];
   history?: BookingSummary[];
+  /** The loyalty scheme's four numbers. Needed signed out too — the advert at
+   *  the bottom of the sign-in screen quotes the offer, and that is the whole
+   *  reason to make an account. */
+  rules: LoyaltyRules;
 }) {
   return customer ? (
-    <SignedIn customer={customer} balance={balance} credits={credits} history={history} />
+    <SignedIn
+      customer={customer}
+      balance={balance}
+      credits={credits}
+      history={history}
+      rules={rules}
+    />
   ) : (
-    <SignedOut />
+    <SignedOut rules={rules} />
   );
 }
 
@@ -101,11 +112,13 @@ function SignedIn({
   balance,
   credits,
   history,
+  rules,
 }: {
   customer: Customer;
   balance: number;
   credits: Credit[];
   history: BookingSummary[];
+  rules: LoyaltyRules;
 }) {
   const { c, lang } = useI18n();
   const a = c.account;
@@ -192,7 +205,7 @@ function SignedIn({
         <div className="mt-8 grid items-start gap-8 lg:grid-cols-[1fr_380px] lg:grid-rows-[auto_1fr]">
           {/* -- the wallet and her memberships ------------------------------ */}
           <div className="space-y-6 self-start lg:col-start-2 lg:row-start-1">
-            <Wallet balance={balance} />
+            <Wallet balance={balance} rules={rules} />
             <Memberships credits={credits} />
           </div>
 
@@ -406,144 +419,76 @@ function Memberships({ credits }: { credits: Credit[] }) {
 }
 
 /**
- * The wallet, as a ladder you can see yourself climbing.
+ * The wallet: money she already has, not a rank she has reached.
  *
- * One track from zero to the dearest rung, with a marker at each reward. The
- * markers sit at their *true* proportion of the track (100 points is a fifth of
- * the way to 500, and looks it) rather than at even thirds — even spacing would
- * flatter the numbers and make the last rung look one step away when it is
- * twice the distance of the one before.
+ * **There is deliberately no progress bar here.** Two designs were tried and
+ * both were wrong for the same reason. A track from zero to a top rung made the
+ * scheme look like tiers, and tiers would need a ceiling and would imply
+ * benefits for standing at a level. A bar filling with the points balance was
+ * worse: points are spent, so redeeming 100 of them slid the bar *backwards*
+ * and the customer was shown a demotion for using the thing she earned.
  *
- * Everything here is direction-agnostic: `insetInlineStart` rather than `left`,
- * so the bar fills right-to-left in Arabic without a second code path.
+ * Points here are a currency, so this screen is a balance — the riyal figure
+ * first and largest, because that is the part she can spend and the part that
+ * makes "spendable" obvious without a sentence explaining it. The point count is
+ * the subtitle: it is the unit, not the point.
+ *
+ * The thing worth gamifying — "24 riyals more and you earn 50 points" — is a
+ * fact about the bill in front of her, not about this balance, because accrual
+ * is per bill. It lives at checkout, where she can act on it. See the earn
+ * progress strip in app/(site)/booking/payment/page.tsx.
  */
-function Wallet({ balance }: { balance: number }) {
+function Wallet({ balance, rules }: { balance: number; rules: LoyaltyRules }) {
   const { c } = useI18n();
   const a = c.account;
 
-  const top = REWARDS.length ? REWARDS[REWARDS.length - 1].points : 0;
-  const pct = (n: number) => (top > 0 ? Math.min(100, (n / top) * 100) : 0);
-  const next = REWARDS.find((r) => r.points > balance) ?? null;
-
-  // Animate the fill up from zero on mount. The bar arriving already full is a
-  // static image; watching it climb is the whole point of showing progress.
-  // Two lines and a CSS transition — no animation library for one bar.
-  const [grown, setGrown] = useState(false);
-  useEffect(() => setGrown(true), []);
+  const { stepPoints, pointHalalas, firstSar } = rules;
+  const worthSar = (balance * pointHalalas) / 100;
+  const stepSar = (stepPoints * pointHalalas) / 100;
 
   return (
     <section className="overflow-hidden rounded-[20px] bg-white text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
       <div className="bg-gradient-to-b from-[#fbeaea] to-transparent p-6 pb-7">
         <h2 className="font-display text-lg font-extrabold text-ink">{a.walletTitle}</h2>
 
-        <p className="mt-3 font-display text-4xl font-extrabold text-red">
-          {a.walletPoints.replace("{n}", String(balance))}
-        </p>
-
-        <p className="mt-1.5 text-[12px] text-ink/55">
-          {balance === 0
-            ? a.walletEmpty
-            : next
-              ? a.nextReward
-                  .replace("{n}", String(next.points - balance))
-                  .replace("{percent}", String(next.percent))
-              : a.allUnlocked}
-        </p>
-
-        {/* the track */}
-        <div className="relative mt-7 h-2.5 rounded-full bg-black/[0.07]">
-          <div
-            className="absolute inset-y-0 rounded-full bg-red-grad transition-[width] duration-1000 ease-out"
-            style={{ insetInlineStart: 0, width: `${grown ? pct(balance) : 0}%` }}
-          />
-
-          {REWARDS.map((r) => {
-            const unlocked = balance >= r.points;
-            return (
-              <span
-                key={r.points}
-                // Nudged back by half its own width rather than translated:
-                // a -50% transform would push it the wrong way under RTL.
-                style={{ insetInlineStart: `${pct(r.points)}%`, marginInlineStart: -7 }}
-                className={`absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full border-2 transition-colors duration-500 ${
-                  unlocked ? "border-red bg-white" : "border-black/[0.12] bg-white"
-                }`}
-              >
-                {unlocked && (
-                  <span className="absolute inset-[2px] rounded-full bg-red-grad" />
-                )}
-              </span>
-            );
-          })}
-        </div>
-
-        {/* the numbers under it */}
-        <div className="relative mt-2.5 h-4">
-          {REWARDS.map((r) => (
-            <span
-              key={r.points}
-              style={{ insetInlineStart: `${pct(r.points)}%`, marginInlineStart: -20, width: 40 }}
-              className={`absolute text-center text-[11px] font-semibold tabular-nums ${
-                balance >= r.points ? "text-red" : "text-ink/35"
-              }`}
-              dir="ltr"
-            >
-              {r.points}
-            </span>
-          ))}
-        </div>
+        {balance > 0 ? (
+          <>
+            {/* The money, first and largest. A tier badge says what you are; a
+                balance in riyals says what you have. */}
+            <p className="mt-3 flex items-baseline gap-1.5 font-display text-4xl font-extrabold text-red">
+              <Riyal className="h-6 w-6 shrink-0" />
+              {worthSar}
+            </p>
+            <p className="mt-1 text-[13px] font-semibold text-ink/60">
+              {a.walletPoints.replace("{n}", String(balance))}
+            </p>
+            <p className="mt-3 inline-flex rounded-full bg-red/[0.07] px-3 py-1 text-[12px] font-semibold text-red">
+              {a.walletSpendable}
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="mt-3 font-display text-4xl font-extrabold text-ink/25">
+              {a.walletPoints.replace("{n}", "0")}
+            </p>
+            <p className="mt-1.5 text-[12px] text-ink/55">{a.walletEmpty}</p>
+          </>
+        )}
       </div>
 
-      {/* The rungs. Locked ones are shown, never hidden — a reward you can see
-          is the reason to come back, which is the whole point of the scheme. */}
+      {/* The deal, stated once. The ladder of locked rungs that used to live
+          here was three rows saying what one sentence says, and it stopped
+          being true the moment rewards became a currency rather than tiers. */}
       <div className="px-6 pb-6">
         <h3 className="text-[12px] font-semibold uppercase tracking-wider text-ink/45">
           {a.ladderTitle}
         </h3>
-        <ul className="mt-3 space-y-2">
-          {REWARDS.map((r) => {
-            const unlocked = balance >= r.points;
-            return (
-              <li
-                key={r.points}
-                className={`flex items-center justify-between gap-3 rounded-[14px] px-4 py-3 text-[13px] transition-colors ${
-                  unlocked ? "bg-[#e8f3ec] text-[#2f7a4d]" : "bg-black/[0.04] text-ink/50"
-                }`}
-              >
-                <span className="flex items-center gap-2.5 font-semibold">
-                  <span
-                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
-                      unlocked ? "bg-[#2f7a4d] text-white" : "bg-black/[0.08] text-ink/40"
-                    }`}
-                  >
-                    {unlocked ? (
-                      <svg viewBox="0 0 24 24" className="h-3 w-3" aria-hidden>
-                        <path
-                          d="M20 6L9 17l-5-5"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="3.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    ) : (
-                      <Lock className="h-2.5 w-2.5" />
-                    )}
-                  </span>
-                  {a.rewardRow
-                    .replace("{points}", String(r.points))
-                    .replace("{percent}", String(r.percent))}
-                </span>
-                <span className="shrink-0 text-[11px] font-semibold">
-                  {unlocked
-                    ? a.ladderUnlocked
-                    : a.ladderLocked.replace("{n}", String(r.points - balance))}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+        <p className="mt-2 text-[13px] text-ink/60">
+          {a.walletHowTo
+            .replace("{first}", String(firstSar))
+            .replace("{points}", String(stepPoints))
+            .replace("{sar}", String(stepSar))}
+        </p>
       </div>
     </section>
   );
@@ -855,7 +800,7 @@ function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | 
 
 type Step = "email" | "code" | "profile";
 
-function SignedOut() {
+function SignedOut({ rules }: { rules: LoyaltyRules }) {
   const { c, lang } = useI18n();
   const a = c.account;
 
@@ -1097,19 +1042,15 @@ function SignedOut() {
             <Riyal className="h-3.5 w-3.5 text-red" />
             {a.walletTitle}
           </h2>
-          <p className="mt-1 text-[12px] text-ink/50">{a.walletHowTo}</p>
-          <ul className="mt-3 grid grid-cols-3 gap-2">
-            {REWARDS.map((r) => (
-              <li key={r.points} className="rounded-[12px] bg-black/[0.04] px-2 py-2 text-center">
-                <span className="block text-sm font-extrabold text-ink" dir="ltr">
-                  {r.percent}%
-                </span>
-                <span className="block text-[11px] text-ink/50">
-                  {a.walletPoints.replace("{n}", String(r.points))}
-                </span>
-              </li>
-            ))}
-          </ul>
+          {/* One sentence, not three tiles of percentages. The tiles were the
+              old ladder and there are no rungs any more — the offer is a rate,
+              and a rate is a sentence. */}
+          <p className="mt-1 text-[13px] text-ink/60">
+            {a.walletHowTo
+              .replace("{first}", String(rules.firstSar))
+              .replace("{points}", String(rules.stepPoints))
+              .replace("{sar}", String((rules.stepPoints * rules.pointHalalas) / 100))}
+          </p>
         </section>
       </div>
 

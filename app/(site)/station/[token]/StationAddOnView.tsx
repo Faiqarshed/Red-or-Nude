@@ -51,6 +51,10 @@ type Props = {
   /** Chairs free at `startsAt` for long enough to fit something. May be empty. */
   options: StationChoice[];
   services: (CatalogItem & { description: Localized | null })[];
+  /** Empty when the chair is empty — there is no visit to bring a coffee to. */
+  treats: CatalogItem[];
+  /** The scanned sticker, which is the whole credential for buying a treat. */
+  token: string;
 };
 
 export default function StationAddOnView({
@@ -63,6 +67,8 @@ export default function StationAddOnView({
   customerName,
   options,
   services,
+  treats,
+  token: scannedToken,
 }: Props) {
   const router = useRouter();
   const { c, lang } = useI18n();
@@ -94,6 +100,45 @@ export default function StationAddOnView({
   const localDate = new Date(when.getTime() + UTC_OFFSET_HOURS * 3_600_000).toISOString();
   const timeLabel = formatTime(localDate.slice(11, 16), c.date);
   const dateLabel = formatDateLabel(localDate.slice(0, 10), lang);
+
+  // Buying a coffee for the visit she is already in — a different thing from
+  // booking the next appointment, and deliberately not routed through the
+  // checkout. She is sitting in the chair with wet nails; a two-page flow to
+  // add a drink is a flow she abandons.
+  const [treatBusy, setTreatBusy] = useState<string | null>(null);
+  const [treatAdded, setTreatAdded] = useState<string[]>([]);
+  const [treatError, setTreatError] = useState<string | null>(null);
+
+  const orderTreat = async (addonId: string) => {
+    setTreatBusy(addonId);
+    setTreatError(null);
+    try {
+      const res = await fetch("/api/station/treat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: scannedToken, addonId, method: "card" }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) {
+        const code = data?.error as string | undefined;
+        setTreatError(
+          code === "already-added"
+            ? s.treatAlready
+            : code === "not-in-service"
+              ? s.treatNotInService
+              : code === "declined"
+                ? s.treatDeclined
+                : s.treatFailed,
+        );
+        return;
+      }
+      setTreatAdded((prev) => [...prev, addonId]);
+    } catch {
+      setTreatError(s.treatFailed);
+    } finally {
+      setTreatBusy(null);
+    }
+  };
 
   const proceed = () => {
     if (!service || !station) return;
@@ -184,6 +229,66 @@ export default function StationAddOnView({
             )}
           </p>
         </div>
+
+        {/* Her visit first, the next appointment second. She scanned this to
+            ask about her chair; a coffee for the chair she is in is the nearer
+            of the two questions and the one she can answer in one tap. */}
+        {inService && treats.length > 0 && (
+          <section className="mt-8">
+            <p className="font-display text-base font-extrabold text-ink">{s.treatTitle}</p>
+            <p className="mt-1 text-[13px] text-ink/55">{s.treatNote}</p>
+
+            <div className="mt-4 grid gap-2">
+              {treats.map((t) => {
+                const added = treatAdded.includes(t.id);
+                const busy = treatBusy === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => void orderTreat(t.id)}
+                    disabled={added || treatBusy !== null}
+                    aria-busy={busy || undefined}
+                    className={`flex items-center gap-3 rounded-[16px] border p-3 text-start transition-colors ${
+                      added
+                        ? "border-[#2f7d4f]/30 bg-[#eaf5ee]"
+                        : "border-black/[0.08] bg-white hover:border-red/30 disabled:opacity-60"
+                    }`}
+                  >
+                    {t.img ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={t.img}
+                        alt=""
+                        className="h-14 w-14 shrink-0 rounded-[12px] object-cover"
+                      />
+                    ) : (
+                      <span className="h-14 w-14 shrink-0 rounded-[12px] bg-black/[0.05]" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-ink">
+                        {pick(t.name, lang)}
+                      </span>
+                      <span className="flex items-center gap-1 text-[13px] text-ink/55">
+                        <Riyal className="h-3 w-3" />
+                        {t.price}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-[13px] font-semibold text-red">
+                      {added ? s.treatAdded : busy ? s.treatSending : s.treatOrder}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {treatError && (
+              <p role="alert" className="mt-2 text-[12px] text-red">
+                {treatError}
+              </p>
+            )}
+          </section>
+        )}
 
         {options.length === 0 ? (
           <Link

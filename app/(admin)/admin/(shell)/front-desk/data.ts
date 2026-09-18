@@ -5,10 +5,9 @@
 // bounded the same way.
 
 import "server-only";
-import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
-  bookingAddons,
   bookings,
   branches,
   customers,
@@ -24,6 +23,7 @@ import { sweepNoShows } from "@/lib/bookings";
 import { getSettings } from "@/lib/settings";
 import { halalasToSar } from "@/lib/money";
 import { mediaUrl } from "@/lib/storage";
+import { addonLinesFor, NO_LINES, type Treat } from "@/lib/admin/addon-lines";
 import type { BookingStatus } from "../bookings/BookingsView";
 import { partnersElsewhere, type PartnerElsewhere } from "../bookings/partners";
 
@@ -64,6 +64,8 @@ export type FrontDeskRow = {
   finishedAt: string | null;
   serviceName: Localized | null;
   addons: Localized[];
+  /** Coffee and treats, kept apart so the desk can see what to bring. */
+  treats: Treat[];
   /** What the service is *meant* to take, for the running timer to sit against. */
   durationMin: number | null;
   stationId: string | null;
@@ -199,30 +201,11 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
     offOn(),
   ]);
 
-  const [elsewhere, [branch]] = await Promise.all([
+  const [elsewhere, [branch], lines] = await Promise.all([
     partnersElsewhere(branchId, rows),
     db.select({ name: branches.name }).from(branches).where(eq(branches.id, branchId)).limit(1),
+    addonLinesFor(rows.map((r) => r.id)),
   ]);
-
-  // One extra query rather than a join: joining add-ons would fan each booking
-  // into a row per add-on, and re-collapsing them is more code than this.
-  const addonRows = rows.length
-    ? await db
-        .select({ bookingId: bookingAddons.bookingId, name: bookingAddons.name })
-        .from(bookingAddons)
-        .where(
-          inArray(
-            bookingAddons.bookingId,
-            rows.map((r) => r.id),
-          ),
-        )
-    : [];
-
-  const addonsFor = new Map<string, Localized[]>();
-  for (const a of addonRows) {
-    if (!a.name) continue;
-    addonsFor.set(a.bookingId, [...(addonsFor.get(a.bookingId) ?? []), a.name]);
-  }
 
   // Counted here rather than in four more round trips: the day's rows are
   // already in memory and a salon books tens of appointments a day, not
@@ -248,7 +231,7 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
       checkedInAt: r.checkedInAt?.toISOString() ?? null,
       startedAt: r.startedAt?.toISOString() ?? null,
       finishedAt: r.finishedAt?.toISOString() ?? null,
-      addons: addonsFor.get(r.id) ?? [],
+      ...(lines.get(r.id) ?? NO_LINES),
       totalSar: halalasToSar(totalHalalas),
       // Destructured out above rather than spread through: the two raw storage
       // keys are a server detail, and the client only ever needs the resolved

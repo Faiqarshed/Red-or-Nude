@@ -1,4 +1,4 @@
-// Loyalty maths, the reward ladder, and — above all — the rule that gives
+// Loyalty maths, the milestone rule, and — above all — the rule that gives
 // points back (brief §2.8).
 //
 //   npm run check:loyalty
@@ -20,13 +20,16 @@ import "./_test-db";
 
 import assert from "node:assert";
 import {
-  REWARDS,
+  milestonesReached,
   pointsEarned,
+  pointsValue,
+  redeemable,
   rewardDiscount,
-  rewardFor,
   rewardRefusal,
   spendableBalance,
+  toNextMilestone,
   type LedgerRow,
+  type LoyaltyRules,
 } from "@/lib/rewards";
 
 const HOLD_MIN = 15; // matches SETTING_DEFAULTS.booking_hold_min
@@ -34,102 +37,100 @@ const NOW = new Date("2026-09-23T12:00:00.000Z");
 
 const minsAgo = (n: number) => new Date(NOW.getTime() - n * 60_000);
 
-// -- earning -----------------------------------------------------------------
+// -- the scheme's own numbers -------------------------------------------------
 //
-// `sarPerPoint` is a DIVISOR: how many riyals buy one point. Five is the
-// default. See SETTING_DEFAULTS.loyalty_sar_per_point for why it is not a
-// fractional multiplier.
+// Matching SETTING_DEFAULTS, so every assertion below reads as the rule the
+// salon actually stated: spend 199, get 50 points, worth 10 riyals; 50 more
+// every 200 after that.
 
-assert.strictEqual(pointsEarned(15000, 5), 30, "150 SAR at 1 point per 5 SAR earns 30");
-assert.strictEqual(pointsEarned(15000, 1), 150, "a divisor of 1 is a point per riyal");
-assert.strictEqual(pointsEarned(15000, 10), 15, "a bigger divisor is stingier");
-assert.strictEqual(pointsEarned(0, 5), 0, "a free booking earns nothing");
-assert.strictEqual(pointsEarned(-100, 5), 0, "a negative total cannot earn");
-assert.strictEqual(pointsEarned(10000, 0), 0, "a zero divisor earns nothing, and does not divide by zero");
+const RULES: LoyaltyRules = {
+  firstSar: 199,
+  stepSar: 200,
+  stepPoints: 50,
+  pointHalalas: 20,
+};
 
-// Floored, never rounded. A part-riyal must not mint a point — points are
-// money, and rounding up is a mint anyone can run by splitting a bill.
-assert.strictEqual(pointsEarned(499, 5), 0, "4.99 SAR earns nothing at 5 SAR a point");
-assert.strictEqual(pointsEarned(500, 5), 1, "5.00 SAR earns exactly one");
-assert.strictEqual(pointsEarned(999, 5), 1, "9.99 SAR still earns one");
-assert.strictEqual(pointsEarned(1000, 5), 2, "10.00 SAR earns two");
+const sar = (n: number) => Math.round(n * 100);
 
-// **Points are never fractional.** The column is an integer, the balance is an
-// integer and the screen shows an integer; a fraction here would be rounded
-// into or out of existence somewhere downstream. Swept over a wide range of
-// bills and divisors so a future change to the formula cannot reintroduce one.
-for (let halalas = 0; halalas <= 200_00; halalas += 37) {
-  for (const divisor of [1, 2, 3, 5, 7, 10, 25]) {
-    const earned = pointsEarned(halalas, divisor);
-    assert.ok(
-      Number.isInteger(earned) && earned >= 0,
-      `pointsEarned(${halalas}, ${divisor}) must be a whole non-negative number, got ${earned}`,
-    );
-  }
+// -- earning ------------------------------------------------------------------
+//
+// Milestones, not a rate. A bill between two thresholds earns what the lower
+// one earned — which is the client's own example: 350 riyals is still 50
+// points, because it has not reached 399.
+
+assert.strictEqual(pointsEarned(sar(199), RULES), 50, "199 SAR earns the first 50");
+assert.strictEqual(pointsEarned(sar(350), RULES), 50, "350 SAR has not reached 399, so still 50");
+assert.strictEqual(pointsEarned(sar(399), RULES), 100, "399 SAR reaches the second milestone");
+assert.strictEqual(pointsEarned(sar(599), RULES), 150, "and every 200 after that");
+
+// The boundaries, to the halala.
+assert.strictEqual(pointsEarned(sar(198.99), RULES), 0, "a halala short of 199 earns nothing");
+assert.strictEqual(pointsEarned(sar(199) - 1, RULES), 0, "still nothing one halala below");
+assert.strictEqual(pointsEarned(sar(398.99), RULES), 50, "a halala short of 399 is still one award");
+assert.strictEqual(pointsEarned(sar(399) - 1, RULES), 50, "the threshold is exact");
+
+assert.strictEqual(pointsEarned(0, RULES), 0, "a free booking earns nothing");
+assert.strictEqual(pointsEarned(-100, RULES), 0, "a negative total cannot earn");
+assert.strictEqual(milestonesReached(sar(1000), RULES), 5, "1000 SAR is five milestones");
+
+// A zeroed setting must not divide by zero or mint infinite points.
+assert.strictEqual(pointsEarned(sar(500), { ...RULES, stepSar: 0 }), 0, "a zero step earns nothing");
+assert.strictEqual(pointsEarned(sar(500), { ...RULES, firstSar: 0 }), 0, "a zero first earns nothing");
+
+// Whole and non-negative, always — points are an integer column.
+for (const amount of [0, 1, 99, sar(198.99), sar(199), sar(1234.56), 9_999_999]) {
+  const earnedPoints = pointsEarned(amount, RULES);
+  assert.ok(
+    Number.isInteger(earnedPoints) && earnedPoints >= 0,
+    `pointsEarned(${amount}) must be a whole non-negative number, got ${earnedPoints}`,
+  );
 }
 
-// -- the ladder --------------------------------------------------------------
+// -- how far to the next one --------------------------------------------------
+//
+// The line on the account page. A new customer must be told a target rather
+// than shown a bar at zero with nothing to reach.
 
+assert.strictEqual(toNextMilestone(0, RULES), sar(199), "from nothing, the first is 199 away");
+assert.strictEqual(toNextMilestone(sar(100), RULES), sar(99), "99 riyals to go at 100 spent");
+assert.strictEqual(toNextMilestone(sar(199), RULES), sar(200), "on a threshold, the next is a full step");
+assert.strictEqual(toNextMilestone(sar(350), RULES), sar(49), "49 riyals from 399");
+
+// -- spending -----------------------------------------------------------------
+//
+// rewardRefusal is the function the checkout and the booking write both call,
+// so a rule asserted here is a rule enforced in both places.
+
+assert.strictEqual(pointsValue(50, RULES), sar(10), "50 points is 10 riyals");
+assert.strictEqual(pointsValue(0, RULES), 0, "no points are worth nothing");
+assert.strictEqual(pointsValue(-50, RULES), 0, "a negative cannot be worth anything");
+
+assert.strictEqual(rewardRefusal(50, 50, RULES), null, "exactly enough is enough");
+assert.strictEqual(rewardRefusal(50, 49, RULES), "locked", "one point short is refused");
+assert.strictEqual(rewardRefusal(37, 9999, RULES), "unknown", "not a whole step");
+assert.strictEqual(rewardRefusal(0, 9999, RULES), "unknown", "zero is not an amount");
+assert.strictEqual(rewardRefusal(-50, 9999, RULES), "unknown", "a negative amount is refused");
+assert.strictEqual(rewardRefusal(50.5, 9999, RULES), "unknown", "a fraction of a point is refused");
+
+// -- the discount, and its cap ------------------------------------------------
+
+assert.strictEqual(rewardDiscount(50, sar(200), RULES), sar(10), "50 points takes 10 riyals off");
+assert.strictEqual(rewardDiscount(100, sar(200), RULES), sar(20), "100 points takes 20 off");
+assert.strictEqual(rewardDiscount(50, 0, RULES), 0, "nothing off nothing");
+assert.strictEqual(rewardDiscount(50, -500, RULES), 0, "a negative bill discounts nothing");
+// A reward larger than the bill must never hand back money that was never taken.
+assert.strictEqual(rewardDiscount(100, sar(5), RULES), sar(5), "a discount is capped at the bill");
+
+// -- what the checkout offers -------------------------------------------------
+
+assert.deepStrictEqual(redeemable(49, sar(500), RULES), [], "below one step, nothing is offered");
+assert.deepStrictEqual(redeemable(500, 0, RULES), [], "no bill, nothing to spend against");
+assert.deepStrictEqual(redeemable(100, sar(500), RULES), [50, 100], "bounded by the balance");
 assert.deepStrictEqual(
-  REWARDS.map((r) => r.points),
-  [100, 200, 300],
-  "the rungs are 100 / 200 / 300",
+  redeemable(500, sar(10), RULES),
+  [50],
+  "and by the bill — offering more would burn reward for no extra discount",
 );
-assert.ok(
-  REWARDS.every((r, i) => i === 0 || r.points > REWARDS[i - 1].points),
-  "rungs ascend, so unlockedRewards can be read as a ladder",
-);
-assert.ok(
-  REWARDS.every((r, i) => i === 0 || r.percent > REWARDS[i - 1].percent),
-  "a dearer rung is always worth more, or nobody would ever buy it",
-);
-
-// Climbing must never be the losing move. Value per point is percent ÷ points;
-// if that falls as the rungs rise, a customer who saves up is worse off than one
-// who spends at the bottom rung repeatedly. The first cut of this ladder
-// (100/250/500) failed exactly here.
-const valuePerPoint = REWARDS.map((r) => r.percent / r.points);
-assert.ok(
-  valuePerPoint.every((v, i) => i === 0 || v >= valuePerPoint[i - 1] - 1e-9),
-  `value per point must not fall as rungs rise, got ${valuePerPoint.join(", ")}`,
-);
-
-// Whole points only, on the ladder as well as in the earning.
-assert.ok(
-  REWARDS.every((r) => Number.isInteger(r.points) && Number.isInteger(r.percent)),
-  "a rung costs a whole number of points and gives a whole percentage",
-);
-
-assert.strictEqual(rewardFor(200)?.percent, 10, "200 points is 10% off");
-assert.strictEqual(rewardFor(250), null, "a value between rungs is not a rung");
-assert.strictEqual(rewardFor(0), null, "zero is not a rung");
-
-// Unlock boundaries, on both sides of every rung. Asserted through
-// rewardRefusal because that is the function the checkout and the booking write
-// both call — a boundary proved on anything else proves nothing about them.
-assert.strictEqual(rewardRefusal(100, 99), "locked", "one point short is refused");
-assert.strictEqual(rewardRefusal(100, 100), null, "exactly enough is enough");
-assert.strictEqual(rewardRefusal(200, 199), "locked", "199 cannot reach the second rung");
-assert.strictEqual(rewardRefusal(200, 200), null, "200 can");
-assert.strictEqual(rewardRefusal(300, 299), "locked", "299 cannot reach the top");
-assert.strictEqual(rewardRefusal(300, 9999), null, "a big balance reaches everything");
-assert.strictEqual(rewardRefusal(150, 9999), "unknown", "a rung that doesn't exist is refused");
-assert.strictEqual(rewardRefusal(-100, 9999), "unknown", "a negative rung is refused");
-
-// -- what a rung takes off ---------------------------------------------------
-
-const ten = rewardFor(200)!;
-assert.strictEqual(rewardDiscount(ten, 20000), 2000, "10% of 200 SAR is 20 SAR");
-assert.strictEqual(rewardDiscount(ten, 0), 0, "nothing off nothing");
-assert.strictEqual(rewardDiscount(ten, -500), 0, "a negative bill discounts nothing");
-
-// Capped at the bill. A discount bigger than the total is a refund, and a
-// reward must never hand out money that was never taken.
-const huge: { points: number; percent: number } = { points: 1, percent: 500 };
-assert.strictEqual(rewardDiscount(huge, 5000), 5000, "a discount is capped at the bill");
-
-// Rounding is to the halala and never exceeds the cap.
-assert.strictEqual(rewardDiscount(ten, 333), 33, "10% of 3.33 SAR rounds to 33 halalas");
 
 // -- the balance, and every way a booking can die ----------------------------
 //
@@ -228,18 +229,18 @@ assert.strictEqual(spendableBalance([], HOLD_MIN, NOW), 0, "no ledger is a zero 
 
 // -- the whole story, end to end ---------------------------------------------
 //
-// Earn 300 across past visits. Spend 200 on the 10%-off rung for a new booking.
+// Earn 300 across past visits. Spend 200 — 40 riyals off — on a new booking.
 // Card declines, customer walks. Twenty minutes later they are back where they
-// started, with every rung available again.
+// started, with all 300 spendable again.
 const story: LedgerRow[] = [
   earned(300, "completed"),
   earned(-200, "pending", minsAgo(20)),
 ];
 assert.strictEqual(spendableBalance(story, HOLD_MIN, NOW), 300, "a declined payment costs nothing");
 assert.strictEqual(
-  rewardRefusal(300, spendableBalance(story, HOLD_MIN, NOW)),
+  rewardRefusal(300, spendableBalance(story, HOLD_MIN, NOW), RULES),
   null,
-  "and the top rung is affordable again",
+  "and the whole balance is spendable again",
 );
 
 console.log("check:loyalty — all assertions passed");

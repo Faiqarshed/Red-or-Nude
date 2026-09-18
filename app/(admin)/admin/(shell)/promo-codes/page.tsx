@@ -2,7 +2,7 @@
 // salon runs next. The customer side is the field on /booking/payment; this is
 // where the codes come from.
 
-import { desc } from "drizzle-orm";
+import { desc, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { promoCodes } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
@@ -14,7 +14,15 @@ export const dynamic = "force-dynamic";
 export default async function PromoCodesPage() {
   await requirePage("marketing.manage");
 
-  const rows = await db.select().from(promoCodes).orderBy(desc(promoCodes.createdAt));
+  // Campaign codes only. A staff member's code is a `promo_codes` row too, but
+  // it is hers rather than the salon's — it renews itself every month and is
+  // read out by one person — so it lives on /admin/staff beside her name. Two
+  // lists, because they are answers to two different questions.
+  const rows = await db
+    .select()
+    .from(promoCodes)
+    .where(isNull(promoCodes.staffId))
+    .orderBy(desc(promoCodes.createdAt));
   const now = new Date();
 
   return (

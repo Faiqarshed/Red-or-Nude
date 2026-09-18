@@ -5,10 +5,9 @@
 // keeps them out of the reviews screen.
 
 import "server-only";
-import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
-  bookingAddons,
   bookings,
   customers,
   designs,
@@ -18,6 +17,7 @@ import {
 } from "@/lib/db/schema";
 import { riyadhDateKey, riyadhDayRange } from "@/lib/time";
 import { mediaUrl } from "@/lib/storage";
+import { addonLinesFor, NO_LINES, type Treat } from "@/lib/admin/addon-lines";
 import { performedFilter, periodRange, type PeriodKey } from "@/lib/performance";
 
 export type MyDayBooking = {
@@ -29,7 +29,17 @@ export type MyDayBooking = {
   finishedAt: string | null;
   serviceName: Localized | null;
   designName: Localized | null;
+  /** Nail work bought alongside the service. Pills, as before. */
   addons: Localized[];
+  /**
+   * Coffee and treats, kept apart from the add-ons above.
+   *
+   * The salon's actual complaint: she is the one who fetches these, and until
+   * now they arrived in the same grey row as the nail add-ons with nothing to
+   * say one was a drink. A technician reading "gel removal, hot coffee" as one
+   * list has to know the catalogue to tell which is which.
+   */
+  treats: Treat[];
   stationLabel: string | null;
   /** First name only — all a technician needs to greet her by. */
   customerName: string | null;
@@ -44,6 +54,8 @@ export type MyDayBooking = {
    */
   imageUrl: string | null;
 };
+
+export type { Treat };
 
 /** One service she has already done, for the 7- and 30-day views. */
 export type MyPastService = {
@@ -159,25 +171,9 @@ export async function loadMyDay(technicianId: string): Promise<MyDayBooking[]> {
 
   if (rows.length === 0) return [];
 
-  // One extra query rather than a join: joining add-ons would fan each booking
-  // into a row per add-on, and re-collapsing them is more code than this.
-  const addonRows = await db
-    .select({ bookingId: bookingAddons.bookingId, name: bookingAddons.name })
-    .from(bookingAddons)
-    .where(
-      inArray(
-        bookingAddons.bookingId,
-        rows.map((r) => r.id),
-      ),
-    );
-
-  const addonsFor = new Map<string, Localized[]>();
-  for (const a of addonRows) {
-    if (!a.name) continue;
-    const list = addonsFor.get(a.bookingId) ?? [];
-    list.push(a.name);
-    addonsFor.set(a.bookingId, list);
-  }
+  // A separate query: joining add-ons onto `bookings` would fan each booking
+  // into a row per add-on. The shared loader selects no price — see the header.
+  const lines = await addonLinesFor(rows.map((r) => r.id));
 
   return rows.map((r) => ({
     id: r.id,
@@ -188,7 +184,7 @@ export async function loadMyDay(technicianId: string): Promise<MyDayBooking[]> {
     finishedAt: r.finishedAt?.toISOString() ?? null,
     serviceName: r.serviceName,
     designName: r.designName,
-    addons: addonsFor.get(r.id) ?? [],
+    ...(lines.get(r.id) ?? NO_LINES),
     stationLabel: r.stationLabel,
     customerName: r.customerName?.trim().split(/\s+/)[0] ?? null,
     notes: r.notes,

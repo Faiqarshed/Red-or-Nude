@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { ChevronLeft, ChevronRight, UserX } from "lucide-react";
 import { Badge, BranchFilter, Button, Card, EmptyState, PageHeader, tabItem, tabTone} from "@/components/admin/ui";
 import { Dialog } from "@/components/admin/overlays";
@@ -11,6 +11,7 @@ import TextField from "@/components/admin/TextField";
 import { checkNote, NO_SHOW_NOTE_MAX, NOTES_TEXT } from "@/lib/admin/validate";
 import RescheduleDialog from "../bookings/RescheduleDialog";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { pick } from "@/lib/localized";
 import { localTime, riyadhDateKey } from "@/lib/time";
 import { cn } from "@/lib/cn";
@@ -61,7 +62,7 @@ export default function NoShowsView({
   const b = t.bookings;
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
-  const [, startTransition] = useTransition();
+  const { run: refreshAfter } = usePendingAction();
 
   // Resolving asks a question before it does anything: there are two honest
   // answers to a missed appointment, and one button used to pick one silently.
@@ -100,13 +101,15 @@ export default function NoShowsView({
     if (checkNote(t.validation, b.noShowReasonLabel, reason, { max: NO_SHOW_NOTE_MAX })) return;
     setBusy(chosen.id);
     setResolveError(null);
-    startTransition(async () => {
+    refreshAfter(async () => {
       const res = await resolveNoShow({ id: chosen.id, note: reason.trim() });
       setBusy(null);
       // A refusal used to close the dialog as if it had worked.
-      if (!res.ok) return setResolveError(t.common.error);
+      if (!res.ok) {
+        setResolveError(t.common.error);
+        return false;
+      }
       closeResolve();
-      router.refresh();
     });
   };
 

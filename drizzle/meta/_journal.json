@@ -162,6 +162,34 @@
       "when": 1789478103465,
       "tag": "0022_customers_guest_phone_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789737303465,
+      "tag": "0023_hot_and_cold_treats",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789823703465,
+      "tag": "0024_treat_top_up_payments",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1789910103465,
+      "tag": "0025_one_active_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789996503465,
+      "tag": "0026_staff_codes_not_names",
+      "breakpoints": true
     }
   ]
 }

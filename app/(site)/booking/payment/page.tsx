@@ -21,7 +21,12 @@ import {
 } from "@/lib/booking";
 import { isValidSaudiMobile, toNationalDigits, toStoredPhone } from "@/lib/phone";
 import { pick } from "@/lib/localized";
-import { REWARDS } from "@/lib/rewards";
+import {
+  pointsEarned,
+  redeemable,
+  toNextMilestone,
+  type LoyaltyRules,
+} from "@/lib/rewards";
 
 // Figma: Desktop-2 payment step (276:1902 / 276:6624) + success modal (276:6765).
 //
@@ -87,6 +92,8 @@ export default function PaymentPage() {
    */
   /** The balance, or null when signed out — which is when the picker is hidden. */
   const [balance, setBalance] = useState<number | null>(null);
+  /** The scheme's four numbers, from /api/loyalty/quote — see lib/rewards.ts. */
+  const [rules, setRules] = useState<LoyaltyRules | null>(null);
   /** Null until the session has answered. True once her details are her own. */
   const [signedIn, setSignedIn] = useState(false);
   const [redeemPoints, setRedeemPoints] = useState<number | null>(null);
@@ -151,13 +158,21 @@ export default function PaymentPage() {
       });
   }, []);
 
-  // The ladder and the balance. Signed out this comes back with `signedIn:
+  // The rules and the balance. Signed out this comes back with `signedIn:
   // false` and the picker simply never renders — an account is optional, and a
   // guest checkout must not grow a sign-in wall (brief §2.8).
+  //
+  // The rules come back either way: they are the salon's offer, not the
+  // customer's data, and they used to be a module constant imported straight
+  // into this file. They moved into `settings` so the salon can retune them
+  // without a deploy, so now they arrive over the wire — but the functions that
+  // price them are still imported from lib/rewards.ts, which is what keeps this
+  // screen and the booking write computing the same figure.
   useEffect(() => {
     void fetch("/api/loyalty/quote")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
+        if (d?.rules) setRules(d.rules);
         if (d?.signedIn) setBalance(d.balance);
       })
       .catch(() => {
@@ -240,11 +255,15 @@ export default function PaymentPage() {
    * The appointment itself is already paid for — by a membership credit.
    *
    * Distinct from `nothingToPay`, which a coffee undoes. This is about the bill
-   * the discounts apply to: a promo code and a loyalty rung are both percentages
-   * of a service line that is already zero, so offering them is offering the
-   * customer a choice between nothing and nothing. Treats sit outside the
-   * discount stack entirely (see treatsTotal), so adding one brings the card
-   * form back without bringing these back.
+   * the discounts apply to: with the service line already at zero there is
+   * nothing for a promo code to take a percentage of and nothing for points to
+   * come off, so offering either is offering the customer a choice between
+   * nothing and nothing. (Points are a fixed riyal amount now rather than a
+   * percentage, and rewardDiscount caps them at the bill — so spending them
+   * here would burn the balance for no discount at all, which is worse than
+   * offering nothing.) Treats sit outside the discount stack entirely (see
+   * treatsTotal), so adding one brings the card form back without bringing
+   * these back.
    */
   const fullyCovered = booking.total <= 0;
 
@@ -356,8 +375,10 @@ export default function PaymentPage() {
     }
   };
 
-  /** The percentage of the picked rung. Read off the ladder, never stored. */
-  const redeemPercent = redeemPoints ? (REWARDS.find((r) => r.points === redeemPoints)?.percent ?? 0) : 0;
+  // What the picked reward is worth, in riyals. Derived from the discount the
+  // server quoted rather than recomputed here, so a reward capped by a small
+  // bill reads as what actually came off it.
+  const redeemValueSar = redeemDiscountSar;
 
   const rewardReasonText = (reason: string): string => {
     const e = a.redeemErrors;
@@ -581,6 +602,76 @@ export default function PaymentPage() {
             </>
           )}
 
+          {/* What this booking EARNS, as against what it can spend.
+              
+              The gamified half of the scheme, and it lives here rather than on
+              /account because accrual is per bill: "add 24 riyals and you earn
+              50 points" is a fact about the basket in front of her, and this is
+              the only screen where she can act on it. The account page shows a
+              balance, because that is all a balance can honestly show.
+              
+              Shown to guests too — it is the reason to make an account, and the
+              one place the offer is worth stating is where the money is. */}
+          {rules !== null && payableTotal > 0 && (() => {
+            const paidHalalas = Math.round(payableTotal * 100);
+            const earned = pointsEarned(paidHalalas, rules);
+            const gapHalalas = toNextMilestone(paidHalalas, rules);
+            const gapSar = gapHalalas / 100;
+            const stepValueSar = (rules.stepPoints * rules.pointHalalas) / 100;
+            const earnedValueSar = (earned * rules.pointHalalas) / 100;
+            // How far through the current span she is, as a bar. Unlike a tier
+            // track this only ever measures the bill on screen, so it cannot
+            // slide backwards when she spends the points it earned her.
+            //
+            // The span is the FIRST milestone until one is reached and a step
+            // after that — 199 then 200 — because the first award is nearer
+            // than the ones that follow, and a bar measured against 200
+            // throughout would understate how close a new customer is.
+            const spanHalalas = (earned === 0 ? rules.firstSar : rules.stepSar) * 100;
+            const pct = Math.max(
+              2,
+              Math.min(100, Math.round(((spanHalalas - gapHalalas) / spanHalalas) * 100)),
+            );
+
+            return (
+              <section className="rounded-[20px] bg-white p-5 text-start ring-1 ring-black/[0.04]">
+                <span className="font-display text-base font-extrabold text-ink">{a.earnTitle}</span>
+
+                <div className="relative mt-3.5 h-2.5 rounded-full bg-black/[0.07]">
+                  <div
+                    className="absolute inset-y-0 rounded-full bg-red-grad transition-[width] duration-700 ease-out"
+                    style={{ insetInlineStart: 0, width: `${pct}%` }}
+                  />
+                </div>
+
+                <p className="mt-2.5 text-[13px] font-semibold text-ink">
+                  {earned > 0
+                    ? a.earnReached
+                        .replace("{points}", String(earned))
+                        .replace("{value}", String(earnedValueSar))
+                    : a.earnAlmost
+                        .replace("{sar}", String(gapSar))
+                        .replace("{points}", String(rules.stepPoints))
+                        .replace("{value}", String(stepValueSar))}
+                </p>
+
+                {/* Already over a milestone: name the next one too, so a bill
+                    sitting just under the following threshold still says so. */}
+                {earned > 0 && (
+                  <p className="mt-1 text-[12px] text-ink/55">
+                    {a.earnMore
+                      .replace("{sar}", String(gapSar))
+                      .replace("{points}", String(rules.stepPoints))}
+                  </p>
+                )}
+
+                {/* Currency, not status. Said plainly because the bar above is
+                    the shape people read as a tier. */}
+                <p className="mt-2.5 text-[11px] text-ink/45">{a.earnNote}</p>
+              </section>
+            );
+          })()}
+
           {/* The loyalty ladder (brief §2.8), beside how she is paying rather
               than in the summary: it is a way of paying, and three locked rows
               made the summary column twice the length of this one.
@@ -600,8 +691,15 @@ export default function PaymentPage() {
               cleared, for the reason the promo field is: there is nothing left
               to take a percentage of. */}
           {(() => {
-            if (balance === null || fullyCovered) return null;
-            const affordable = REWARDS.filter((r) => balance >= r.points);
+            if (balance === null || rules === null || fullyCovered) return null;
+            // Bounded by the bill as well as the balance: offering 150 points
+            // against a 20 riyal bill is offering to burn 30 riyals of reward
+            // for 20 riyals off.
+            const affordable = redeemable(
+              balance,
+              Math.round((booking.total - promoDiscountSar) * 100),
+              rules,
+            );
             if (affordable.length === 0 && !redeemError) return null;
             return (
               <section className="rounded-[20px] bg-white p-5 text-start ring-1 ring-black/[0.04]">
@@ -613,11 +711,11 @@ export default function PaymentPage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  {affordable.map((r) => {
-                    const picked = redeemPoints === r.points;
+                  {affordable.map((points) => {
+                    const picked = redeemPoints === points;
                     return (
                       <label
-                        key={r.points}
+                        key={points}
                         className={`flex cursor-pointer items-center gap-2.5 rounded-[12px] border px-4 py-3 text-[13px] ${
                           picked
                             ? "border-red/40 bg-red/[0.04] text-red"
@@ -628,13 +726,13 @@ export default function PaymentPage() {
                           type="radio"
                           name="reward"
                           checked={picked}
-                          onChange={() => void pickReward(r.points)}
+                          onChange={() => void pickReward(points)}
                           className="accent-red"
                         />
                         <span className="font-semibold">
                           {a.rewardRow
-                            .replace("{points}", String(r.points))
-                            .replace("{percent}", String(r.percent))}
+                            .replace("{points}", String(points))
+                            .replace("{sar}", String((points * rules.pointHalalas) / 100))}
                         </span>
                       </label>
                     );
@@ -950,7 +1048,7 @@ export default function PaymentPage() {
                       </span>
                       <span>
                         {a.redeemApplied
-                          .replace("{percent}", String(redeemPercent))
+                          .replace("{sar}", String(redeemValueSar))
                           .replace("{points}", String(redeemPoints ?? 0))}
                       </span>
                     </div>
@@ -1029,7 +1127,7 @@ export default function PaymentPage() {
           tickets={tickets}
           booking={booking}
           method={method}
-          onClose={() => router.push("/")}
+          onClose={() => router.replace("/")}
         />
       )}
     </main>
@@ -1059,9 +1157,29 @@ function SuccessModal({
   const { c, lang } = useI18n();
   const p = c.payment;
 
+  // Nothing to hunt for. The booking is paid and this screen has no decision
+  // left on it, so anywhere outside the card leaves, and so does Escape — both
+  // land on the home page rather than on the checkout she has just finished.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm">
-      <div className="w-full max-w-[460px] rounded-[24px] bg-white p-8 text-center shadow-[0_40px_100px_rgba(0,0,0,0.25)]">
+    <div
+      role="presentation"
+      onClick={onClose}
+      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-[460px] rounded-[24px] bg-white p-8 text-center shadow-[0_40px_100px_rgba(0,0,0,0.25)]"
+      >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/pay/success-check.webp" alt="" className="mx-auto mb-5 h-20 w-20" />
         <h3 className="font-display text-2xl font-extrabold text-ink">{p.successTitle}</h3>
@@ -1128,6 +1246,7 @@ function SuccessModal({
         <div className="mt-6 flex gap-3">
           <Link
             href="/booking"
+            replace
             className="flex-1 rounded-[12px] bg-black/[0.05] py-3.5 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
           >
             {p.newBooking}

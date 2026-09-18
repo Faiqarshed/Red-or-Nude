@@ -7,7 +7,7 @@ import "server-only";
 // exported from there would be published as an endpoint taking a table handle,
 // which is neither serialisable nor anybody's business.
 
-import { asc, eq, type SQL } from "drizzle-orm";
+import { asc, inArray, sql, type SQL } from "drizzle-orm";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import { db } from "@/lib/db";
 
@@ -49,11 +49,29 @@ export async function reorderBySort(
   const reordered = [...rows];
   [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
 
-  await db.transaction(async (tx) => {
-    for (const [position, row] of reordered.entries()) {
-      await tx.update(table).set({ sort: position }).where(eq(table.id, row.id));
-    }
-  });
+  // One statement, not one per row.
+  //
+  // This was a loop of `await tx.update(...)` inside a transaction — a separate
+  // round trip per catalogue row, every time somebody clicked an arrow. On a
+  // list of twenty that is twenty sequential crossings to a database in another
+  // region before the button comes back, which is exactly the kind of "the
+  // buttons are slow" the salon reported. A single CASE rewrites the column in
+  // one crossing, and drops the transaction with it: one statement is already
+  // atomic.
+  const ids = reordered.map((r) => r.id as string);
+  const cases = sql.join(
+    reordered.map((row, position) => sql`when ${table.id} = ${row.id} then ${position}`),
+    sql` `,
+  );
+
+  // The `::int` is load-bearing. Every `then` is a bind parameter with no
+  // declared type, so Postgres resolves the whole CASE as `text` and refuses the
+  // assignment with "column sort is of type integer but expression is of type
+  // text". tests/reorder.test.ts is what caught it.
+  await db
+    .update(table)
+    .set({ sort: sql`(case ${cases} end)::int` })
+    .where(inArray(table.id, ids));
 
   return { from: index, to: target };
 }

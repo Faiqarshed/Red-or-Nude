@@ -12,7 +12,9 @@ import {
   services,
   staff,
   stations,
+  type Localized,
 } from "@/lib/db/schema";
+import { addonLineQuery, NO_LINES, splitAddonLines } from "@/lib/admin/addon-lines";
 import { mediaUrl } from "@/lib/storage";
 import { getSettings } from "@/lib/settings";
 import { requirePage } from "@/lib/auth/guard";
@@ -25,6 +27,14 @@ import BookingsView, { type BookingRow } from "./BookingsView";
 import { partnersElsewhere } from "./partners";
 
 export const dynamic = "force-dynamic";
+
+/** Any priced catalogue row, as the walk-in drawer offers it. */
+const toOption = (r: { id: string; name: Localized; priceHalalas: number; durationMin: number }) => ({
+  id: r.id,
+  name: r.name,
+  priceSar: halalasToSar(r.priceHalalas),
+  durationMin: r.durationMin,
+});
 
 export default async function BookingsPage({
   searchParams,
@@ -47,19 +57,32 @@ export default async function BookingsPage({
     : utcToLocalDate(riyadhDayRange().start);
 
   if (!branchId) {
-    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} catalog={{ services: [], addons: [], removals: [] }} canManage={false} canSetStatus={false} canReschedule={false} canDelete={false} checkinEarlyMin={0} branchId="" />;
+    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} catalog={{ services: [], addons: [], treats: [], removals: [] }} canManage={false} canSetStatus={false} canReschedule={false} canDelete={false} checkinEarlyMin={0} branchId="" />;
   }
 
   // Release chairs nobody checked in to, before reading the day back — otherwise
   // the receptionist is looking at a grid that still shows them as occupied.
   await sweepNoShows(branchId);
 
-  const { checkin_early_min: checkinEarlyMin } = await getSettings(["checkin_early_min"]);
-
   const dayStart = localToUtc(date, "00:00");
   const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
 
-  const [stationRows, rows, [noShowCount], addonLinks, serviceRows, addonRows, removalRows] = await Promise.all([
+  // `getSettings` joins the batch below rather than sitting on its own `await`
+  // above it. It depends on nothing here, so as a separate statement it was a
+  // whole extra sequential round trip to a database in another region before
+  // the first row of the day was even asked for — one of five waves this page
+  // used to run through before it could render.
+  const [
+    { checkin_early_min: checkinEarlyMin },
+    stationRows,
+    rows,
+    [noShowCount],
+    addonLinks,
+    serviceRows,
+    addonRows,
+    removalRows,
+  ] = await Promise.all([
+    getSettings(["checkin_early_min"]),
     db
       .select()
       .from(stations)
@@ -131,9 +154,13 @@ export default async function BookingsPage({
           isNull(bookings.noShowResolvedAt),
         ),
       ),
-    db
-      .select({ bookingId: bookingAddons.bookingId, name: bookingAddons.name })
-      .from(bookingAddons),
+    // The shared add-on select, scoped here to the day being browsed and run
+    // inside this batch rather than after it as a second round trip.
+    addonLineQuery()
+      .innerJoin(bookings, eq(bookings.id, bookingAddons.bookingId))
+      .where(
+        and(eq(bookings.branchId, branchId), gte(bookings.startsAt, dayStart), lt(bookings.startsAt, dayEnd)),
+      ),
     db.select().from(services).where(eq(services.active, true)).orderBy(asc(services.sort)),
     db.select().from(addons).where(eq(addons.active, true)).orderBy(asc(addons.sort)),
     db.select().from(removalTypes).where(eq(removalTypes.active, true)).orderBy(asc(removalTypes.sort)),
@@ -143,13 +170,7 @@ export default async function BookingsPage({
   // is this branch only, and the drawer has to name them anyway.
   const elsewhere = await partnersElsewhere(branchId, rows);
 
-  const addonsByBooking = new Map<string, { ar: string; en: string }[]>();
-  for (const link of addonLinks) {
-    if (!link.name) continue;
-    const list = addonsByBooking.get(link.bookingId) ?? [];
-    list.push(link.name);
-    addonsByBooking.set(link.bookingId, list);
-  }
+  const lines = splitAddonLines(addonLinks);
 
   return (
     <BookingsView
@@ -172,24 +193,13 @@ export default async function BookingsPage({
       // once instead of on every booking.
       checkinEarlyMin={checkinEarlyMin}
       catalog={{
-        services: serviceRows.map((s) => ({
-          id: s.id,
-          name: s.name,
-          priceSar: halalasToSar(s.priceHalalas),
-          durationMin: s.durationMin,
-        })),
-        addons: addonRows.map((a) => ({
-          id: a.id,
-          name: a.name,
-          priceSar: halalasToSar(a.priceHalalas),
-          durationMin: a.durationMin,
-        })),
-        removals: removalRows.map((r) => ({
-          id: r.id,
-          name: r.name,
-          priceSar: halalasToSar(r.priceHalalas),
-          durationMin: r.durationMin,
-        })),
+        services: serviceRows.map(toOption),
+        // Split, because to the receptionist a coffee is not an add-on. It is
+        // the same `addons` table and the same `addonIds` on the way out —
+        // `at_checkout` is the only thing that moves it to its own group.
+        addons: addonRows.filter((a) => !a.atCheckout).map(toOption),
+        treats: addonRows.filter((a) => a.atCheckout).map(toOption),
+        removals: removalRows.map(toOption),
       }}
       noShowCount={noShowCount?.n ?? 0}
       partnersElsewhere={elsewhere}
@@ -206,7 +216,7 @@ export default async function BookingsPage({
           source: r.source,
           stationId: r.stationId,
           serviceName: r.serviceName,
-          addons: addonsByBooking.get(r.id) ?? [],
+          ...(lines.get(r.id) ?? NO_LINES),
           totalSar: halalasToSar(r.totalHalalas),
           notes: r.notes,
           customerName: r.customerName,

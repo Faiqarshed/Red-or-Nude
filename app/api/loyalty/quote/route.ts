@@ -1,4 +1,4 @@
-// What a reward rung is worth — for display only (brief §2.8).
+// What a reward is worth — for display only (brief §2.8).
 //
 // The sibling of ../../promo/quote/route.ts, and the same disclaimer applies:
 // this decides nothing. POST /api/bookings re-reads the balance and re-prices
@@ -13,25 +13,35 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentCustomer } from "@/lib/account/guard";
-import { loyaltyBalance, quoteReward } from "@/lib/loyalty";
+import { loyaltyBalance, loyaltyRules, quoteReward } from "@/lib/loyalty";
 
 export const dynamic = "force-dynamic";
 
 const body = z.object({
-  /** Which rung. Validated against the ladder, not merely against being a number. */
+  /** How many points to spend. Validated against the step and the balance in
+   *  quoteReward, not merely against being a positive number here. */
   points: z.number().int().positive(),
   /** The bill as the checkout currently shows it, in halalas. */
   totalHalalas: z.number().int().min(0).max(100_000_00),
 });
 
 export async function GET() {
-  // Only where the customer stands. The ladder itself is a module constant the
-  // checkout imports directly (lib/rewards.ts), so there is nothing to send.
+  // Where the customer stands, **and the rules themselves**.
+  //
+  // The rules used to be a module constant the checkout imported directly, so
+  // this only had to send a balance. They are four settings rows now — the
+  // salon retunes them without a deploy — and the checkout cannot read the
+  // database, so they come over the wire. The functions that price them are
+  // still imported directly from lib/rewards.ts, which is what keeps the figure
+  // shown and the figure charged computed the same way.
+  //
+  // None of it is a secret: it is the offer, and it is printed on the page.
   const customer = await currentCustomer();
-  return NextResponse.json({
-    balance: customer ? await loyaltyBalance(customer.id) : 0,
-    signedIn: Boolean(customer),
-  });
+  const [rules, balance] = await Promise.all([
+    loyaltyRules(),
+    customer ? loyaltyBalance(customer.id) : Promise.resolve(0),
+  ]);
+  return NextResponse.json({ balance, signedIn: Boolean(customer), rules });
 }
 
 export async function POST(request: Request) {
@@ -62,7 +72,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ok: true,
     points: quote.points,
-    percent: quote.percent,
+    valueHalalas: quote.valueHalalas,
     discountHalalas: quote.discountHalalas,
     totalHalalas: parsed.data.totalHalalas - quote.discountHalalas,
   });

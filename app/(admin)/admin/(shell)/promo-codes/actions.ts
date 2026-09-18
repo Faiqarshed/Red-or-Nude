@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { violatedConstraint } from "@/lib/db/errors";
 import { promoCodes } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { recordAudit } from "@/lib/audit";
@@ -108,6 +109,11 @@ export async function savePromoCode(input: PromoInput): Promise<Result> {
         .where(eq(promoCodes.id, d.id))
         .limit(1);
       if (!before) return { ok: false, error: "not-found" };
+      // A staff code is not editable from here. It is no longer listed on this
+      // screen, but a tab left open from before still holds its id, and
+      // retuning the percentage or the window would quietly break the monthly
+      // scheme that lib/staff-codes.ts maintains.
+      if (before.staffId) return { ok: false, error: "staff-code" };
 
       await db.update(promoCodes).set(values).where(eq(promoCodes.id, d.id));
       await recordAudit(actor, {
@@ -135,7 +141,11 @@ export async function savePromoCode(input: PromoInput): Promise<Result> {
   } catch (err) {
     // The unique index on `code` is the only thing that can realistically fail
     // here, and "that code already exists" is something the form can act on.
-    if (err instanceof Error && err.message.includes("promo_codes_code_unique")) {
+    //
+    // Read off the driver error rather than out of `err.message`, which drizzle
+    // fills with the SQL it tried — see lib/db/errors. Matching the message is
+    // what this used to do, and it never once matched.
+    if (violatedConstraint(err) === "promo_codes_code_unique") {
       return { ok: false, error: "duplicate" };
     }
     console.error("[promo] save failed", err);
@@ -153,8 +163,14 @@ export async function savePromoCode(input: PromoInput): Promise<Result> {
 export async function setPromoActive(id: string, active: boolean): Promise<Result> {
   const actor = await requireCan("marketing.manage");
 
-  const [current] = await db.select({ endsAt: promoCodes.endsAt }).from(promoCodes).where(eq(promoCodes.id, id)).limit(1);
+  const [current] = await db
+    .select({ endsAt: promoCodes.endsAt, staffId: promoCodes.staffId })
+    .from(promoCodes)
+    .where(eq(promoCodes.id, id))
+    .limit(1);
   if (!current) return { ok: false, error: "not-found" };
+  // Same reason as the edit above: this screen no longer owns those rows.
+  if (current.staffId) return { ok: false, error: "staff-code" };
   // An ended code switched back on would only switch itself off again. Its end
   // date is what has to move, in the edit drawer.
   if (active && current.endsAt && current.endsAt <= new Date()) return { ok: false, error: "expired" };

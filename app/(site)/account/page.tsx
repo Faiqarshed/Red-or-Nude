@@ -6,7 +6,7 @@
 
 import type { Metadata } from "next";
 import { currentCustomer } from "@/lib/account/guard";
-import { loyaltyBalance } from "@/lib/loyalty";
+import { loyaltyBalance, loyaltyRules } from "@/lib/loyalty";
 import { packCredits } from "@/lib/packs";
 import { bookingSummaries } from "@/lib/bookings";
 import AccountView from "./AccountView";
@@ -20,10 +20,12 @@ export default async function AccountPage() {
   const customer = await currentCustomer();
 
   // Signed out: the sign-in form, and nothing else. No booking data is fetched
-  // and none is sent.
-  if (!customer) return <AccountView />;
+  // and none is sent — but the rules are, because the advert under the form
+  // quotes the offer, and that is the reason to make an account at all.
+  if (!customer) return <AccountView rules={await loyaltyRules()} />;
 
-  const [balance, credits, history] = await Promise.all([
+  const [rules, balance, credits, history] = await Promise.all([
+    loyaltyRules(),
     loyaltyBalance(customer.id),
     // What her memberships have left. This is the screen a customer opens to
     // check, and until now it was the one place that did not say: she bought a
@@ -48,6 +50,7 @@ export default async function AccountPage() {
         birthday: customer.birthday,
       }}
       balance={balance}
+      rules={rules}
       credits={credits.map((c) => ({
         customerPackId: c.customerPackId,
         packName: c.packName,

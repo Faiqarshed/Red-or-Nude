@@ -154,6 +154,12 @@ export function BookingFacts({ booking, now }: { booking: BookingRow; now: numbe
       t.bookings.addons,
       booking.addons.length ? booking.addons.map((a) => pick(a, lang)).join("، ") : t.common.none,
     ],
+    // Only when there is one. An empty "Bring her: none" on every ticket is a
+    // row the desk learns to skip, and then misses on the ticket that has one.
+    ...row(
+      t.myDay.treats,
+      booking.treats.length ? booking.treats.map((a) => pick(a.name, lang)).join("، ") : null,
+    ),
     ...row(f.checkedIn, booking.checkedInAt ? localTime(booking.checkedInAt) : null),
     ...row(f.started, booking.startedAt ? localTime(booking.startedAt) : null),
     ...row(f.took, tookMs === null ? null : formatDuration(tookMs, lang)),

@@ -23,6 +23,7 @@ import {
   Thumb,
   scoreTone, tabItem, tabTone} from "@/components/admin/ui";
 import { AdminTable } from "@/components/admin/Table";
+import type { Treat } from "@/lib/admin/addon-lines";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { statusPulse } from "@/lib/booking-pulse";
 import { cn } from "@/lib/cn";
@@ -70,6 +71,8 @@ export type BookingRow = {
   stationId: string | null;
   serviceName: Localized | null;
   addons: Localized[];
+  /** Coffee and treats — an errand, not part of the work. */
+  treats: Treat[];
   totalSar: number;
   notes: string | null;
   customerName: string | null;
@@ -400,7 +403,13 @@ export default function BookingsView({
   /** Unresolved no-shows across every date, not just the one being viewed. */
   /** Unresolved no-show flags for this role's branches, on any date. */
   noShowCount: number;
-  catalog: { services: CatalogOption[]; addons: CatalogOption[]; removals: CatalogOption[] };
+  catalog: {
+    services: CatalogOption[];
+    addons: CatalogOption[];
+    /** at_checkout rows — the coffee and the cookie, kept out of the add-ons. */
+    treats: CatalogOption[];
+    removals: CatalogOption[];
+  };
   /** Walk-ins and the no-show backlog — everyone but a technician. */
   canManage: boolean;
   /** `bookings.status`: rewriting a booking by hand. The owner only. */

@@ -66,6 +66,15 @@ export default function Hero() {
             <img
               src="/hero-hands.webp"
               alt=""
+              // The landing page's LCP element. Left as a plain <img> on
+              // purpose: the file is already WebP, the wrapper already pins the
+              // aspect ratio so there is no layout shift to prevent, and the
+              // hand is *meant* to overflow its box to the right — next/image
+              // `fill` would clip it back and change the composition. What
+              // next/image would have bought here is the priority hint, and
+              // that is one attribute.
+              fetchPriority="high"
+              decoding="async"
               style={fadeBottom}
               className="absolute right-0 top-0 h-full max-w-none select-none"
             />
@@ -96,6 +105,15 @@ export default function Hero() {
             <img
               src="/hero-hands.webp"
               alt=""
+              // The landing page's LCP element. Left as a plain <img> on
+              // purpose: the file is already WebP, the wrapper already pins the
+              // aspect ratio so there is no layout shift to prevent, and the
+              // hand is *meant* to overflow its box to the right — next/image
+              // `fill` would clip it back and change the composition. What
+              // next/image would have bought here is the priority hint, and
+              // that is one attribute.
+              fetchPriority="high"
+              decoding="async"
               style={fadeBottom}
               className="absolute right-0 top-0 h-full max-w-none select-none"
             />

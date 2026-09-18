@@ -179,6 +179,18 @@ export default function GuestPicker({
     ? (removals.find((r) => r.id === value.removal)?.name ?? null)
     : null;
 
+  // Which add-on this design belongs to. Found through the design itself rather
+  // than "the first seasonal one ticked": two add-ons can both offer a
+  // catalogue, and naming the wrong one is the confusion this is here to end.
+  const designOwner =
+    (value.design &&
+      addons.find(
+        (a, i) =>
+          value.addons.includes(i) &&
+          designs.some((d) => d.addonId === a.id && pick(d.name, lang) === value.design),
+      )) ||
+    null;
+
   const toggleAddon = (i: number) => {
     const isSeasonal = addons[i].seasonal;
     const on = value.addons.includes(i);
@@ -239,10 +251,27 @@ export default function GuestPicker({
             />
           ))}
         </div>
-        {value.design && (
-          <p className="mt-3 text-start text-[12px] text-ink/55">
-            {b.chosenDesign} <span className="font-semibold text-red">{value.design}</span>
-          </p>
+        {/* Named, and changeable. "Selected design: Winter Rose" sat under the
+            whole grid saying nothing about which add-on it was for, and the
+            only way to pick another was to untick the add-on and tick it
+            again. */}
+        {value.design && designOwner && (
+          <button
+            type="button"
+            onClick={() => {
+              setDesignsFor(designOwner.id);
+              setModal("designs");
+            }}
+            className="mt-3 flex items-center gap-2 text-start text-[12px] text-ink/55 transition-colors hover:text-ink"
+          >
+            <span>
+              {b.chosenDesign.replace("{addon}", pick(designOwner.name, lang))}{" "}
+              <span className="font-semibold text-red">{value.design}</span>
+            </span>
+            <span className="font-semibold text-red underline underline-offset-2">
+              {b.changeDesign}
+            </span>
+          </button>
         )}
       </div>
 

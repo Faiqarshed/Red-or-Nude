@@ -17,7 +17,14 @@ import { createBooking, createBookings, bookingSummaries, releaseWebHold } from 
 import { confirmBookingPayment } from "@/lib/payments/confirm";
 import { halalasToSar, sarToHalalas, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { promoDiscount, normalizePromoCode } from "@/lib/promo";
-import { REWARDS, pointsEarned, rewardDiscount, rewardFor, rewardRefusal } from "@/lib/rewards";
+import {
+  milestonesReached,
+  pointsEarned,
+  redeemable,
+  rewardDiscount,
+  rewardRefusal,
+  type LoyaltyRules,
+} from "@/lib/rewards";
 import { statusPulse } from "@/lib/booking-pulse";
 import { formatTicketNo } from "@/lib/tickets";
 import { maskEmail } from "@/lib/otp";
@@ -119,45 +126,105 @@ describe("the discount stack, in the order it runs", () => {
 
 // ---------------------------------------------------------------------------
 
-describe("the reward ladder", () => {
-  it("only knows the rungs it declares", () => {
-    for (const r of REWARDS) expect(rewardFor(r.points)).toEqual(r);
-    // Between two rungs is not a rung.
-    expect(rewardFor(150)).toBeNull();
-    expect(rewardFor(0)).toBeNull();
-    expect(rewardFor(-100)).toBeNull();
-    expect(rewardFor(1_000_000)).toBeNull();
+/** The salon's defaults, so these read as the rule the client actually stated. */
+const RULES: LoyaltyRules = {
+  firstSar: 199,
+  stepSar: 200,
+  stepPoints: 50,
+  pointHalalas: 20,
+};
+
+describe("the milestone rule", () => {
+  // The client's rule, in their own numbers: "spend 199, get 50 points worth 10
+  // riyals — and if a person spends 350 we still give 50, because they haven't
+  // touched 399".
+  it("awards at 199 and every 200 after, and nothing in between", () => {
+    expect(pointsEarned(sarToHalalas(198.99), RULES)).toBe(0);
+    expect(pointsEarned(sarToHalalas(199), RULES)).toBe(50);
+    expect(pointsEarned(sarToHalalas(350), RULES)).toBe(50);
+    expect(pointsEarned(sarToHalalas(398.99), RULES)).toBe(50);
+    expect(pointsEarned(sarToHalalas(399), RULES)).toBe(100);
+    expect(pointsEarned(sarToHalalas(599), RULES)).toBe(150);
   });
 
-  it("names why a rung cannot be spent", () => {
-    expect(rewardRefusal(150, 10_000)).toBe("unknown");
-    expect(rewardRefusal(200, 199)).toBe("locked");
-    // Exactly enough is enough.
-    expect(rewardRefusal(200, 200)).toBeNull();
+  it("never earns from a bill that reaches nothing", () => {
+    expect(pointsEarned(0, RULES)).toBe(0);
+    expect(pointsEarned(-1, RULES)).toBe(0);
+    expect(pointsEarned(sarToHalalas(1), RULES)).toBe(0);
   });
 
-  it("caps a rung at the bill, as a promo is capped", () => {
-    const top = REWARDS[REWARDS.length - 1];
-    expect(rewardDiscount(top, 0)).toBe(0);
-    expect(rewardDiscount(top, 10_000)).toBe(Math.round(10_000 * top.percent / 100));
-    expect(rewardDiscount({ points: 1, percent: 500 }, 10_000)).toBe(10_000);
+  it("is always a whole, non-negative number of points", () => {
+    for (const sar of [0, 1, 198.99, 199, 199.01, 350, 399, 1234.56, 99_999]) {
+      const earned = pointsEarned(sarToHalalas(sar), RULES);
+      expect(Number.isInteger(earned)).toBe(true);
+      expect(earned).toBeGreaterThanOrEqual(0);
+    }
   });
 
-  it("floors what a bill earns, so a point cannot be minted by splitting one", () => {
-    // One point per 5 SAR: a 9.99 SAR bill earns 1, not 2.
-    expect(pointsEarned(sarToHalalas(9.99), 5)).toBe(1);
-    expect(pointsEarned(sarToHalalas(10), 5)).toBe(2);
-    expect(pointsEarned(sarToHalalas(4.99), 5)).toBe(0);
-    // Two halves of a bill never beat the whole.
-    const whole = pointsEarned(sarToHalalas(99), 5);
-    const halves = pointsEarned(sarToHalalas(49.5), 5) * 2;
-    expect(halves).toBeLessThanOrEqual(whole);
-    // Always a whole number, and never negative.
-    expect(Number.isInteger(pointsEarned(12_345, 7))).toBe(true);
-    expect(pointsEarned(-1, 5)).toBe(0);
-    expect(pointsEarned(10_000, 0)).toBe(0);
+  it("refuses to divide by a zeroed setting rather than returning Infinity", () => {
+    expect(pointsEarned(sarToHalalas(500), { ...RULES, stepSar: 0 })).toBe(0);
+    expect(pointsEarned(sarToHalalas(500), { ...RULES, firstSar: 0 })).toBe(0);
+    expect(milestonesReached(sarToHalalas(500), { ...RULES, stepSar: 0 })).toBe(0);
+  });
+
+  // Per-bill accrual is a deliberate choice, not an oversight — see the
+  // ponytail note in lib/rewards.ts. This pins the consequence so that if
+  // anybody ever moves to lifetime accrual, they do it knowingly.
+  it("is per bill, so two visits earn more than one bill of the same size", () => {
+    const twice = pointsEarned(sarToHalalas(199), RULES) * 2;
+    const once = pointsEarned(sarToHalalas(398), RULES);
+    expect(twice).toBe(100);
+    expect(once).toBe(50);
   });
 });
+
+describe("spending points", () => {
+  it("only accepts whole steps", () => {
+    expect(rewardRefusal(50, 10_000, RULES)).toBeNull();
+    expect(rewardRefusal(100, 10_000, RULES)).toBeNull();
+    // Not a multiple of the step, however affordable.
+    expect(rewardRefusal(37, 10_000, RULES)).toBe("unknown");
+    expect(rewardRefusal(75, 10_000, RULES)).toBe("unknown");
+    expect(rewardRefusal(0, 10_000, RULES)).toBe("unknown");
+    expect(rewardRefusal(-50, 10_000, RULES)).toBe("unknown");
+    expect(rewardRefusal(50.5, 10_000, RULES)).toBe("unknown");
+  });
+
+  it("names a balance that cannot reach the amount", () => {
+    expect(rewardRefusal(50, 49, RULES)).toBe("locked");
+    // Exactly enough is enough.
+    expect(rewardRefusal(50, 50, RULES)).toBeNull();
+    expect(rewardRefusal(100, 99, RULES)).toBe("locked");
+  });
+
+  it("prices 50 points at exactly 10 riyals", () => {
+    expect(rewardDiscount(50, sarToHalalas(200), RULES)).toBe(sarToHalalas(10));
+    expect(rewardDiscount(100, sarToHalalas(200), RULES)).toBe(sarToHalalas(20));
+  });
+
+  it("caps a reward at the bill, as a promo is capped", () => {
+    expect(rewardDiscount(50, 0, RULES)).toBe(0);
+    expect(rewardDiscount(50, -500, RULES)).toBe(0);
+    // 100 points is 20 SAR, but the bill is only 5 — it must never refund.
+    expect(rewardDiscount(100, sarToHalalas(5), RULES)).toBe(sarToHalalas(5));
+  });
+
+  it("offers nothing it would waste, and nothing she cannot afford", () => {
+    // Balance below one step: nothing on offer.
+    expect(redeemable(49, sarToHalalas(500), RULES)).toEqual([]);
+    // Plenty of points, small bill: stops at the step that covers it.
+    expect(redeemable(500, sarToHalalas(10), RULES)).toEqual([50]);
+    // 150 points is 30 SAR — the first step that *covers* a 25 SAR bill, and
+    // so the last one worth showing. The ones past it are pure waste.
+    expect(redeemable(500, sarToHalalas(25), RULES)).toEqual([50, 100, 150]);
+    // Bounded by the balance too.
+    expect(redeemable(100, sarToHalalas(1_000), RULES)).toEqual([50, 100]);
+    // Nothing to discount.
+    expect(redeemable(500, 0, RULES)).toEqual([]);
+  });
+});
+
+;
 
 // ---------------------------------------------------------------------------
 
