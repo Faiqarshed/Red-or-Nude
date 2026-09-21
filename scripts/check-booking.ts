@@ -440,7 +440,7 @@ async function main() {
       "a pending hold has no number yet",
     );
 
-    const paid = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code });
     assert.ok(paid.ok, `confirming the split party failed: ${paid.ok ? "" : paid.error}`);
 
     const afterPaid = await counters([branch.id, other.id], paidDay);

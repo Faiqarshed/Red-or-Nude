@@ -40,6 +40,7 @@ import type { RewardRefusal } from "@/lib/rewards";
 import { formatTicketNo } from "@/lib/tickets";
 import { assignIfToday } from "@/lib/assign";
 import { mediaUrl } from "@/lib/storage";
+import { checkoutOpen } from "@/lib/payments";
 import type { BookingSummary } from "@/lib/booking";
 
 /** What one guest is booking. */
@@ -648,6 +649,10 @@ export async function allocateTickets(
  *
  * `source = 'web'` so a pending booking an admin created is never swept out from
  * under staff.
+ *
+ * Spared while a checkout for it is still open: she may be on her bank's 3-D
+ * Secure page at the moment the hold runs out, and sweeping then takes her
+ * money for a chair that has just been given away. See checkoutOpen.
  */
 async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Promise<void> {
   await tx.execute(sql`
@@ -656,6 +661,7 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
       and status = 'pending'
       and source = 'web'
       and created_at < now() - make_interval(mins => ${holdMin})
+      and not ${checkoutOpen(bookings.id)}
   `);
   // ponytail: sweeps only when someone tries to book. A branch with no booking
   // attempts keeps stale holds visible until the next one. Add a cron only if
@@ -1150,6 +1156,8 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
             refillOfBookingId: refillParent?.id ?? null,
             removalPriceHalalas: guest.removal?.priceHalalas ?? 0,
             discountHalalas,
+            promoDiscountHalalas: promoShare,
+            pointsDiscountHalalas: rewardShare,
             promoCodeId,
             subtotalHalalas: totalHalalas - vat,
             vatHalalas: vat,

@@ -18,15 +18,15 @@ import "server-only";
 // phone and no email — only that it worked.
 //
 // Order matters, exactly as it does for a pack or a gift card: money first,
-// treat second. A treat recorded before a declined charge is a free coffee; a
-// charge that clears and then fails to record is a refund we can see in the log
-// and settle, which is the recoverable direction.
+// treat second. The treat is added only once the payment is verified
+// (lib/payments/purchase.ts); one that cannot be added then — a second tap got
+// there first — is refunded on the spot.
 
-import { randomUUID } from "node:crypto";
 import { and, asc, eq, gt, inArray, lte } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { addons, bookingAddons, bookings, payments, stations } from "@/lib/db/schema";
-import { getDriver } from "@/lib/payments";
+import { addons, bookingAddons, bookings, stations } from "@/lib/db/schema";
+import { startPurchase } from "@/lib/payments/purchase";
+import { productName } from "@/lib/payments/lines";
 
 export type TreatRefusal =
   /** No such sticker, or a chair the salon has retired. */
@@ -39,25 +39,24 @@ export type TreatRefusal =
   | "already-added"
   /** The gateway said no. Her card, not our problem to retry for her. */
   | "declined"
-  /** Charged, and then something went wrong. Somebody is owed a refund. */
+  /** Charged, and then it could not be added. Refunded, or the log says REFUND OWED. */
   | "paid-not-added";
 
 export type TreatResult =
   | { ok: true; name: { ar: string; en: string } }
+  /** Pay on this checkout, then ask /api/payments/status. */
+  | { ok: true; checkout: { ref: string; url: string } }
   | { ok: false; reason: TreatRefusal };
-
-export type TreatMethod = "card" | "mada" | "stc" | "apple";
 
 /**
  * Sell one treat to whoever is sitting at this chair right now.
  *
- * `simulate` exercises the decline path in development and is stripped in
- * production by the caller, exactly as the packs route does it.
+ * `simulate` exercises the decline path in development; the fake driver
+ * ignores it in production (lib/payments/fake.ts).
  */
 export async function buyStationTreat(input: {
   token: string;
   addonId: string;
-  method: TreatMethod;
   simulate?: "decline";
   now?: Date;
 }): Promise<TreatResult> {
@@ -113,57 +112,24 @@ export async function buyStationTreat(input: {
     .limit(1);
   if (existing) return { ok: false, reason: "already-added" };
 
-  const driver = getDriver();
-  const ref = randomUUID();
+  const name = treat.name as { ar: string; en: string };
+  const result = await startPurchase({
+    intent: { kind: "treat", bookingId: booking.id, addonId: treat.id, name },
+    amountHalalas: treat.priceHalalas,
+    line: { key: `product:addon:${treat.id}`, name: productName(name), priceHalalas: treat.priceHalalas, qty: 1 },
+    title: "Treat",
+    // Nobody to prefill: the sticker proves presence, not identity.
+    payer: {},
+    back: `/station/${input.token}`,
+    simulate: input.simulate,
+  });
 
-  let charge;
-  try {
-    charge = await driver.charge({
-      ref,
-      amountHalalas: treat.priceHalalas,
-      method: input.method,
-      simulate: input.simulate,
-    });
-  } catch (err) {
-    console.error("[station-treat] charge threw", err);
-    return { ok: false, reason: "declined" };
+  if (!result.ok) {
+    // `declined` tells the screen a retry is safe. Once money has moved, it is not.
+    return { ok: false, reason: result.error === "not-delivered" ? "paid-not-added" : "declined" };
   }
-  if (charge.status !== "paid") return { ok: false, reason: "declined" };
-
-  // From here the money has moved, so every failure is its own code. `declined`
-  // tells the screen a retry is safe; a retry now is a second charge.
-  try {
-    await db.transaction(async (tx) => {
-      // The snapshot, exactly as createBookings writes it: the name and price as
-      // sold, so the ticket and the invoice still read correctly after the
-      // catalogue moves on.
-      await tx.insert(bookingAddons).values({
-        bookingId: booking.id,
-        addonId: treat.id,
-        name: treat.name,
-        priceHalalas: treat.priceHalalas,
-      });
-
-      // `treat_booking_id`, not `booking_id` — see the schema comment. Putting
-      // it in `booking_id` would collide with payments_booking_live_unique,
-      // which is the index that stops a booking being charged twice.
-      await tx.insert(payments).values({
-        treatBookingId: booking.id,
-        provider: driver.name,
-        providerRef: charge.providerRef,
-        method: input.method,
-        amountHalalas: treat.priceHalalas,
-        status: "paid",
-        raw: charge.raw,
-      });
-    });
-  } catch (err) {
-    // Two taps that got past the check above land here, on the primary key.
-    // Loud either way: she has been charged and has no coffee.
-    console.error(`[station-treat] charged ${ref} but could not add the treat; refund owed`, err);
-    return { ok: false, reason: "paid-not-added" };
-  }
+  if ("checkout" in result) return { ok: true, checkout: result.checkout };
 
   // Her name for it, and nothing else about the booking.
-  return { ok: true, name: treat.name as { ar: string; en: string } };
+  return { ok: true, name };
 }

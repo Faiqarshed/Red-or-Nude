@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, loyaltyTxns } from "@/lib/db/schema";
 import { getSettings } from "@/lib/settings";
+import { checkoutOpen } from "@/lib/payments";
 import {
   pointsValue,
   rewardDiscount,
@@ -62,6 +63,7 @@ export async function loyaltyBalance(customerId: string): Promise<number> {
       deltaPoints: loyaltyTxns.deltaPoints,
       bookingStatus: bookings.status,
       bookingCreatedAt: bookings.createdAt,
+      checkoutOpen: checkoutOpen(bookings.id),
     })
     .from(loyaltyTxns)
     .leftJoin(bookings, eq(bookings.id, loyaltyTxns.bookingId))

@@ -17,9 +17,10 @@
 import "server-only";
 import { and, eq, gt, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, customerPacks, packTxns, packs, packServices, services } from "@/lib/db/schema";
+import { bookings, customerPacks, packTxns, packs, packServices, payments, services } from "@/lib/db/schema";
 import type { Localized } from "@/lib/db/schema";
 import { getSettings } from "@/lib/settings";
+import { checkoutOpen } from "@/lib/payments";
 
 /** One ledger row, reduced to what the liveness rule below needs. */
 export type PackLedgerRow = {
@@ -33,6 +34,8 @@ export type PackLedgerRow = {
   bookingStatus: string | null;
   bookingCancelReason: string | null;
   bookingCreatedAt: Date | null;
+  /** A checkout for the booking is still payable (lib/payments `checkoutOpen`). */
+  checkoutOpen?: boolean;
 };
 
 /**
@@ -78,6 +81,8 @@ function neverRedeemed(row: PackLedgerRow, holdMin: number, now: Date): boolean 
   if (status === null) return row.reason === "booking" || !!row.reason?.startsWith("return:");
   if (status === "cancelled") return row.bookingCancelReason === "payment-timeout";
   if (status !== "pending") return false;
+  // Past its window but still payable: the credit is not free yet. See isDead.
+  if (row.checkoutOpen) return false;
   // No created_at shouldn't happen. Treated as stranded rather than spent: the
   // failure mode of guessing wrong is a customer who cannot spend a credit she
   // paid for, and that is the worse of the two.
@@ -158,6 +163,7 @@ export async function packCredits(customerId: string, now = new Date()): Promise
       bookingStatus: bookings.status,
       bookingCancelReason: bookings.cancelReason,
       bookingCreatedAt: bookings.createdAt,
+      checkoutOpen: checkoutOpen(bookings.id),
     })
     .from(packTxns)
     .leftJoin(services, eq(services.id, packTxns.serviceId))
@@ -287,6 +293,7 @@ export async function spendPackCredit(
       bookingStatus: bookings.status,
       bookingCancelReason: bookings.cancelReason,
       bookingCreatedAt: bookings.createdAt,
+      checkoutOpen: checkoutOpen(bookings.id),
     })
     .from(packTxns)
     .leftJoin(bookings, eq(bookings.id, packTxns.bookingId))
@@ -362,11 +369,15 @@ export async function returnPackCredits(bookingIds: string[], reason: string): P
  * than copied into a table of its own. That is what snapshots the purchase: a
  * pack whose contents the salon edits next week does not change what she has
  * left, because what she has left was never read from the pack.
+ *
+ * `paymentId`, when an online payment bought it, is linked in the same
+ * transaction — a pack never exists without the payment row pointing at it.
  */
 export async function buyPack(
   customerId: string,
   packId: string,
   now = new Date(),
+  paymentId?: string,
 ): Promise<{ ok: true; customerPackId: string } | { ok: false; reason: "not-found" | "empty" }> {
   const [pack] = await db
     .select()
@@ -402,6 +413,13 @@ export async function buyPack(
         reason: "purchase",
       })),
     );
+
+    if (paymentId) {
+      await tx
+        .update(payments)
+        .set({ customerPackId: row.id, updatedAt: new Date() })
+        .where(eq(payments.id, paymentId));
+    }
 
     return { ok: true as const, customerPackId: row.id };
   });

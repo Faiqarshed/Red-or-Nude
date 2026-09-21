@@ -87,11 +87,8 @@ async function run(to: string, guests: 1 | 2) {
     console.log(`held ${guests} chair(s), ${held.totalHalalas / 100} SAR, no tickets yet ✓`);
 
     // -- 2. Charge it. This is the call that emails the invoice. -------------
-    const paid = await confirmBookingPayment({
-      code: held.bookings[0].code,
-      method: "mada",
-    });
-    assert.ok(paid.ok, `payment failed: ${paid.ok ? "" : paid.error}`);
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code });
+    assert.ok(paid.ok && "tickets" in paid, `payment failed: ${paid.ok ? "" : paid.error}`);
     assert.equal(paid.tickets.length, guests, "one ticket per guest");
     console.log(
       `charged ${paid.totalHalalas / 100} SAR → tickets ${paid.tickets.map((t) => t.ticketNo).join(" + ")} ✓`,

@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
-import PaymentMethods, { methodIdFor } from "@/components/PaymentMethods";
+import PaymentMethods from "@/components/PaymentMethods";
+import { usePaymentReturn, type PaymentOutcome } from "@/components/StreamPayCheckout";
 import { GiftCardArt } from "@/components/gift/GiftCardArt";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
@@ -13,9 +14,10 @@ import { SAUDI_DIALLING_CODE, formatNational, toStoredPhone } from "@/lib/phone"
 
 // Figma: Desktop-2 gift-card payment step (325:7705) + success modal (325:8088).
 //
-// Confirming charges the card and issues a real gift card via POST
-// /api/gift-cards, which returns the redeemable code. The gateway behind that
-// charge is still the stand-in driver (lib/payments/fake.ts).
+// Pay opens StreamPay's checkout via POST /api/gift-cards; the card is issued
+// once that payment is verified, and its redeemable code comes back through
+// /api/payments/status (components/StreamPayCheckout.tsx). With the fake driver
+// the code comes straight back from the POST.
 //
 // Delivery is the buyer's tap: the success modal opens WhatsApp with the message
 // ready. An automatic send happens too, but only once a provider is configured —
@@ -26,19 +28,34 @@ export default function GiftCardPaymentPage() {
   const gp = c.giftPay;
   const p = c.payment;
   const [done, setDone] = useState(false);
-  const [method, setMethod] = useState(p.cardTitle);
   const [selection, setSelection] = useState<GiftSelection | null>(null);
   const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  /** Card fields live inside PaymentMethods; this mirrors their validity up. */
-  const [cardValid, setCardValid] = useState(false);
+  const [checkout, setCheckout] = useState<{ ref: string; url: string } | null>(null);
 
   useEffect(() => {
     setSelection(loadGiftSelection());
   }, []);
 
   const total = selection?.amountSar ?? 0;
+
+  const issued = (giftCode: string) => {
+    setCode(giftCode);
+    setDone(true);
+    clearGiftSelection();
+  };
+
+  const onPaid = (outcome: PaymentOutcome) => {
+    setCheckout(null);
+    if (outcome.status === "paid" && outcome.result.kind === "gift_card") {
+      issued(outcome.result.code as string);
+      return;
+    }
+    const e = outcome.status === "failed" ? outcome.error : "";
+    setError(e === "payment-declined" ? p.declined : e === "unconfirmed" ? p.unconfirmed : p.bookingFailed);
+  };
+  usePaymentReturn(onPaid);
 
   const confirm = async () => {
     if (!selection || submitting) return;
@@ -51,7 +68,6 @@ export default function GiftCardPaymentPage() {
         body: JSON.stringify({
           amountSar: selection.amountSar,
           designId: selection.designId,
-          method: methodIdFor(method, p),
           buyerName: selection.senderName || undefined,
           recipientName: selection.recipientName || undefined,
           recipientEmail: selection.recipientEmail || undefined,
@@ -62,15 +78,16 @@ export default function GiftCardPaymentPage() {
           lang,
         }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.checkout) {
+        setCheckout(data.checkout);
+        return;
+      }
       if (res.ok) {
-        const data = await res.json();
-        setCode(data.code);
-        setDone(true);
-        clearGiftSelection();
+        issued(data.code);
         return;
       }
 
-      const data = await res.json().catch(() => ({}));
       // Nothing was issued on a decline, so retrying is safe and cheap.
       setError(data.error === "payment-declined" ? p.declined : p.bookingFailed);
     } catch {
@@ -97,7 +114,7 @@ export default function GiftCardPaymentPage() {
       <SiteHeader />
 
       <div className="mx-auto grid max-w-page gap-8 px-6 pb-24 pt-[120px] md:px-12 lg:grid-cols-[1fr_540px] lg:px-16">
-        <PaymentMethods onMethodChange={setMethod} onValidityChange={setCardValid} />
+        <PaymentMethods checkout={checkout} onDone={onPaid} />
 
         {/* Summary */}
         <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)]">
@@ -145,9 +162,9 @@ export default function GiftCardPaymentPage() {
           <button
             type="button"
             onClick={confirm}
-            disabled={submitting || !selection || !cardValid}
+            disabled={submitting || !selection || checkout !== null}
             className={`mt-6 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
-              submitting || !selection || !cardValid
+              submitting || !selection || checkout !== null
                 ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
                 : "bg-red-grad text-white hover:opacity-90"
             }`}
@@ -165,7 +182,6 @@ export default function GiftCardPaymentPage() {
 
       {done && code && (
         <SuccessModal
-          method={method}
           code={code}
           selection={selection}
           onClose={() => setDone(false)}
@@ -183,12 +199,10 @@ function waNumber(phone: string): string {
 }
 
 function SuccessModal({
-  method,
   code,
   selection,
   onClose,
 }: {
-  method: string;
   code: string;
   selection: GiftSelection | null;
   onClose: () => void;
@@ -219,7 +233,6 @@ function SuccessModal({
   const rows = [
     { label: gp.to, value: selection?.recipientPhone || selection?.recipientEmail || selection?.recipientName || "—", ltr: true },
     { label: gp.from, value: selection?.senderName || "—" },
-    { label: gp.method, value: method },
   ];
   return (
     <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm">

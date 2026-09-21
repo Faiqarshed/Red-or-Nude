@@ -77,7 +77,7 @@ async function seat(opts: {
 }
 
 const order = (over: Partial<Parameters<typeof buyStationTreat>[0]> = {}) =>
-  buyStationTreat({ token: chair.token, addonId: hotId, method: "card", ...over });
+  buyStationTreat({ token: chair.token, addonId: hotId, ...over });
 
 beforeEach(async () => {
   f = await fixtures();

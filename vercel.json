@@ -3,7 +3,8 @@
   "regions": ["fra1"],
   "crons": [
     { "path": "/api/cron/assign-day", "schedule": "0 4 * * *" },
-    { "path": "/api/cron/staff-codes", "schedule": "0 21 * * *" }
+    { "path": "/api/cron/staff-codes", "schedule": "0 21 * * *" },
+    { "path": "/api/cron/settle-pending?report=1", "schedule": "0 5 */2 * *" }
   ],
   "git": {
     "deploymentEnabled": {

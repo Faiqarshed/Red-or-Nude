@@ -280,7 +280,7 @@ describe("a bill that lands on exactly zero", () => {
     expect(held.ok).toBe(true);
     if (!held.ok) return;
 
-    const paid = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code });
 
     const [row] = await db
       .select()

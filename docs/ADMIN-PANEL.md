@@ -74,7 +74,7 @@ list/detail screens from a shared schema-driven table + form pattern (§6).
 | Components | **shadcn/ui** | Owned source, restyled to brand, RTL-patchable |
 | Charts | **Recharts** | Dashboard only |
 | Media | Supabase Storage | Replaces the `/public/*.webp` workflow |
-| Payments | **Moyasar** or **Tap** | Both cover mada + STC Pay + Apple Pay (KSA) |
+| Payments | **StreamPay** | mada, Visa, Mastercard, Apple Pay; itemized ZATCA invoices — see `docs/PAYMENTS-STREAMPAY.md` |
 | Messaging | **Unifonic** | WhatsApp/SMS appointment reminders |
 
 Keep the site's existing Tailwind tokens (`cream`, `red`, `ink`, `sky`) — the
@@ -409,7 +409,7 @@ fallback rather than the source of truth.
 ledger-backed balance, admin setup for denominations and card designs, a public
 purchase flow at `/gift-card` that issues a real redeemable code, and a card
 drawer with the transaction history and manual adjustment. Still open here:
-Moyasar/Tap integration, payments + refunds, promo codes, and redeeming a gift
+promo codes, and redeeming a gift
 card against a booking (the ledger supports it; nothing calls it yet).
 
 The balance column is a cached running total and every change writes a
@@ -446,8 +446,7 @@ code deploy to change what customers see — that's the milestone worth aiming a
 
 1. **Hosting** — Vercel + Supabase, or self-hosted? Affects cron (reminders) and
    file storage.
-2. **Payment provider** — Moyasar vs. Tap. Both cover mada/STC/Apple Pay;
-   differ on fees, settlement time, and dashboard quality.
+2. **Payment provider** — decided: StreamPay (`docs/PAYMENTS-STREAMPAY.md`).
 3. **ZATCA e-invoicing** — required for KSA B2C. Phase 2 integration is a
    project of its own; confirm the obligation date before P4.
 4. **Technician assignment** — do customers pick a technician at booking time, or
