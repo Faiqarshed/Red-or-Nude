@@ -6,7 +6,8 @@ import { Coffee } from "lucide-react";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
-import PaymentMethods, { methodIdFor } from "@/components/PaymentMethods";
+import PaymentMethods from "@/components/PaymentMethods";
+import { usePaymentReturn, type PaymentOutcome } from "@/components/StreamPayCheckout";
 import PhoneField from "@/components/PhoneField";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
@@ -32,14 +33,15 @@ import {
 //
 // Two calls, in order:
 //   POST /api/bookings         → holds the chair(s), rows written as `pending`
-//   POST /api/payments/confirm → charges, confirms, and issues the ticket numbers
+//   POST /api/payments/confirm → opens StreamPay's checkout, embedded on the left
 //
-// Nothing is a booking until the second one succeeds. A declined card leaves the
+// She pays inside that checkout; GET /api/payments/status is what then confirms
+// and issues the ticket numbers (see components/StreamPayCheckout.tsx). With the
+// fake driver, or nothing to pay, the second call confirms on the spot instead.
+//
+// Nothing is a booking until the payment is verified. A declined card leaves the
 // hold in place so the customer can retry without losing their slot, which is why
 // the created code is kept in state between attempts.
-//
-// The gateway itself is still a stand-in (lib/payments/fake.ts) — no money moves
-// until PAYMENT_DRIVER points at Moyasar or Tap.
 
 type Ticket = {
   code: string;
@@ -66,11 +68,10 @@ export default function PaymentPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tickets, setTickets] = useState<Ticket[] | null>(null);
-  const [method, setMethod] = useState(p.cardTitle);
   /** Set once the hold exists, so a retry after a decline doesn't re-book. */
   const [heldCode, setHeldCode] = useState<string | null>(null);
-  /** Card fields live inside PaymentMethods; this mirrors their validity up. */
-  const [cardValid, setCardValid] = useState(false);
+  /** The open StreamPay checkout, once Pay has been pressed. */
+  const [checkout, setCheckout] = useState<{ ref: string; url: string } | null>(null);
   const [phoneTouched, setPhoneTouched] = useState(false);
   /**
    * The discount code (brief §2.10). `promoApplied` is the code the server
@@ -194,7 +195,6 @@ export default function PaymentPage() {
   // addresses that are actually valid.
   const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const phoneOk = isValidSaudiMobile(phone);
-  const canSubmit = phoneOk && emailOk && cardValid;
 
   /** The upsells this guest has taken. */
   const treatsFor = (i: number) =>
@@ -267,8 +267,8 @@ export default function PaymentPage() {
    */
   const fullyCovered = booking.total <= 0;
 
-  /** Card validity stops mattering the moment there is no card to take. */
-  const readyToConfirm = canSubmit || (phoneOk && emailOk && nothingToPay);
+  /** The card itself is StreamPay's to check; ours are the contact details. */
+  const readyToConfirm = phoneOk && emailOk && checkout === null;
 
   const promoReasonText = (reason: string, minTotalHalalas?: number): string => {
     const e = p.promoErrors;
@@ -412,8 +412,8 @@ export default function PaymentPage() {
 
   const confirm = async () => {
     if (!hasSelection || submitting) return;
-    // PaymentMethods has its own confirm button, which doesn't know about these
-    // fields — so the guard lives here rather than only on the disabled prop.
+    // Guarded here as well as on the disabled prop: Enter in a field can still
+    // reach this.
     if (!emailOk) {
       setError(p.invalidEmail);
       return;
@@ -516,33 +516,52 @@ export default function PaymentPage() {
         setHeldCode(code);
       }
 
-      // Step 2 — take the money. Only this confirms anything.
+      // Step 2 — the checkout. Only a verified payment confirms anything.
       const pay = await fetch("/api/payments/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, method: methodIdFor(method, p) }),
+        body: JSON.stringify({ code }),
       });
 
+      const data = await pay.json().catch(() => ({}));
+      if (pay.ok && data.checkout) {
+        setCheckout(data.checkout);
+        return;
+      }
       if (pay.ok) {
-        const data = await pay.json();
         setTickets(data.tickets);
         clearBooking();
         return;
       }
-
-      const data = await pay.json().catch(() => ({}));
-      if (data.error === "payment-declined") setError(p.declined);
-      else if (data.error === "expired") {
-        // The hold is gone; a retry would confirm nothing, so send them back.
-        setHeldCode(null);
-        setError(p.expired);
-      } else setError(p.bookingFailed);
+      showPayError(data.error);
     } catch {
       setError(p.bookingFailed);
     } finally {
       setSubmitting(false);
     }
   };
+
+  const showPayError = (code: string | undefined) => {
+    if (code === "payment-declined") setError(p.declined);
+    else if (code === "expired") {
+      // The hold is gone; a retry would confirm nothing, so send them back.
+      setHeldCode(null);
+      setError(p.expired);
+    } else if (code === "unconfirmed" || code === "in-progress") setError(p.unconfirmed);
+    else setError(p.bookingFailed);
+  };
+
+  /** The embedded checkout ended — or she came back from the hosted one. */
+  const onPaid = (outcome: PaymentOutcome) => {
+    setCheckout(null);
+    if (outcome.status === "paid" && outcome.result.kind === "booking") {
+      setTickets(outcome.result.tickets as Ticket[]);
+      clearBooking();
+      return;
+    }
+    showPayError(outcome.status === "failed" ? outcome.error : undefined);
+  };
+  usePaymentReturn(onPaid);
 
   return (
     <main className="relative min-h-screen bg-cream">
@@ -598,7 +617,7 @@ export default function PaymentPage() {
               {covered.length > 0 && (
                 <p className="text-start text-[12px] text-ink/50">{p.remainderNote}</p>
               )}
-              <PaymentMethods onMethodChange={setMethod} onValidityChange={setCardValid} />
+              <PaymentMethods checkout={checkout} onDone={onPaid} />
             </>
           )}
 
@@ -1123,12 +1142,7 @@ export default function PaymentPage() {
       <SiteFooter />
 
       {tickets && (
-        <SuccessModal
-          tickets={tickets}
-          booking={booking}
-          method={method}
-          onClose={() => router.replace("/")}
-        />
+        <SuccessModal tickets={tickets} booking={booking} onClose={() => router.replace("/")} />
       )}
     </main>
   );
@@ -1146,12 +1160,10 @@ function Field({ label, value }: { label: string; value: string }) {
 function SuccessModal({
   tickets,
   booking,
-  method,
   onClose,
 }: {
   tickets: Ticket[];
   booking: BookingSelection;
-  method: string;
   onClose: () => void;
 }) {
   const { c, lang } = useI18n();
@@ -1224,7 +1236,6 @@ function SuccessModal({
             {[
               { label: p.rowDate, value: booking.dateLabel ?? "—" },
               { label: p.rowTime, value: booking.timeLabel ?? "—" },
-              { label: p.rowMethod, value: method },
             ].map((r) => (
               <div key={r.label} className="flex items-center justify-between py-2.5">
                 <span className="text-[13px] text-ink/50">{r.label}</span>

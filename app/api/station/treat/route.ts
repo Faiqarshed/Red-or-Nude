@@ -16,7 +16,6 @@ const body = z.object({
   /** The sticker. A uuid column, so anything else cannot match a chair. */
   token: z.string().uuid(),
   addonId: z.string().uuid(),
-  method: z.enum(["card", "mada", "stc", "apple"]),
   /** Dev-only, to exercise the decline path. Stripped in production below. */
   simulate: z.literal("decline").optional(),
 });
@@ -47,12 +46,12 @@ export async function POST(request: Request) {
   const result = await buyStationTreat({
     token: d.token,
     addonId: d.addonId,
-    method: d.method,
-    simulate: process.env.NODE_ENV === "production" ? undefined : d.simulate,
+    simulate: d.simulate,
   });
 
   if (!result.ok) {
     return NextResponse.json({ error: result.reason }, { status: STATUS[result.reason] });
   }
+  if ("checkout" in result) return NextResponse.json({ ok: true, checkout: result.checkout });
   return NextResponse.json({ ok: true, name: result.name });
 }

@@ -1,9 +1,9 @@
-// Input field boundary checks — card and phone.
+// Input field boundary checks — phone, refill windows, closures, admin forms.
 //
 //   npm run check:fields
 //
-// Pure — no database, no network. lib/card.ts holds the rules the checkout form
-// enforces, so these are the boundaries themselves, not a mock of them.
+// Pure — no database, no network. The card fields left with the card form:
+// StreamPay's embedded checkout collects and validates the card now.
 
 // Must come first: this points DATABASE_URL at the local test database and
 // refuses to run if there isn't one. See scripts/_test-db.ts.
@@ -11,17 +11,6 @@ import "./_test-db";
 
 import assert from "node:assert";
 import { z } from "zod";
-import {
-  brandOf,
-  cvvLength,
-  formatCardNumber,
-  formatExpiry,
-  luhnValid,
-  validateCard,
-  validateCardNumber,
-  validateCvv,
-  validateExpiry,
-} from "@/lib/card";
 import { refillDaysLeft, refillWindowEnd } from "@/lib/refill";
 import { closureDays } from "@/lib/time";
 import {
@@ -53,89 +42,6 @@ import {
   rules,
   typedText,
 } from "@/lib/admin/validate";
-
-// -- number ------------------------------------------------------------------
-
-// Well-known test numbers, all Luhn-valid.
-for (const n of [
-  "4111111111111111", // Visa
-  "5555555555554444", // Mastercard
-  "378282246310005", // Amex (15 digits)
-  "4242424242424242",
-]) {
-  assert.ok(luhnValid(n), `${n} should pass Luhn`);
-  assert.equal(validateCardNumber(n), null, `${n} should be accepted`);
-}
-
-// One transposed digit must be caught — the whole point of the checksum.
-assert.equal(validateCardNumber("4111111111111112"), "card-checksum");
-assert.equal(validateCardNumber(""), "required");
-assert.equal(validateCardNumber("411111"), "card-length");
-// 20 digits is past every scheme's maximum.
-assert.equal(validateCardNumber("4".repeat(20)), "card-length");
-console.log("  number: length + Luhn ✓");
-
-assert.equal(brandOf("4111111111111111"), "visa");
-assert.equal(brandOf("5555555555554444"), "mastercard");
-assert.equal(brandOf("2221000000000009"), "mastercard"); // 2-series
-assert.equal(brandOf("378282246310005"), "amex");
-assert.equal(formatCardNumber("4111111111111111"), "4111 1111 1111 1111");
-// Amex groups 4-6-5, not 4-4-4-4.
-assert.equal(formatCardNumber("378282246310005"), "3782 822463 10005");
-console.log("  number: brand detection + grouping ✓");
-
-// -- cvv ---------------------------------------------------------------------
-
-assert.equal(cvvLength("4111111111111111"), 3);
-assert.equal(cvvLength("378282246310005"), 4, "Amex prints a 4-digit code");
-assert.equal(validateCvv("123", "4111111111111111"), null);
-assert.equal(validateCvv("12", "4111111111111111"), "cvv-length");
-assert.equal(validateCvv("1234", "4111111111111111"), "cvv-length", "3-digit card, 4 given");
-assert.equal(validateCvv("1234", "378282246310005"), null, "Amex takes 4");
-assert.equal(validateCvv("123", "378282246310005"), "cvv-length");
-assert.equal(validateCvv("", "4111111111111111"), "required");
-console.log("  cvv: length follows the brand ✓");
-
-// -- expiry ------------------------------------------------------------------
-
-const now = new Date("2026-08-18T00:00:00Z");
-
-assert.equal(validateExpiry("09/26", now), null);
-// A card is good through the last day of its printed month.
-assert.equal(validateExpiry("08/26", now), null, "expiring this month is still valid today");
-assert.equal(validateExpiry("07/26", now), "expiry-past");
-assert.equal(validateExpiry("12/25", now), "expiry-past");
-
-assert.equal(validateExpiry("00/30", now), "expiry-month");
-assert.equal(validateExpiry("13/30", now), "expiry-month");
-assert.equal(validateExpiry("99/30", now), "expiry-month");
-
-assert.equal(validateExpiry("", now), "required");
-assert.equal(validateExpiry("8/26", now), "expiry-format");
-assert.equal(validateExpiry("08/2026", now), "expiry-format");
-// A mistyped year rather than a real 50-year card.
-assert.equal(validateExpiry("08/99", now), "expiry-far");
-
-assert.equal(formatExpiry("0826"), "08/26");
-assert.equal(formatExpiry("08"), "08");
-assert.equal(formatExpiry("08/26"), "08/26", "reformatting is idempotent");
-console.log("  expiry: month bounds, past, and far-future ✓");
-
-// -- whole form --------------------------------------------------------------
-
-assert.deepEqual(
-  validateCard({ number: "4111111111111111", name: "Sarah A", expiry: "09/28", cvv: "123" }, now),
-  {},
-  "a good card must produce no errors",
-);
-
-const bad = validateCard({ number: "4111111111111112", name: "", expiry: "13/20", cvv: "1" }, now);
-assert.equal(bad.number, "card-checksum");
-assert.equal(bad.name, "required");
-// Month is checked before the past, so an impossible month says so.
-assert.equal(bad.expiry, "expiry-month");
-assert.equal(bad.cvv, "cvv-length");
-console.log("  form: every field reports its own reason ✓");
 
 // -- phone -------------------------------------------------------------------
 

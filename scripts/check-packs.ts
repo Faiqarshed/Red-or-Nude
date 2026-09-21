@@ -457,8 +457,8 @@ async function main() {
   made.bookings.push(freeBooking.bookings[0].id);
   assert.equal(freeBooking.totalHalalas, 0, "setup: the credit covered the whole bill");
 
-  const paid = await confirmBookingPayment({ code: freeBooking.bookings[0].code, method: "card" });
-  assert.ok(paid.ok, `confirming a free booking failed: ${paid.ok ? "" : paid.error}`);
+  const paid = await confirmBookingPayment({ code: freeBooking.bookings[0].code });
+  assert.ok(paid.ok && "tickets" in paid, `confirming a free booking failed: ${paid.ok ? "" : paid.error}`);
   assert.equal(paid.totalHalalas, 0, "and it confirmed for nothing");
   assert.ok(paid.tickets.length === 1, "with a ticket number, like any other booking");
 

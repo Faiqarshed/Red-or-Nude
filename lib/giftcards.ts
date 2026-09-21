@@ -9,7 +9,7 @@ import "server-only";
 import { randomInt } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { giftCards, giftCardTxns } from "@/lib/db/schema";
+import { giftCards, giftCardTxns, payments } from "@/lib/db/schema";
 
 // No I/O/0/1 — codes get typed off a printed card and read over the phone.
 const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -35,6 +35,12 @@ export type IssueGiftCardInput = {
   /** Months until expiry; null keeps the card open-ended. */
   expiresInMonths?: number | null;
   actorId?: string | null;
+  /**
+   * The online payment that bought it. Linked inside the same transaction, so a
+   * card can never exist without the payment row pointing at it — the refund
+   * path reads that pointer to decide whether anything was delivered.
+   */
+  paymentId?: string | null;
 };
 
 export type IssueResult =
@@ -82,6 +88,13 @@ export async function issueGiftCard(input: IssueGiftCardInput): Promise<IssueRes
           reason: "issued",
           actorId: input.actorId ?? null,
         });
+
+        if (input.paymentId) {
+          await tx
+            .update(payments)
+            .set({ giftCardId: card.id, updatedAt: new Date() })
+            .where(eq(payments.id, input.paymentId));
+        }
 
         return card;
       });

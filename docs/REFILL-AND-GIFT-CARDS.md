@@ -424,51 +424,9 @@ mail needs `dir="rtl"` on the body — `message.lang` is already supplied.
 
 ### 3.3 Payments
 
-The gateway seam predates this work and is unchanged: `PaymentDriver` in
-[lib/payments/index.ts](../lib/payments/index.ts), with
-[fake.ts](../lib/payments/fake.ts) approving everything. Both bookings **and**
-gift cards now go through it, so one driver covers both.
-
-```ts
-// lib/payments/moyasar.ts
-export const moyasarDriver: PaymentDriver = {
-  name: "moyasar",
-  async charge({ ref, amountHalalas, method }) {
-    const res = await fetch("https://api.moyasar.com/v1/payments", {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${process.env.MOYASAR_SECRET_KEY}:`).toString("base64")}`,
-        "Content-Type": "application/json",
-      },
-      // Moyasar counts halalas too, so no conversion.
-      body: JSON.stringify({ amount: amountHalalas, currency: "SAR", description: ref, callback_url: … }),
-    });
-    const raw = await res.json();
-    return { status: raw.status === "paid" ? "paid" : "failed", providerRef: raw.id, raw };
-  },
-};
-```
-
-```ts
-export function getDriver(): PaymentDriver {
-  return process.env.PAYMENT_DRIVER === "moyasar" ? moyasarDriver : fakeDriver;
-}
-```
-
-Two things a real gateway needs that the stand-in does not:
-
-1. **A webhook.** Cards in Saudi go through 3-D Secure, so the customer leaves
-   the site and the browser cannot be trusted to come back. Add
-   `app/api/payments/webhook/route.ts`, verify the provider's signature, look the
-   payment up by `provider_ref`, and drive the same confirmation path
-   `confirmBookingPayment()` uses. Until that exists, a customer who closes the
-   tab mid-3DS has paid for a hold that will be swept.
-2. **Refunds.** The `refunds` table exists and nothing writes to it. Both
-   `[payments] charged … but could not confirm` and `[giftcards] charged … but
-   could not issue` currently mean *a human settles this from the log*. Wire the
-   provider's refund call to those two branches.
-
-Env: `PAYMENT_DRIVER=moyasar`, `MOYASAR_SECRET_KEY`, `MOYASAR_WEBHOOK_SECRET`.
+Done: StreamPay. Gift cards are sold as a 1 SAR product × the amount, issued only
+once the payment is verified, and refunds go through the same driver. See
+[`docs/PAYMENTS-STREAMPAY.md`](PAYMENTS-STREAMPAY.md).
 
 ### 3.4 Cron
 

@@ -13,11 +13,13 @@ the storage bucket.
 The app is functionally complete for **taking bookings**, but two things are not
 finished, and both matter before real customers touch it:
 
-1. **No money is collected.** The payment screens are UI only — there is no
-   gateway. `POST /api/bookings` creates a confirmed booking and
-   `POST /api/gift-cards` issues a real redeemable code, both without charging
-   anyone. Deploying today means a customer can book, and gift cards can be
-   issued, for free.
+1. **Money is collected only with `PAYMENT_DRIVER=streampay`.** Web bookings
+   are held `pending` and confirmed once StreamPay says they are paid; gift
+   cards, memberships and chair treats are delivered the same way. In
+   production an unset or unknown value refuses every payment; a staff-only
+   deploy that really wants the fake driver (which approves everything, so
+   customers book for free) must set `PAYMENT_DRIVER=fake`.
+   Setup is in `docs/PAYMENTS-STREAMPAY.md`.
 2. **Nothing is sent to the customer.** The success screen says details will be
    sent to their phone. No SMS, WhatsApp or email is wired up. The booking
    reference exists only on that screen and in the admin.
@@ -156,9 +158,9 @@ Framework preset: Next.js. Build command `npm run build`. Node 20 or 22.
 
 Ordered by how much damage skipping them causes.
 
-- **Payment gateway.** Moyasar or Tap — both cover mada, STC Pay and Apple Pay,
-  which the UI already advertises. Until this exists, bookings and gift cards are
-  free.
+- **Payment gateway.** StreamPay is built. Live keys, the webhook registered in
+  their dashboard, `npm run streampay:sync`, and Apple Pay registration with
+  their support — `docs/PAYMENTS-STREAMPAY.md` §Going live.
 - **Rate limiting on `/api/bookings` and `/api/gift-cards`.** They are public,
   unauthenticated and write to the database. Nothing currently stops a script
   filling every chair for the next month or minting gift cards. Vercel Firewall

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
+import StreamPayCheckout, { usePaymentReturn, type PaymentOutcome } from "@/components/StreamPayCheckout";
 import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
@@ -108,6 +109,33 @@ export default function StationAddOnView({
   const [treatBusy, setTreatBusy] = useState<string | null>(null);
   const [treatAdded, setTreatAdded] = useState<string[]>([]);
   const [treatError, setTreatError] = useState<string | null>(null);
+  /** StreamPay's checkout for the treat being paid for, inline under the list. */
+  const [treatCheckout, setTreatCheckout] = useState<{ ref: string; url: string } | null>(null);
+
+  const treatRefused = (code: string | undefined) =>
+    setTreatError(
+      code === "already-added"
+        ? s.treatAlready
+        : code === "not-in-service"
+          ? s.treatNotInService
+          : code === "declined" || code === "payment-declined"
+            ? s.treatDeclined
+            : s.treatFailed,
+    );
+
+  // Matched by name rather than id: coming back from a full-window checkout
+  // there is no id in hand, only what the status reply says she bought.
+  const onTreatPaid = (outcome: PaymentOutcome) => {
+    setTreatCheckout(null);
+    if (outcome.status !== "paid" || outcome.result.kind !== "treat") {
+      treatRefused(outcome.status === "failed" ? outcome.error : undefined);
+      return;
+    }
+    const name = outcome.result.name as { en: string };
+    const t = treats.find((x) => x.name.en === name.en);
+    if (t) setTreatAdded((prev) => [...prev, t.id]);
+  };
+  usePaymentReturn(onTreatPaid);
 
   const orderTreat = async (addonId: string) => {
     setTreatBusy(addonId);
@@ -116,20 +144,15 @@ export default function StationAddOnView({
       const res = await fetch("/api/station/treat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: scannedToken, addonId, method: "card" }),
+        body: JSON.stringify({ token: scannedToken, addonId }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) {
-        const code = data?.error as string | undefined;
-        setTreatError(
-          code === "already-added"
-            ? s.treatAlready
-            : code === "not-in-service"
-              ? s.treatNotInService
-              : code === "declined"
-                ? s.treatDeclined
-                : s.treatFailed,
-        );
+        treatRefused(data?.error);
+        return;
+      }
+      if (data.checkout) {
+        setTreatCheckout(data.checkout);
         return;
       }
       setTreatAdded((prev) => [...prev, addonId]);
@@ -247,7 +270,7 @@ export default function StationAddOnView({
                     key={t.id}
                     type="button"
                     onClick={() => void orderTreat(t.id)}
-                    disabled={added || treatBusy !== null}
+                    disabled={added || treatBusy !== null || treatCheckout !== null}
                     aria-busy={busy || undefined}
                     className={`flex items-center gap-3 rounded-[16px] border p-3 text-start transition-colors ${
                       added
@@ -281,6 +304,16 @@ export default function StationAddOnView({
                 );
               })}
             </div>
+
+            {treatCheckout && (
+              <div className="mt-4">
+                <StreamPayCheckout
+                  url={treatCheckout.url}
+                  paymentRef={treatCheckout.ref}
+                  onDone={onTreatPaid}
+                />
+              </div>
+            )}
 
             {treatError && (
               <p role="alert" className="mt-2 text-[12px] text-red">

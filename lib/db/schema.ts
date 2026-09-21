@@ -498,15 +498,16 @@ export const bookings = pgTable(
     removalPriceHalalas: integer("removal_price_halalas").notNull().default(0),
     subtotalHalalas: integer("subtotal_halalas").notNull().default(0),
     /**
-     * Everything taken off this guest's line: their share of the group discount
-     * plus their share of any promo code, as one number.
+     * Everything taken off this guest's line: their share of the group discount,
+     * of any promo code and of any points spent, as one number.
      *
-     * ponytail: the two are not stored separately, so "how much did promos cost
-     * us" cannot be answered from this column alone — `promo_code_id` says only
-     * that one was used. Split it into two columns when someone actually wants
-     * that report.
+     * The promo and points shares are also kept on their own below, because the
+     * StreamPay invoice names each discount as its own coupon. The group share is
+     * whatever is left: discount − promo − points.
      */
     discountHalalas: integer("discount_halalas").notNull().default(0),
+    promoDiscountHalalas: integer("promo_discount_halalas").notNull().default(0),
+    pointsDiscountHalalas: integer("points_discount_halalas").notNull().default(0),
     vatHalalas: integer("vat_halalas").notNull().default(0),
     totalHalalas: integer("total_halalas").notNull().default(0),
 
@@ -738,7 +739,7 @@ export const payments = pgTable(
      * same reason: a receipt must outlive the thing it paid for.
      */
     treatBookingId: uuid("treat_booking_id"),
-    provider: text("provider"), // moyasar | tap | manual
+    provider: text("provider"), // streampay | fake
     providerRef: text("provider_ref"),
     method: paymentMethod("method"),
     amountHalalas: integer("amount_halalas").notNull(),
@@ -770,6 +771,23 @@ export const payments = pgTable(
       .where(sql`${t.bookingId} is not null and ${t.status} in ('pending', 'paid')`),
   }),
 );
+
+/**
+ * Our thing → its StreamPay id. One table for every kind, keyed by a string
+ * lib/payments/streampay.ts builds: `product:service:<uuid>`, `product:refill:<uuid>`,
+ * `product:giftcard`, `coupon:<label>:<halalas>`, `consumer:<phone|email>`.
+ *
+ * `signature` is what was last pushed (name, price, VAT flag), so a sync only
+ * calls StreamPay when something actually changed. `price_id` is the product's
+ * live price, which StreamPay archives and replaces on every price edit.
+ */
+export const streampayIds = pgTable("streampay_ids", {
+  key: text("key").primaryKey(),
+  streampayId: text("streampay_id").notNull(),
+  priceId: text("price_id"),
+  signature: text("signature"),
+  ...stamps,
+});
 
 export const refunds = pgTable("refunds", {
   id: uuid("id").primaryKey().defaultRandom(),
