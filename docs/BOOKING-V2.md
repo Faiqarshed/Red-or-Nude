@@ -131,10 +131,12 @@ Rounding exactly once is what guarantees the two guests' totals add back up to
 what the card was charged. A single guest at 0% is a no-op, so ordinary bookings
 charge exactly what they did before.
 
-**One halala note:** the two guests' VAT figures may sum to one halala different
-from VAT computed on the whole bill in one go. That's correct — an invoice is a
-list of lines and its tax figure is the sum of the lines' tax, which is how ZATCA
-expects a B2C invoice to be built.
+**One halala note:** the two guests' VAT figures, each rounded on its own row,
+may sum to one halala different from VAT computed on the whole bill in one go
+(180.00 + 243.00: 55.18 summed, 55.17 on 423.00). The rows keep their own
+figures for the salon's reports. They are on no customer document: StreamPay's
+invoice is the tax invoice, and it works VAT out once on the whole bill. Our
+confirmation email shows no VAT figures (`lib/invoice/data.ts`).
 
 ### Two guests, different service lengths
 

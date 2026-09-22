@@ -142,6 +142,11 @@ type Spender = Pick<typeof db, "insert" | "select" | "execute">;
  * owes. The same reason lib/refill.ts decides its window on read.
  */
 export async function packCredits(customerId: string, now = new Date()): Promise<PackCredit[]> {
+  return (await packBalances(customerId, now)).filter((c) => c.left > 0);
+}
+
+/** packCredits, spent-out lines included: "0 of 2 left" is still worth saying. */
+async function packBalances(customerId: string, now = new Date()): Promise<PackCredit[]> {
   const owned = await db
     .select()
     .from(customerPacks)
@@ -202,8 +207,39 @@ export async function packCredits(customerId: string, now = new Date()): Promise
       left: spendableCredits(ledger, holdMin, now),
       granted: ledger.reduce((sum, r) => (r.reason === "purchase" ? sum + r.delta : sum), 0),
     }))
-    .filter((c) => c.left > 0)
     .sort((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime());
+}
+
+/** One membership and what is left on it, per service — for the emails. */
+export type MembershipLeft = {
+  packName: Localized;
+  expiresAt: Date;
+  lines: { serviceName: Localized | null; left: number; granted: number }[];
+};
+
+/** These memberships of hers, still running, with every service's balance. */
+export async function membershipsLeft(customerId: string, customerPackIds: string[]): Promise<MembershipLeft[]> {
+  if (customerPackIds.length === 0) return [];
+  const all = await packBalances(customerId);
+  return customerPackIds.flatMap((id) => {
+    const lines = all.filter((c) => c.customerPackId === id);
+    if (lines.length === 0) return [];
+    return [{
+      packName: lines[0].packName,
+      expiresAt: lines[0].expiresAt,
+      lines: lines.map(({ serviceName, left, granted }) => ({ serviceName, left, granted })),
+    }];
+  });
+}
+
+/** The memberships these bookings took a credit from. */
+export async function packsSpentOn(bookingIds: string[]): Promise<string[]> {
+  if (bookingIds.length === 0) return [];
+  const rows = await db
+    .selectDistinct({ id: packTxns.customerPackId })
+    .from(packTxns)
+    .where(and(inArray(packTxns.bookingId, bookingIds), lt(packTxns.delta, 0)));
+  return rows.map((r) => r.id);
 }
 
 export type PackQuote =

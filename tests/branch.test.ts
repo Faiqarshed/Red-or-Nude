@@ -12,9 +12,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { addons, bookings, services } from "@/lib/db/schema";
+import { randomUUID } from "node:crypto";
+import { addons, bookings, payments, services } from "@/lib/db/schema";
 import { createBooking, createBookings, bookingSummaries, releaseWebHold } from "@/lib/bookings";
 import { confirmBookingPayment } from "@/lib/payments/confirm";
+import { buildBookingInvoice } from "@/lib/invoice/data";
+import { renderInvoiceEmail } from "@/lib/invoice/template";
 import { halalasToSar, sarToHalalas, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { promoDiscount, normalizePromoCode } from "@/lib/promo";
 import {
@@ -481,6 +484,57 @@ describe("a party is one bill and one unit", () => {
     const summaries = await bookingSummaries({ code: party.bookings[1].code });
     expect(summaries).toHaveLength(2);
     expect(summaries.every((s) => s.groupSize === 2)).toBe(true);
+  });
+
+  it("sends a booking confirmation that links StreamPay's tax invoice, not a second one", async () => {
+    const party = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE).toISOString(),
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE, email: "vat@example.com" },
+      source: "web",
+      status: "pending",
+    });
+    if (!party.ok) throw new Error(party.error);
+    const [b] = party.bookings;
+    const url = "https://streampay.sa/s/test-invoice";
+    await db.insert(payments).values({
+      bookingId: b.id, provider: "streampay", providerRef: randomUUID(), method: "mada",
+      amountHalalas: b.totalHalalas, status: "paid", raw: { invoiceUrl: url },
+    });
+
+    const invoice = await buildBookingInvoice([b.id]);
+    expect(invoice?.taxInvoiceUrl).toBe(url);
+    const { html, text } = renderInvoiceEmail(invoice!);
+    expect(html).toContain(url);
+    expect(text).toContain(url);
+    // No second set of VAT figures to disagree with StreamPay's.
+    expect(html).not.toMatch(/VAT no\.|Subtotal \(excl\. VAT\)|Tax Invoice/);
+  });
+
+  it("leaves out a checkout she opened and walked away from", async () => {
+    const party = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE).toISOString(),
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE },
+      source: "web",
+      status: "pending",
+    });
+    if (!party.ok) throw new Error(party.error);
+    const made = party.bookings[0];
+    // Fresh: still hers to pay, so still listed.
+    expect(await bookingSummaries({ code: made.code })).toHaveLength(1);
+
+    // Past the payment window with no checkout open: gone, before and after the sweep.
+    await db.update(bookings).set({ createdAt: new Date(Date.now() - 60 * 60_000) }).where(eq(bookings.code, made.code));
+    expect(await bookingSummaries({ code: made.code })).toHaveLength(0);
+    await db.update(bookings).set({ status: "cancelled", cancelReason: "payment-timeout" }).where(eq(bookings.code, made.code));
+    expect(await bookingSummaries({ code: made.code })).toHaveLength(0);
+
+    // A cancellation the salon made still shows.
+    await db.update(bookings).set({ cancelReason: "salon" }).where(eq(bookings.code, made.code));
+    expect(await bookingSummaries({ code: made.code })).toHaveLength(1);
   });
 
   it("never returns a name, a phone, an address or a chair to a reference holder", async () => {

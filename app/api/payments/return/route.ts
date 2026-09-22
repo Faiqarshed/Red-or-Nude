@@ -22,7 +22,17 @@ export async function GET(request: Request) {
   // `\` too: browsers read `/\evil.com` as `//evil.com`.
   const b = url.searchParams.get("back") ?? "/";
   const back = /^\/(?![\/\\])/.test(b) ? b : "/";
-  const to = ref.success ? `${back}${back.includes("?") ? "&" : "?"}paid=${ref.data}` : back;
+  // StreamPay appends its own `status` (paid | failed …). Only a hint for the
+  // page's message — the page still asks /api/payments/status before believing
+  // anything, so a hand-edited URL cannot confirm a booking.
+  // Its `message` is the bank's reason ("3DS: Card authentication declined.") —
+  // the only one we get, since a failed attempt leaves no record at StreamPay.
+  const why = (url.searchParams.get("message") ?? "").slice(0, 200);
+  const declined =
+    ref.success && (url.searchParams.get("status") ?? "paid") !== "paid"
+      ? `&declined=1${why ? `&why=${encodeURIComponent(why)}` : ""}`
+      : "";
+  const to = ref.success ? `${back}${back.includes("?") ? "&" : "?"}paid=${ref.data}${declined}` : back;
 
   // `<` escaped so a crafted `back` cannot close the script tag.
   const js = JSON.stringify(to).replace(/</g, "\u003c");

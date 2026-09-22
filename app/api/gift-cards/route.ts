@@ -12,28 +12,23 @@
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
+import { emailField, nameField } from "@/lib/account/fields";
 import { db } from "@/lib/db";
-import { giftCardDesigns } from "@/lib/db/schema";
+import { giftCardDesigns, giftCardValues } from "@/lib/db/schema";
 import { startPurchase } from "@/lib/payments/purchase";
+import { giftCardLine } from "@/lib/payments/lines";
 
 export const dynamic = "force-dynamic";
 
 const body = z.object({
-  // The preset denominations live in gift_card_values and are admin-managed, but
-  // the builder also offers a custom amount, so the bound is what's enforced.
-  // Whole riyals: the sale is a 1 SAR StreamPay product times this many.
-  amountSar: z.coerce.number().int().min(50).max(2000),
+  // Whole riyals, and one of the salon's active amounts (checked below).
+  amountSar: z.coerce.number().int().positive(),
   designId: z.string().uuid().nullable().optional(),
-  buyerName: z.string().trim().max(120).optional(),
-  buyerEmail: z.string().trim().email().optional().or(z.literal("")),
-  recipientName: z.string().trim().max(120).optional(),
-  recipientEmail: z.string().trim().email().optional().or(z.literal("")),
-  recipientPhone: z
-    .string()
-    .trim()
-    .regex(/^(\+?966|0)?5\d{8}$/, "invalid-phone")
-    .optional()
-    .or(z.literal("")),
+  // The builder's own checks (lib/account/fields.ts), so the page and the API agree.
+  buyerName: nameField.optional().or(z.literal("")),
+  buyerEmail: emailField.optional().or(z.literal("")),
+  recipientName: nameField,
+  recipientEmail: emailField.optional().or(z.literal("")),
   message: z.string().max(500).optional(),
   lang: z.enum(["ar", "en"]).optional(),
   /** Dev-only, to exercise the decline path. Stripped in production. */
@@ -57,10 +52,14 @@ export async function POST(request: Request) {
   }
   const d = parsed.data;
 
-  // Nobody to give it to.
-  if (!d.recipientEmail && !d.recipientPhone) {
-    return NextResponse.json({ error: "no-recipient" }, { status: 400 });
-  }
+  // Only the amounts the salon sells (/admin/gift-cards). There is no custom
+  // amount: each amount is its own StreamPay product, see giftCardLine.
+  const [value] = await db
+    .select({ id: giftCardValues.id })
+    .from(giftCardValues)
+    .where(and(eq(giftCardValues.amountHalalas, d.amountSar * 100), eq(giftCardValues.active, true)))
+    .limit(1);
+  if (!value) return NextResponse.json({ error: "invalid-amount" }, { status: 400 });
 
   // Only offer designs the salon has actually published.
   let designId: string | null = null;
@@ -82,15 +81,11 @@ export async function POST(request: Request) {
       buyerEmail: d.buyerEmail || null,
       recipientName: d.recipientName || null,
       recipientEmail: d.recipientEmail || null,
-      recipientPhone: d.recipientPhone || null,
       message: d.message || null,
       lang: d.lang ?? "ar",
     },
     amountHalalas: d.amountSar * 100,
-    // One riyal a unit, so any amount is the same product. VAT-exempt at sale
-    // by default — a voucher is taxed when spent. Awaiting the salon's
-    // accountant; see docs/PAYMENTS-STATUS.md.
-    line: { key: "product:giftcard", name: "بطاقة هدية | Gift card", priceHalalas: 100, qty: d.amountSar, vatExempt: true },
+    lines: [giftCardLine(d.amountSar)],
     title: "Gift card",
     back: "/gift-card/payment",
     payer: { name: d.buyerName || null, email: d.buyerEmail || null },

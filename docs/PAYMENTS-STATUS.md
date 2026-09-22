@@ -102,6 +102,23 @@ the booking suites) unless it says otherwise.
   purchase intents — left out as more than the risk.
 - **Promo `max_uses` race** — two holds can both pass the last use
   (`lib/promo.ts`). Not new.
+- **Gift cards come in the salon's preset amounts only; the custom amount is
+  gone.** Each amount is its own StreamPay product, "Gift card 300 SAR" × 1
+  (`giftCardLine` in `lib/payments/lines.ts`), made the first time it sells.
+  Two other designs were rejected:
+  - *A 1 SAR product × the amount* (what shipped first) put "Gift card × 300 @
+    1.00" on StreamPay's invoice, which is confusing to a customer or an auditor.
+  - *One product whose price is changed per sale* is unsafe: a payment link takes
+    only a product id and uses whatever that product's price is at the moment
+    the link is made. Two buyers at once would get each other's amount; our
+    link-total check would then cancel one checkout.
+
+  A custom amount would work with one product per amount, at the cost of one
+  more StreamPay product per distinct amount ever sold. It was removed to keep
+  the catalogue to the amounts the salon chose. `POST /api/gift-cards` refuses
+  any amount that is not active in `gift_card_values` (`invalid-amount`); new
+  amounts are added in /admin/gift-cards. Invoices issued before this change
+  keep the old "× amount @ 1.00" lines.
 
 **Not built**
 
@@ -167,6 +184,27 @@ Until then, anyone can run it by hand at any time:
 ```
 curl -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/settle-pending?report=1
 ```
+
+---
+
+**Invoicing: StreamPay's invoice is the only tax invoice**
+
+- Decided Sept 2026. Our email is a booking confirmation (appointment, items,
+  discounts, total, "prices include VAT") with a **View your tax invoice** link to
+  StreamPay's invoice, whose URL is saved on the payment at settle
+  (`payments.raw.invoiceUrl`, `invoiceNo`). Two tax documents for one sale was
+  the audit risk, and ours was not ZATCA-compliant (no QR, numbers not
+  sequential). StreamPay's totals and VAT matched ours on all 16 booking
+  invoices checked, to the halala.
+- **No PDF attachment.** StreamPay's API has no invoice PDF endpoint, and its
+  public invoice page is a web app. Ask StreamPay support whether a PDF
+  endpoint exists, or whether they email the invoice to the customer themselves.
+- **Only bookings get our confirmation email.** Gift card buyers get the card
+  receipt, and memberships get no email from us, so neither gets the invoice
+  link yet. The VAT figures to report come from StreamPay's reports, not our
+  database.
+- For the accountant: the salon's legal name and VAT number must be set
+  correctly on StreamPay's invoices (their dashboard settings).
 
 ---
 

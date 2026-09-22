@@ -1,4 +1,5 @@
-// Emailing the invoice for a paid booking.
+// Emailing the booking confirmation for a paid booking (not a tax invoice:
+// StreamPay issues that, and the email links to it — see data.ts).
 //
 // Deliberately total: this is called from the payment path, after the card has
 // been charged and the tickets issued. At that point the booking is real whether
@@ -11,7 +12,7 @@ import { buildBookingInvoice } from "./data";
 import { renderInvoiceEmail } from "./template";
 
 export type SendInvoiceOutcome =
-  | { sent: true; number: string }
+  | { sent: true; code: string }
   | { sent: false; reason: "no-email" | "not-configured" | "failed" };
 
 /**
@@ -34,22 +35,23 @@ export async function sendBookingInvoice(bookingIds: string[]): Promise<SendInvo
       html,
       text,
       replyTo: process.env.MAIL_REPLY_TO?.trim() || null,
-      tags: ["booking-invoice"],
+      tags: ["booking-confirmation"],
     });
 
     if (!result.ok) {
       // Loud on purpose: the customer paid and has no receipt. Someone has to be
       // able to find this in the logs and resend it by hand.
       console.error(
-        `[invoice] ${invoice.number} to ${invoice.customer.email} was not delivered:`,
+        `[invoice] ${invoice.guests[0]?.code} to ${invoice.customer.email} was not delivered:`,
         result.reason,
         result.detail ?? "",
       );
       return { sent: false, reason: result.reason === "not-configured" ? "not-configured" : "failed" };
     }
 
-    console.info(`[invoice] ${invoice.number} sent to ${invoice.customer.email}`);
-    return { sent: true, number: invoice.number };
+    const code = invoice.guests[0]?.code ?? "";
+    console.info(`[invoice] ${code} sent to ${invoice.customer.email}`);
+    return { sent: true, code };
   } catch (err) {
     console.error("[invoice] could not build or send the invoice", err);
     return { sent: false, reason: "failed" };

@@ -42,6 +42,12 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
     signal: AbortSignal.timeout(20_000),
   });
   const text = await res.text();
+  // STREAMPAY_DEBUG=1 prints every call both ways. Dev only: bodies carry the
+  // customer's name, phone and email.
+  if (process.env.STREAMPAY_DEBUG === "1") {
+    console.log(`[streampay:debug] ${method} ${path}`, body === undefined ? "" : JSON.stringify(body, null, 2));
+    console.log(`[streampay:debug] ← ${res.status}`, text.slice(0, 4000));
+  }
   if (!res.ok) throw new Error(`[streampay] ${method} ${path} → ${res.status}: ${text.slice(0, 600)}`);
   return (text ? JSON.parse(text) : {}) as T;
 }
@@ -91,7 +97,10 @@ export async function syncProduct(
   const have = await lookup(key);
   if (have?.signature === signature) return have.streampayId;
 
-  const price = { currency: "SAR", amount: sar(p.priceHalalas), is_price_exempt_from_vat: exempt };
+  // is_price_inclusive_of_vat is deprecated but still defaults to true, and
+  // StreamPay refuses an exempt price that is also "inclusive" (422).
+  const vat = { is_price_exempt_from_vat: exempt, is_price_inclusive_of_vat: !exempt };
+  const price = { currency: "SAR", amount: sar(p.priceHalalas), ...vat };
 
   if (!have) {
     const made = await api<ProductDto>("POST", "/products", {
@@ -114,7 +123,7 @@ export async function syncProduct(
   if (oldPrice !== p.priceHalalas || oldExempt !== exempt) {
     const next = await api<{ id: string }>("PUT", `/products/${have.streampayId}/prices/${priceId}`, {
       amount: price.amount,
-      is_price_exempt_from_vat: exempt,
+      ...vat,
     });
     priceId = next.id;
   }
@@ -317,11 +326,23 @@ export const streampayDriver: PaymentDriver = {
     // would keep the rest of her money for nothing.
     const paid = all.find((p) => ["SUCCEEDED", "SETTLED", "PARTIALLY_REFUNDED"].includes(p.current_status));
     if (paid) {
+      // Their invoice is the tax invoice (ours is a booking confirmation that
+      // links to it). A failed read costs only the link, never the payment.
+      const doc = await api<{ url?: string | null; org_invoice_number?: number | null }>(
+        "GET",
+        `/invoices/${paid.invoiceId}`,
+      ).catch(() => null);
       return {
         status: "paid",
         amountHalalas: paid.amount_in_smallest_unit,
         method: METHOD[paid.payment_method ?? ""] ?? "card",
-        raw: { paymentId: paid.id, invoiceId: paid.invoiceId, paymentMethod: paid.payment_method ?? null },
+        raw: {
+          paymentId: paid.id,
+          invoiceId: paid.invoiceId,
+          invoiceNo: doc?.org_invoice_number ?? null,
+          invoiceUrl: doc?.url ?? null,
+          paymentMethod: paid.payment_method ?? null,
+        },
       };
     }
     if (all.some((p) => ["PENDING", "PROCESSING", "UNDER_REVIEW"].includes(p.current_status))) {

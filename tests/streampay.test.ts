@@ -12,14 +12,16 @@ import { loyaltyBalance } from "@/lib/loyalty";
 import { spendableBalance } from "@/lib/rewards";
 import { spendableCredits } from "@/lib/packs";
 import { createBookings } from "@/lib/bookings";
-import { bookingLines } from "@/lib/payments/lines";
+import { bookingLines, giftCardLine } from "@/lib/payments/lines";
 import { settleBookingPayment } from "@/lib/payments/confirm";
 import { settlePurchase, startPurchase, type GiftIntent } from "@/lib/payments/purchase";
 import { paymentProblems, reconcilePayments } from "@/lib/payments/reconcile";
 import { getDriver } from "@/lib/payments";
+import { declineReason } from "@/lib/payments/decline";
 import { fakeDriver } from "@/lib/payments/fake";
 import { verifyWebhookSignature } from "@/lib/payments/streampay";
 import { GET as paymentReturn } from "@/app/api/payments/return/route";
+import { POST as giftCards } from "@/app/api/gift-cards/route";
 import type { Verdict } from "@/lib/payments";
 import { FUTURE, TEST_PHONE, counters, fixtures, reset, taggedAddon, type Fixtures } from "./helpers";
 
@@ -158,13 +160,44 @@ describe("the return page", () => {
       expect(await target(evil)).toBe('"/"');
     }
   });
+
+  it("tells the page when StreamPay says the payment failed, and only then", async () => {
+    const ref = randomUUID();
+    const back = async (status: string) =>
+      (await (await paymentReturn(new Request(`http://x/api/payments/return?ref=${ref}&back=%2Fbooking%2Fpayment&status=${status}`))).text())
+        .match(/location\.replace\((".*?")\)/)![1];
+    expect(await back("failed")).toBe(`"/booking/payment?paid=${ref}&declined=1"`);
+    expect(await back("paid")).toBe(`"/booking/payment?paid=${ref}"`);
+    // The bank's reason rides along, for the message only.
+    expect(await back("failed&message=3DS%3A%20Card%20authentication%20declined.")).toBe(
+      `"/booking/payment?paid=${ref}&declined=1&why=3DS%3A%20Card%20authentication%20declined."`,
+    );
+  });
+
+  it("names each kind of decline so she knows what failed", () => {
+    expect(declineReason("3DS: Card authentication declined.")).toBe("authFailed");
+    expect(declineReason("3DS: Authentication cancelled")).toBe("cancelled");
+    expect(declineReason("3DS: Authentication rejected")).toBe("rejected");
+    expect(declineReason("3DS: Authentication not available")).toBe("unavailable");
+    expect(declineReason("Insufficient Funds")).toBe("insufficient");
+    expect(declineReason("Expired Card")).toBe("expired");
+    expect(declineReason("DECLINED: EXCEEDS WITHDRAWAL LIMIT")).toBe("limit");
+    expect(declineReason("Card not enrolled in 3DS service")).toBe("notEnrolled");
+    expect(declineReason("3DS: attempted but not available, please ensure that you have enabled Online Purchase from your bank portal.")).toBe("notEnrolled");
+    expect(declineReason("3DS service error occurred")).toBe("unavailable");
+    expect(declineReason("3DS: attempted but not available")).toBe("unavailable");
+    expect(declineReason("Authentication rejected by issuer bank")).toBe("rejected");
+    expect(declineReason("DECLINED: STOLEN CARD")).toBe("declined");
+    expect(declineReason("Do not honor")).toBe("declined");
+    expect(declineReason(null)).toBe("declined");
+  });
 });
 
 describe("buying something twice by accident", () => {
   it("resumes the checkout already open for the same purchase instead of opening a second", async () => {
     const intent: GiftIntent = {
       kind: "gift_card", amountSar: 75, designId: null, buyerName: TAG, buyerEmail: null,
-      recipientName: null, recipientEmail: null, recipientPhone: "0500000000", message: null, lang: "en",
+      recipientName: null, recipientEmail: null, message: null, lang: "en",
     };
     const ref = randomUUID();
     await db.insert(payments).values({
@@ -178,7 +211,7 @@ describe("buying something twice by accident", () => {
       const again = await startPurchase({
         intent: { ...intent },
         amountHalalas: 7500,
-        line: { key: "product:giftcard", name: "Gift card", priceHalalas: 100, qty: 75, vatExempt: true },
+        lines: [giftCardLine(75)],
         title: "Gift card",
         payer: { name: null, email: null },
         back: "/gift-card/payment",
@@ -293,7 +326,7 @@ describe("points and credits while a checkout is open", () => {
 describe("the safety net under the webhook", () => {
   const gift: GiftIntent = {
     kind: "gift_card", amountSar: 75, designId: null, buyerName: TAG, buyerEmail: null,
-    recipientName: null, recipientEmail: null, recipientPhone: null, message: null, lang: "en",
+    recipientName: null, recipientEmail: null, message: null, lang: "en",
   };
   const ago = (min: number) => new Date(Date.now() - min * 60_000);
   const ours = sql`${payments.raw} -> 'intent' ->> 'buyerName' = ${TAG}`;
@@ -415,5 +448,29 @@ describe("the payment driver", () => {
       env.PAYMENT_DRIVER = was;
       env.NODE_ENV = mode;
     }
+  });
+});
+
+describe("buying a gift card", () => {
+  const post = (body: object) =>
+    giftCards(new Request("http://x/api/gift-cards", { method: "POST", body: JSON.stringify(body) }));
+  const ok = { amountSar: 100, recipientName: "Sarah" };
+
+  it("refuses what the builder refuses, before anything is charged", async () => {
+    for (const bad of [
+      { recipientEmail: "aefpwirjopoajirw" }, // no @
+      { recipientName: "" },
+      { recipientName: "12345" },
+      { buyerName: "x" },
+    ]) {
+      const res = await post({ ...ok, ...bad });
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+    }
+  });
+
+  it("sells only the amounts the salon lists, not any number typed in", async () => {
+    const res = await post({ ...ok, amountSar: 737 });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid-amount" });
   });
 });

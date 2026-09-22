@@ -51,7 +51,7 @@ export async function POST(request: Request) {
     intent: { kind: "pack", customerId: customer.id, packId: pack.id },
     // From the catalogue, never from the browser.
     amountHalalas: pack.priceHalalas,
-    line: { key: `product:pack:${pack.id}`, name: productName(pack.name), priceHalalas: pack.priceHalalas, qty: 1 },
+    lines: [{ key: `product:pack:${pack.id}`, name: productName(pack.name), priceHalalas: pack.priceHalalas, qty: 1 }],
     title: "Membership",
     payer: { name: customer.name, phone: customer.phone, email: customer.email, customerId: customer.id },
     back: `/memberships/payment?pack=${pack.id}`,

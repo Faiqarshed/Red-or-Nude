@@ -17,6 +17,21 @@ export function productName(name: Localized | null | undefined, fallback = "Item
   return name.ar && name.en && name.ar !== name.en ? `${name.ar} | ${name.en}` : name.en || name.ar || fallback;
 }
 
+/**
+ * A gift card is its own product per amount: "Gift card 300 SAR" × 1 on the
+ * invoice, not a 1 SAR product × 300. Made the first time that amount sells.
+ * Not one product repriced per sale: a link takes the product's price at the
+ * moment it is made, so two buyers at once would get each other's amount.
+ * VAT-exempt at sale — a voucher is taxed when spent; awaiting the accountant.
+ */
+export const giftCardLine = (amountSar: number): Line => ({
+  key: `product:giftcard:${amountSar}`,
+  name: `بطاقة هدية ${amountSar} ر.س | Gift card ${amountSar} SAR`,
+  priceHalalas: amountSar * 100,
+  qty: 1,
+  vatExempt: true,
+});
+
 export async function bookingLines(
   members: (typeof bookings.$inferSelect)[],
 ): Promise<{ lines: Line[]; discounts: Discount[] }> {

@@ -16,7 +16,8 @@ export type Settled =
       status: "paid";
       result: { kind: "booking"; tickets: ConfirmedTicket[]; totalHalalas: number } | Delivered;
     }
-  | { status: "pending" }
+  /** Still payable: `checkout` lets a page that lost it re-open the same one. */
+  | { status: "pending"; checkout?: { ref: string; url: string } }
   | { status: "failed"; error: string };
 
 export async function settlePayment(ref: string): Promise<Settled> {
@@ -30,13 +31,13 @@ export async function settlePayment(ref: string): Promise<Settled> {
   if (row.bookingId) {
     const r = await settleBookingPayment(ref);
     if (!r.ok) return { status: "failed", error: r.error };
-    if ("checkout" in r) return { status: "pending" };
+    if ("checkout" in r) return { status: "pending", checkout: r.checkout };
     return { status: "paid", result: { kind: "booking", tickets: r.tickets, totalHalalas: r.totalHalalas } };
   }
 
   const r = await settlePurchase(ref);
   if (!r.ok) return { status: "failed", error: r.error };
-  if ("checkout" in r) return { status: "pending" };
+  if ("checkout" in r) return { status: "pending", checkout: r.checkout };
   return { status: "paid", result: r.delivered };
 }
 

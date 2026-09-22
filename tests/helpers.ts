@@ -137,14 +137,14 @@ export async function taggedAddon(
   tag: string,
   label: string,
   atCheckout: boolean,
-  { active = true, priceHalalas = 1000 }: { active?: boolean; priceHalalas?: number } = {},
+  { active = true, priceHalalas = 1000, durationMin = 0 }: { active?: boolean; priceHalalas?: number; durationMin?: number } = {},
 ): Promise<string> {
   const [row] = await db
     .insert(addons)
     .values({
       name: { ar: label, en: label },
       priceHalalas,
-      durationMin: 0,
+      durationMin,
       atCheckout,
       image: `${tag}/${label}.webp`,
       active,

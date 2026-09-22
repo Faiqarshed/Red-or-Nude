@@ -19,16 +19,13 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import assert from "node:assert";
 import type { InvoiceData } from "@/lib/invoice/data";
 import { renderInvoiceEmail } from "@/lib/invoice/template";
-import { splitGroupPrice, vatIncludedIn } from "@/lib/money";
-
-const VAT = 15;
+import { splitGroupPrice } from "@/lib/money";
 
 function sample(lang: "ar" | "en"): InvoiceData {
   // Two guests, 10% off the combined bill — the same maths lib/bookings.ts runs.
   const grosses = [25000, 18000];
   const split = splitGroupPrice(grosses, 10);
   const guests = split.map((s, i) => {
-    const vat = vatIncludedIn(s.totalHalalas, VAT);
     return {
       code: ["RON-4F2K", "RON-7XQM"][i],
       ticketNo: ["K45", "K46"][i],
@@ -42,8 +39,6 @@ function sample(lang: "ar" | "en"): InvoiceData {
             ]
           : [{ label: { ar: "مانيكير", en: "Manicure" }, amountHalalas: 18000 }],
       discountHalalas: s.discountHalalas,
-      subtotalHalalas: s.totalHalalas - vat,
-      vatHalalas: vat,
       totalHalalas: s.totalHalalas,
     };
   });
@@ -52,12 +47,8 @@ function sample(lang: "ar" | "en"): InvoiceData {
     guests.reduce((n, g) => n + pick(g), 0);
 
   return {
-    number: "INV-202608-4F2K",
-    issuedAt: new Date("2026-08-18T09:12:00Z"),
-    vatPercent: VAT,
     seller: {
       name: "Red or Nude",
-      vatNumber: "300000000000003",
       branchName: { ar: "فرع العليا", en: "Olaya branch" },
       branchAddress: { ar: "طريق العليا، الرياض", en: "Olaya Road, Riyadh" },
       branchPhone: "0112345678",
@@ -68,10 +59,19 @@ function sample(lang: "ar" | "en"): InvoiceData {
     providerRef: "pay_9f3a1c",
     guests,
     promoCode: null,
-    subtotalHalalas: sum((g) => g.subtotalHalalas),
-    vatHalalas: sum((g) => g.vatHalalas),
     discountHalalas: sum((g) => g.discountHalalas),
     totalHalalas: sum((g) => g.totalHalalas),
+    taxInvoiceUrl: "https://streampay.sa/s/example",
+    memberships: [
+      {
+        packName: { ar: "باقة العناية", en: "Care membership" },
+        expiresAt: new Date("2026-11-18T09:12:00Z"),
+        lines: [
+          { serviceName: { ar: "مانيكير", en: "Manicure" }, left: 5, granted: 6 },
+          { serviceName: { ar: "جل", en: "Gel polish" }, left: 0, granted: 2 },
+        ],
+      },
+    ],
   };
 }
 
@@ -80,12 +80,7 @@ mkdirSync(".preview", { recursive: true });
 for (const lang of ["ar", "en"] as const) {
   const data = sample(lang);
 
-  // The invoice must never disagree with the card. Everything else is styling.
-  assert.equal(
-    data.subtotalHalalas + data.vatHalalas,
-    data.totalHalalas,
-    "subtotal + VAT must equal the total charged",
-  );
+  // The email must never disagree with the card. Everything else is styling.
   assert.equal(
     data.guests.reduce((n, g) => n + g.totalHalalas, 0),
     data.totalHalalas,
@@ -93,6 +88,8 @@ for (const lang of ["ar", "en"] as const) {
   );
 
   const { subject, html, text } = renderInvoiceEmail(data);
+  assert.ok(html.includes(data.taxInvoiceUrl!), "the email must link StreamPay's tax invoice");
+  assert.ok(!/VAT no\.|الرقم الضريبي/.test(html), "the confirmation is not a tax invoice");
 
   // Customer-supplied text is interpolated into the HTML; it must arrive escaped.
   const injected = renderInvoiceEmail({

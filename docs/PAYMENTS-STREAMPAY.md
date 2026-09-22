@@ -29,7 +29,7 @@ ever charged a number the screen didn't show.
 | Add-on, treat | product | `product:addon:<id>` |
 | Removal | product | `product:removal:<id>` |
 | Membership pack | product | `product:pack:<id>` |
-| Gift card | 1 SAR product × amount, VAT-exempt | `product:giftcard` |
+| Gift card | one product per amount ("Gift card 300 SAR" × 1), VAT-exempt | `product:giftcard:<SAR>` |
 | Service covered by pack credit | left off (products must be ≥ 1 SAR) | — |
 | Group discount | fixed coupon "Group discount −X" | `coupon:Group discount:<halalas>` |
 | Promo code | fixed coupon "`CODE` −X" | `coupon:<CODE>:<halalas>` |

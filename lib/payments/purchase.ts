@@ -15,11 +15,13 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookingAddons, giftCards, payments } from "@/lib/db/schema";
+import { bookingAddons, bookings, giftCards, payments } from "@/lib/db/schema";
+import { reserveStations } from "@/lib/availability";
 import { issueGiftCard } from "@/lib/giftcards";
 import { sendGiftCardEmails } from "@/lib/giftcard/email";
-import { notify } from "@/lib/notify";
 import { buyPack } from "@/lib/packs";
+import { sendMembershipEmail } from "@/lib/membership-email";
+import { sendVisitEmail } from "@/lib/visit-email";
 import { siteOrigin } from "@/lib/site";
 import { refundRef } from "./refund";
 import { getDriver, mergeRaw, PAY_WINDOW_MIN, type Line, type Payer, type Verdict } from "./index";
@@ -32,16 +34,20 @@ export type GiftIntent = {
   buyerEmail: string | null;
   recipientName: string | null;
   recipientEmail: string | null;
-  recipientPhone: string | null;
   message: string | null;
   lang: "ar" | "en";
 };
 export type PackIntent = { kind: "pack"; customerId: string; packId: string };
+/**
+ * Things bought from the chair for the visit in progress (lib/station-treat.ts):
+ * treats, and service add-ons when the chair is free long enough after her.
+ * `durationMin` is 0 for a treat; the rest is added to the booking's end.
+ */
+export type TreatItem = { addonId: string; name: { ar: string; en: string }; priceHalalas: number; durationMin: number };
 export type TreatIntent = {
   kind: "treat";
   bookingId: string;
-  addonId: string;
-  name: { ar: string; en: string };
+  items: TreatItem[];
 };
 export type Intent = GiftIntent | PackIntent | TreatIntent;
 
@@ -55,7 +61,7 @@ const DELIVERY_GRACE_MS = 2 * 60_000;
 export type Delivered =
   | { kind: "gift_card"; code: string }
   | { kind: "pack"; customerPackId: string }
-  | { kind: "treat"; name: { ar: string; en: string } };
+  | { kind: "treat"; names: { ar: string; en: string }[] };
 
 export type PurchaseResult =
   | { ok: true; delivered: Delivered }
@@ -73,7 +79,7 @@ export type PurchaseResult =
 export async function startPurchase(input: {
   intent: Intent;
   amountHalalas: number;
-  line: Line;
+  lines: Line[];
   title: string;
   payer: Payer;
   /** The page to come back to after a full-window checkout. */
@@ -122,7 +128,7 @@ export async function startPurchase(input: {
     charge = await driver.charge({
       ref,
       amountHalalas: input.amountHalalas,
-      lines: [input.line],
+      lines: input.lines,
       discounts: [],
       title: input.title,
       payer: input.payer,
@@ -253,16 +259,14 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number)
       buyerEmail: intent.buyerEmail,
       recipientName: intent.recipientName,
       recipientEmail: intent.recipientEmail,
-      recipientPhone: intent.recipientPhone,
       message: intent.message,
       expiresInMonths: 12,
     });
     if (!card.ok) return null;
 
-    // Delivery. The buyer still gets a WhatsApp share button on the success
-    // screen — this is the automatic half. Email really sends (SMTP); WhatsApp
-    // goes through notify(), log-only until a provider is chosen. Two paths on
-    // purpose — see docs/INVOICE-EMAIL.md §7. Neither can fail the sale.
+    // The emails: the card to the recipient's address, if she gave one, and
+    // the buyer's receipt. The WhatsApp share is the buyer's own, on the
+    // success screen. Neither can fail the sale.
     await sendGiftCardEmails({
       code: card.code,
       amountSar: intent.amountSar,
@@ -274,42 +278,52 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number)
       expiresAt: card.expiresAt,
       lang: intent.lang,
     });
-    if (intent.recipientPhone) {
-      await notify({
-        channel: "whatsapp",
-        to: intent.recipientPhone,
-        template: "gift-card",
-        lang: intent.lang,
-        data: {
-          code: card.code,
-          amountSar: intent.amountSar,
-          senderName: intent.buyerName,
-          recipientName: intent.recipientName,
-          message: intent.message,
-          cardUrl: `/gift/${card.code}`,
-        },
-      });
-    }
     return { kind: "gift_card", code: card.code };
   }
 
   if (intent.kind === "pack") {
     const bought = await buyPack(intent.customerId, intent.packId, new Date(), paymentId);
     if (!bought.ok) return null;
+    // What she bought, what each service holds, until when, and the tax invoice.
+    // Never throws: the membership is hers whether or not the mail lands.
+    await sendMembershipEmail(bought.customerPackId, paymentId);
     return { kind: "pack", customerPackId: bought.customerPackId };
   }
 
-  // A treat, onto the visit it was bought for. The snapshot exactly as
-  // createBookings writes it. booking_addons' primary key is what guarantees
-  // one per visit: a second tap that got this far is refused here and refunded.
-  // A booking gone meanwhile fails the insert on its foreign key.
+  // Onto the visit it was bought for, the snapshot exactly as createBookings
+  // writes it. booking_addons' primary key is what guarantees one of each per
+  // visit: a second tap that got this far is refused here. A booking gone
+  // meanwhile fails the insert on its foreign key.
+  //
+  // Add-ons with a duration move the booking's end. That is re-checked under
+  // the same chair lock a new booking takes (reserveStations), so the time she
+  // was offered cannot have been sold to someone else in between; if it was,
+  // nothing is added and the purchase is not delivered.
+  const extraMin = intent.items.reduce((s, i) => s + i.durationMin, 0);
   await db.transaction(async (tx) => {
-    await tx.insert(bookingAddons).values({
-      bookingId: intent.bookingId,
-      addonId: intent.addonId,
-      name: intent.name,
-      priceHalalas: amountHalalas,
-    });
+    if (extraMin > 0) {
+      const [b] = await tx
+        .select({ branchId: bookings.branchId, stationId: bookings.stationId, startsAt: bookings.startsAt, endsAt: bookings.endsAt })
+        .from(bookings)
+        .where(eq(bookings.id, intent.bookingId))
+        .limit(1);
+      if (!b?.stationId) throw new Error("booking has no chair");
+      const endsAt = new Date(b.endsAt.getTime() + extraMin * 60_000);
+      const held = await reserveStations(tx, b.branchId, b.startsAt, endsAt, 1, {
+        ignoreBookingIds: [intent.bookingId],
+        onlyStationId: b.stationId,
+      });
+      if (!held) throw new Error("the time after her was taken");
+      await tx.update(bookings).set({ endsAt, updatedAt: new Date() }).where(eq(bookings.id, intent.bookingId));
+    }
+    await tx.insert(bookingAddons).values(
+      intent.items.map((i) => ({
+        bookingId: intent.bookingId,
+        addonId: i.addonId,
+        name: i.name,
+        priceHalalas: i.priceHalalas,
+      })),
+    );
     // `treat_booking_id`, not `booking_id` — see the schema comment. Putting it
     // in `booking_id` would collide with payments_booking_live_unique.
     await tx
@@ -317,7 +331,9 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number)
       .set({ treatBookingId: intent.bookingId, updatedAt: new Date() })
       .where(eq(payments.id, paymentId));
   });
-  return { kind: "treat", name: intent.name };
+  // Her receipt: what was added, the new finish time, the tax invoice. Never throws.
+  await sendVisitEmail(intent.bookingId, paymentId, intent.items);
+  return { kind: "treat", names: intent.items.map((i) => i.name) };
 }
 
 /** What an already-paid row delivered, for a second settle or a status poll. */
@@ -334,7 +350,7 @@ async function deliveredOf(row: typeof payments.$inferSelect, intent: Intent): P
   if (intent.kind === "pack") {
     return row.customerPackId ? { kind: "pack", customerPackId: row.customerPackId } : null;
   }
-  return row.treatBookingId ? { kind: "treat", name: intent.name } : null;
+  return row.treatBookingId ? { kind: "treat", names: intent.items.map((i) => i.name) } : null;
 }
 
 async function markFailed(ref: string) {
