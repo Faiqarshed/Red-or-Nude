@@ -22,6 +22,9 @@ type Event = {
 
 export async function POST(request: Request) {
   const raw = await request.text();
+  if (process.env.STREAMPAY_DEBUG === "1") {
+    console.log("[streampay:debug] webhook in", request.headers.get("x-webhook-event"), raw);
+  }
   if (!verifyWebhookSignature(raw, request.headers.get("x-webhook-signature"))) {
     return NextResponse.json({ error: "bad-signature" }, { status: 401 });
   }

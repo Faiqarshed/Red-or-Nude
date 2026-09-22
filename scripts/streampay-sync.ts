@@ -19,9 +19,9 @@ config({ path: ".env.local" });
 
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { addons, packs, removalTypes, services } from "@/lib/db/schema";
+import { addons, giftCardValues, packs, removalTypes, services } from "@/lib/db/schema";
 import { syncProduct } from "@/lib/payments/streampay";
-import { productName } from "@/lib/payments/lines";
+import { giftCardLine, productName } from "@/lib/payments/lines";
 
 async function main() {
   const rows = [
@@ -47,8 +47,10 @@ async function main() {
     }
   }
 
-  await syncProduct("product:giftcard", { name: "بطاقة هدية | Gift card", priceHalalas: 100, vatExempt: true });
-  console.log(`\n${rows.length - failed} of ${rows.length} synced, plus the gift card product.`);
+  // The preset gift card amounts; a custom amount gets its product at checkout.
+  const values = await db.select().from(giftCardValues).where(eq(giftCardValues.active, true));
+  for (const v of values) await syncProduct(giftCardLine(v.amountHalalas / 100).key, giftCardLine(v.amountHalalas / 100));
+  console.log(`\n${rows.length - failed} of ${rows.length} synced, plus ${values.length} gift card amounts.`);
   process.exit(failed ? 1 : 0);
 }
 

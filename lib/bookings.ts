@@ -40,7 +40,7 @@ import type { RewardRefusal } from "@/lib/rewards";
 import { formatTicketNo } from "@/lib/tickets";
 import { assignIfToday } from "@/lib/assign";
 import { mediaUrl } from "@/lib/storage";
-import { checkoutOpen } from "@/lib/payments";
+import { checkoutOpen, PAY_WINDOW_MIN } from "@/lib/payments";
 import type { BookingSummary } from "@/lib/booking";
 
 /** What one guest is booking. */
@@ -524,7 +524,17 @@ export async function bookingSummaries(
     .leftJoin(services, eq(services.id, bookings.serviceId))
     .leftJoin(branches, eq(branches.id, bookings.branchId))
     .leftJoin(staff, eq(staff.id, bookings.technicianId))
-    .where(byCode ? codeFilter : eq(bookings.customerId, lookup.customerId))
+    .where(
+      and(
+        byCode ? codeFilter : eq(bookings.customerId, lookup.customerId),
+        // A checkout she opened and left was never a booking: not "awaiting
+        // payment" once it can no longer be paid, and not "cancelled" after.
+        sql`not (${bookings.status} = 'pending'
+          and ${bookings.createdAt} < now() - make_interval(mins => ${PAY_WINDOW_MIN})
+          and not ${checkoutOpen(bookings.id)})`,
+        sql`${bookings.cancelReason} is distinct from 'payment-timeout'`,
+      ),
+    )
     // A party is at most a handful, so the reference path keeps a small cap
     // rather than none: whatever the group table says, this is still a lookup
     // by one code and should never return a page of history.

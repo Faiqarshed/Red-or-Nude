@@ -126,17 +126,18 @@ Anniversary and Congratulations rather than inventing an `occasion` column — f
 the customer's side the artwork and the occasion are one choice. The occasion
 message is the existing free-text field.
 
-**It is delivered over WhatsApp.** The builder now takes a recipient WhatsApp
-number (email still accepted; at least one is required). After payment the
-success modal shows a **Send on WhatsApp** button — a plain `wa.me` link carrying
-the occasion message and a link to `/gift/<CODE>`, a public page rendering the
-card art, the code, the remaining balance and the expiry. No dependency, no API
-key, no approved template: it works today and the buyer taps send. The automatic
-send goes through the notify seam in parallel and stays silent until a provider
-exists.
+**The buyer shares it.** After payment the success modal shows a **Share on
+WhatsApp** button: a plain `wa.me/?text=` link with no number in it, so WhatsApp
+asks her who to send it to. It carries the occasion message and a link to
+`/gift/<CODE>`, a public page rendering the card art, the code, the remaining
+balance and the expiry. **Copy link** sits under it. Nothing is sent to a phone
+on her behalf, so the builder asks for no recipient number. A recipient email,
+if given, gets the card by email; the buyer's own email, if given, gets a
+receipt with the code.
 
-Denominations are seeded as 100 / 250 / 400 / 500 and stay admin-managed; the
-custom-amount box remains, bounded 50–2000 SAR.
+Denominations are seeded as 100 / 250 / 400 / 500 and stay admin-managed. There
+is no custom amount: only an active amount can be bought, and the API refuses any
+other (see docs/PAYMENTS-STATUS.md §2).
 
 ### 1.3 The notification seam
 
@@ -271,15 +272,14 @@ WhatsApp). Without the header, or with the wrong one: `401`.
 
 ### 2.7 Gift cards
 
-1. `/gift-card` — presets read 100 / 250 / 400 / 500, the custom box still works,
-   and Marriage and Graduation are among the designs.
-2. Fill a recipient WhatsApp number and an occasion message. **Continue to
-   Payment** stays disabled until there is a phone or an email.
-3. Pay. The success modal shows the code and a green **Send on WhatsApp** button.
-4. Click it — WhatsApp opens with the occasion message and a `/gift/CODE` link.
-   **Copy link** is the fallback when no number was given.
+1. `/gift-card` — presets read 100 / 250 / 400 / 500, there is no custom amount
+   box, and Marriage and Graduation are among the designs.
+2. Fill a recipient name and an occasion message. **Continue to Payment** shows
+   what is missing or wrong instead of going on.
+3. Pay. The success modal shows the code and a green **Share on WhatsApp** button.
+4. Click it. WhatsApp asks who to send it to, with the occasion message and a
+   `/gift/CODE` link ready. **Copy link** is the other way to share it.
 5. Open the link: card art, code, remaining balance, expiry.
-6. In the terminal: `[notify:log] gift-card → whatsapp …`.
 
 Verify the money is real, and that a decline mints nothing:
 
@@ -291,7 +291,7 @@ SELECT g.code, g.initial_halalas, p.status, p.amount_halalas, p.provider
 
 ```bash
 curl -s -X POST localhost:3000/api/gift-cards -H 'Content-Type: application/json' \
-  -d '{"amountSar":500,"method":"card","recipientPhone":"0512345678","simulate":"decline"}'
+  -d '{"amountSar":500,"method":"card","recipientName":"Sarah","simulate":"decline"}'
 # → 402 {"error":"payment-declined"} and NO new row in gift_cards
 ```
 
@@ -370,14 +370,13 @@ The payloads each template receives:
 | Template | `data` fields |
 |---|---|
 | `booking-confirmed` | `startsAt`, `tickets[]` — each with `code`, `ticketNo`, `station`, `serviceName`, `totalHalalas` |
-| `gift-card` | `code`, `amountSar`, `senderName`, `recipientName`, `message`, `cardUrl` |
 | `refill-reminder` | `code`, `serviceName`, `daysLeft`, `bookingUrl` |
 
 `cardUrl` and `bookingUrl` are relative — prefix them with the public origin
 inside the driver.
 
-None of this affects the **Send on WhatsApp** button on the gift-card success
-screen. That is a `wa.me` link sent by the buyer's own WhatsApp, needs no
+Gift cards are not in this table: the buyer shares them herself, with the
+**Share on WhatsApp** button on the success screen. That is a `wa.me` link sent by the buyer's own WhatsApp, needs no
 approval, and should stay whatever else is wired up.
 
 ### 3.2 Email
@@ -424,7 +423,8 @@ mail needs `dir="rtl"` on the body — `message.lang` is already supplied.
 
 ### 3.3 Payments
 
-Done: StreamPay. Gift cards are sold as a 1 SAR product × the amount, issued only
+Done: StreamPay. Gift cards are sold as one product per amount ("Gift card 300
+SAR" × 1), issued only
 once the payment is verified, and refunds go through the same driver. See
 [`docs/PAYMENTS-STREAMPAY.md`](PAYMENTS-STREAMPAY.md).
 

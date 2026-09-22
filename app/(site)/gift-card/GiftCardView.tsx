@@ -6,7 +6,20 @@ import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import { Riyal } from "@/components/icons";
 import { GiftCardArt } from "@/components/gift/GiftCardArt";
-import PhoneField from "@/components/PhoneField";
+import TextInput from "@/components/TextInput";
+import {
+  EMAIL_MAX,
+  EMAIL_TEXT,
+  PERSON_NAME_MAX,
+  PERSON_TEXT,
+  checkEmail,
+  checkNote,
+  checkPersonName,
+  collect,
+  focusFirstInvalid,
+  hasErrors,
+} from "@/lib/admin/validate";
+import { validationMessages } from "@/lib/validation-messages";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
 import { saveGiftSelection } from "@/lib/giftcard-selection";
@@ -24,63 +37,34 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-function DetailField({
-  label,
-  placeholder,
-  type = "text",
-  dir,
-  value,
-  onChange,
-  maxLength,
-}: {
-  label: string;
-  placeholder: string;
-  type?: string;
-  dir: "rtl" | "ltr";
-  value?: string;
-  onChange?: (v: string) => void;
-  maxLength?: number;
-}) {
-  const ltr = type === "email";
-  return (
-    <label className="block text-start">
-      <span className="mb-2 block text-[13px] text-ink/55">{label}</span>
-      <input
-        type={type}
-        dir={ltr ? "ltr" : dir}
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange?.(e.target.value)}
-        maxLength={maxLength}
-        className={`w-full rounded-[12px] border border-black/[0.06] bg-white px-4 py-3.5 text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40 ${
-          ltr ? "text-left" : "text-start"
-        }`}
-      />
-    </label>
-  );
-}
-
-const AMOUNT_MIN = 50;
-const AMOUNT_MAX = 2000;
 const MESSAGE_MAX = 500;
 
 export default function GiftCardView({ options }: { options: PublicGiftOptions }) {
   const router = useRouter();
-  const { c, dir, lang } = useI18n();
+  const { c, lang } = useI18n();
   const g = c.gift;
   const { values, designs } = options;
   const [value, setValue] = useState<number>(values[0] ?? 500);
   const [design, setDesign] = useState(0);
   const [recipientName, setRecipientName] = useState("");
   const [recipientEmail, setRecipientEmail] = useState("");
-  const [recipientPhone, setRecipientPhone] = useState("");
   const [senderName, setSenderName] = useState("");
+  const [senderEmail, setSenderEmail] = useState("");
   const [message, setMessage] = useState("");
-  /** Raw text of the custom-amount box; `value` holds the amount actually used. */
-  const [custom, setCustom] = useState("");
+  const [agreed, setAgreed] = useState(true);
+  /** Errors show once Continue has been pressed, then clear as each is fixed. */
+  const [tried, setTried] = useState(false);
 
-  // A card nobody can be sent is not a purchase — one contact route is the floor.
-  const deliverable = Boolean(recipientPhone.trim() || recipientEmail.trim());
+  // The checks POST /api/gift-cards runs, said before she leaves the page.
+  const v = validationMessages[lang];
+  const errors = collect({
+    recipientEmail: checkEmail(v, g.recipientEmail, recipientEmail),
+    recipientName: checkPersonName(v, g.recipientName, recipientName),
+    senderName: checkPersonName(v, g.senderName, senderName, { required: false }),
+    senderEmail: checkEmail(v, g.senderEmail, senderEmail),
+    message: checkNote(v, g.message, message, { required: false, max: MESSAGE_MAX }),
+    agree: !agreed && g.mustAgree,
+  });
 
   return (
     <main className="min-h-screen bg-cream">
@@ -96,10 +80,7 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                 <button
                   key={v}
                   type="button"
-                  onClick={() => {
-                    setValue(v);
-                    setCustom("");
-                  }}
+                  onClick={() => setValue(v)}
                   className={`flex items-center justify-center gap-1 rounded-[12px] border py-3 font-display font-bold transition-colors ${
                     value === v
                       ? "border-red bg-red text-white"
@@ -111,27 +92,6 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                 </button>
               ))}
             </div>
-            <p className="mt-5 text-start text-[13px] text-ink/55">{g.customHint}</p>
-            <input
-              type="number"
-              inputMode="numeric"
-              min={AMOUNT_MIN}
-              max={AMOUNT_MAX}
-              step={10}
-              placeholder={g.customPlaceholder}
-              value={custom}
-              onChange={(e) => setCustom(e.target.value.replace(/\D/g, "").slice(0, 4))}
-              // Clamped on blur, not on every keystroke: clamping as they type
-              // makes "5" jump to "50" before they can finish typing "500".
-              onBlur={() => {
-                const n = Number(custom);
-                if (!custom) return;
-                const clamped = Math.min(Math.max(n, AMOUNT_MIN), AMOUNT_MAX);
-                setCustom(String(clamped));
-                setValue(clamped);
-              }}
-              className="mt-2 w-full rounded-[12px] border border-black/[0.06] bg-white px-4 py-3.5 text-start text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40"
-            />
           </Panel>
 
           {/* Design */}
@@ -160,38 +120,48 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
           {/* Details */}
           <Panel title={g.detailsTitle}>
             <div className="grid gap-4 md:grid-cols-2">
-              <DetailField
-                label={g.recipientEmail}
-                placeholder="sarah@example.com"
-                type="email"
-                dir={dir}
-                value={recipientEmail}
-                onChange={setRecipientEmail}
-                maxLength={200}
-              />
-              <DetailField
-                label={g.recipientName}
+              <TextInput
+                label={`${g.recipientName} *`}
                 placeholder={g.namePlaceholder}
-                dir={dir}
                 value={recipientName}
                 onChange={setRecipientName}
-                maxLength={120}
+                opts={PERSON_TEXT}
+                max={PERSON_NAME_MAX}
+                error={errors.recipientName}
+                showError={tried}
               />
-              <DetailField
+              <TextInput
+                label={g.recipientEmail}
+                placeholder="sarah@example.com"
+                value={recipientEmail}
+                onChange={setRecipientEmail}
+                opts={EMAIL_TEXT}
+                max={EMAIL_MAX}
+                error={errors.recipientEmail}
+                showError={tried}
+              />
+              <TextInput
                 label={g.senderName}
                 placeholder={g.senderPlaceholder}
-                dir={dir}
                 value={senderName}
                 onChange={setSenderName}
-                maxLength={120}
+                opts={PERSON_TEXT}
+                max={PERSON_NAME_MAX}
+                error={errors.senderName}
+                showError={tried}
               />
-              {/* Optional here — the card can go by email instead — so it only
-                  complains once something has actually been typed. */}
-              <PhoneField
-                label={g.recipientPhone}
-                value={recipientPhone}
-                onChange={setRecipientPhone}
-                showError={recipientPhone.length > 0}
+              {/* The buyer's copy of the code. Without it, the code lives only in
+                  the success screen, and a closed tab loses it. */}
+              <TextInput
+                label={g.senderEmail}
+                placeholder="you@example.com"
+                value={senderEmail}
+                onChange={setSenderEmail}
+                opts={EMAIL_TEXT}
+                max={EMAIL_MAX}
+                error={errors.senderEmail}
+                showError={tried}
+                hint={g.senderEmailHint}
               />
               <label className="block text-start md:col-span-2">
                 <span className="mb-2 block text-[13px] text-ink/55">{g.message}</span>
@@ -201,13 +171,18 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                   onChange={(e) => setMessage(e.target.value.slice(0, MESSAGE_MAX))}
                   maxLength={MESSAGE_MAX}
                   placeholder={g.messagePlaceholder}
-                  className="w-full resize-none rounded-[12px] border border-black/[0.06] bg-white px-4 py-3 text-start text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40"
+                  aria-invalid={tried && errors.message ? true : undefined}
+                  className={`w-full resize-none rounded-[12px] border bg-white px-4 py-3 text-start text-sm text-ink outline-none placeholder:text-ink/35 ${
+                    tried && errors.message ? "border-red/60" : "border-black/[0.06] focus:border-red/40"
+                  }`}
                 />
-                <span className="mt-1 block text-end text-[11px] text-ink/40" dir="ltr">
-                  {message.length} / {MESSAGE_MAX}
+                <span className="mt-1 flex justify-between gap-3 text-[11px]">
+                  <span className="text-red">{tried && errors.message}</span>
+                  <span className="text-ink/40" dir="ltr">
+                    {message.length} / {MESSAGE_MAX}
+                  </span>
                 </span>
               </label>
-              <p className="text-start text-[12px] text-ink/45 md:col-span-2">{g.contactHint}</p>
             </div>
           </Panel>
         </section>
@@ -230,13 +205,28 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
 
           <label className="mt-5 flex items-center justify-end gap-2 text-[13px] text-ink/70">
             {g.agree}
-            <input type="checkbox" defaultChecked className="h-4 w-4 accent-red" />
+            <input
+              type="checkbox"
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+              aria-invalid={tried && errors.agree ? true : undefined}
+              className="h-4 w-4 accent-red"
+            />
           </label>
+          {tried && hasErrors(errors) && (
+            <p role="alert" className="mt-3 rounded-[12px] bg-red/[0.08] px-4 py-3 text-start text-xs text-red">
+              {Object.values(errors)[0]}
+            </p>
+          )}
 
           <button
             type="button"
-            disabled={!deliverable}
             onClick={() => {
+              setTried(true);
+              if (hasErrors(errors)) {
+                focusFirstInvalid();
+                return;
+              }
               saveGiftSelection({
                 amountSar: value,
                 designId: designs[design]?.id ?? null,
@@ -244,17 +234,13 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
                 designImg: designs[design]?.img ?? null,
                 recipientName,
                 recipientEmail,
-                recipientPhone,
                 senderName,
+                senderEmail,
                 message,
               });
               router.push("/gift-card/payment");
             }}
-            className={`mt-4 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
-              deliverable
-                ? "bg-red-grad text-white hover:opacity-90"
-                : "cursor-not-allowed bg-black/[0.06] text-ink/40"
-            }`}
+            className="mt-4 block w-full rounded-[12px] bg-red-grad py-3.5 text-center text-sm font-bold text-white transition-opacity hover:opacity-90"
           >
             {g.continue}
           </button>

@@ -16,7 +16,8 @@ import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { customerPacks, customers, packServices, packTxns, packs } from "@/lib/db/schema";
 import { createBookings } from "@/lib/bookings";
-import { buyPack, packCredits, quotePackCredit } from "@/lib/packs";
+import { buyPack, membershipsLeft, packCredits, packsSpentOn, quotePackCredit } from "@/lib/packs";
+import { renderMembershipEmail } from "@/lib/membership-email";
 import { FUTURE, TEST_PHONE, fixtures, reset, type Fixtures } from "./helpers";
 
 let f: Fixtures;
@@ -128,6 +129,31 @@ describe("a credit on a solo booking", () => {
     if (!made.ok) return;
 
     expect(await balance()).toBe(0);
+  });
+
+
+  it("tells her which membership the credit came off, and what is left on it", async () => {
+    const bought = await buyPack(customerId, await onePack(3));
+    if (!bought.ok) throw new Error(bought.reason);
+    const party = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE).toISOString(),
+      customer: { phone: TEST_PHONE },
+      customerId,
+      source: "web",
+      status: "pending",
+      members: [{ serviceId: f.svcA.id, addonIds: [], customerPackId: bought.customerPackId }],
+    });
+    if (!party.ok) throw new Error(party.error);
+
+    const spent = await packsSpentOn(party.bookings.map((b) => b.id));
+    expect(spent).toEqual([bought.customerPackId]);
+    const [left] = await membershipsLeft(customerId, spent);
+    expect(left.lines).toEqual([expect.objectContaining({ left: 2, granted: 3 })]);
+
+    // The purchase email says the same numbers.
+    const { text } = renderMembershipEmail({ customerName: "Pack tester", lang: "en", priceHalalas: 50_000, taxInvoiceUrl: null, membership: left });
+    expect(text).toContain("2 of 3 left");
   });
 
   it("leaves the balance alone when no credit was offered", async () => {

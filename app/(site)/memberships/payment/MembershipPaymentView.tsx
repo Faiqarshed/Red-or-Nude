@@ -16,7 +16,8 @@ import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import PaymentMethods from "@/components/PaymentMethods";
-import { usePaymentReturn, type PaymentOutcome } from "@/components/StreamPayCheckout";
+import { declineMessage, usePaymentReturn, type PaymentOutcome } from "@/components/StreamPayCheckout";
+import { CheckingModal } from "@/components/PayFlow";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
@@ -27,9 +28,12 @@ import PackLines from "../PackLines";
 export default function MembershipPaymentView({
   pack,
   signedIn,
+  returning,
 }: {
   pack: PublicPack;
   signedIn: boolean;
+  /** Back from the bank (`?paid=`): the loader is drawn from the first paint. */
+  returning: boolean;
 }) {
   const { c, lang } = useI18n();
   const p = c.payment;
@@ -68,11 +72,15 @@ export default function MembershipPaymentView({
   };
 
   const onPaid = (outcome: PaymentOutcome) => {
-    setCheckout(null);
+    setCheckout(outcome.status === "failed" ? (outcome.checkout ?? null) : null);
     if (outcome.status === "paid") bought();
-    else showError(outcome.error);
+    else {
+      const why = declineMessage(c.payDecline, outcome);
+      if (why) setError(why);
+      else showError(outcome.error);
+    }
   };
-  usePaymentReturn(onPaid);
+  const checkingPayment = usePaymentReturn(onPaid, returning);
 
   const confirm = async () => {
     if (submitting || paidNotGranted) return;
@@ -246,6 +254,7 @@ export default function MembershipPaymentView({
       </div>
 
       <SiteFooter />
+      {checkingPayment && <CheckingModal />}
     </main>
   );
 }

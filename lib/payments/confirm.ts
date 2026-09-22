@@ -448,8 +448,8 @@ export async function settleBookingPayment(ref: string, known?: Verdict): Promis
 
     // Two separate messages, on purpose. sendConfirmations is the customer's
     // "you're booked" note and goes through the notify() seam, which is still
-    // log-only. sendBookingInvoice is the tax invoice and delivers for real over
-    // SMTP. See docs/INVOICE-EMAIL.md §7.
+    // log-only. sendBookingInvoice is the booking confirmation email, linking
+    // StreamPay's tax invoice, and delivers for real over SMTP.
     //
     // Both awaited: on a serverless host the function is frozen the moment the
     // response is returned. Neither can fail the payment.

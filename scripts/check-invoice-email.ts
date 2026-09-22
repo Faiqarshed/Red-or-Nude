@@ -107,20 +107,13 @@ async function run(to: string, guests: 1 | 2) {
     assert.ok(invoice, "an invoice must be buildable for a booking with an email");
     assert.equal(invoice.customer.email, to, "the invoice must go to the email given at checkout");
     assert.equal(
-      invoice.subtotalHalalas + invoice.vatHalalas,
-      invoice.totalHalalas,
-      "subtotal + VAT must equal the total",
-    );
-    assert.equal(
       invoice.totalHalalas,
       paid.totalHalalas,
       "the invoice must not disagree with what was charged",
     );
-    console.log(
-      `invoice ${invoice.number}: ${invoice.subtotalHalalas / 100} + ${invoice.vatHalalas / 100} VAT = ${invoice.totalHalalas / 100} SAR ✓`,
-    );
+    console.log(`confirmation ${invoice.guests[0].code}: ${invoice.totalHalalas / 100} SAR ✓`);
 
-    console.log(`  → look for "[invoice] ${invoice.number} sent to ${to}" above`);
+    console.log(`  → look for "[invoice] ${invoice.guests[0].code} sent to ${to}" above`);
   } finally {
     // Only ever the rows this run created.
     if (bookingIds.length) {
