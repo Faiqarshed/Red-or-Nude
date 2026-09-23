@@ -14,6 +14,7 @@ import type { Localized } from "@/lib/db/schema";
 import { formatSAR } from "@/lib/money";
 import { formatDateTime } from "@/lib/time";
 import { membershipHtml, membershipText } from "@/lib/membership-email";
+import { taxInvoiceHtml, taxInvoiceText } from "@/lib/email/shell";
 import type { InvoiceData } from "./data";
 
 const RED = "#b80007";
@@ -43,9 +44,7 @@ const T = {
     promoDiscount: (code: string) => `خصم (${code})`,
     total: "الإجمالي المدفوع",
     vatNote: "الأسعار شاملة ضريبة القيمة المضافة.",
-    taxInvoice: "عرض الفاتورة الضريبية",
     membershipUsed: "استخدمتِ رصيداً من عضويتك. المتبقي لكِ:",
-    taxInvoiceNote: "تصدر الفاتورة الضريبية عن StreamPay، مزوّد خدمة الدفع لدينا.",
     footer: "هذه رسالة آلية، يُرجى عدم الرد عليها.",
     methods: { card: "بطاقة ائتمانية", mada: "مدى", stc: "STC Pay", apple: "Apple Pay" },
   },
@@ -69,9 +68,7 @@ const T = {
     promoDiscount: (code: string) => `Discount (${code})`,
     total: "Total paid",
     vatNote: "All prices include VAT.",
-    taxInvoice: "View your tax invoice",
     membershipUsed: "You used a credit from your membership. Here's what you have left:",
-    taxInvoiceNote: "Your tax invoice is issued by StreamPay, our payment provider.",
     footer: "This is an automated message — please don't reply.",
     methods: { card: "Credit / debit card", mada: "Mada", stc: "STC Pay", apple: "Apple Pay" },
   },
@@ -90,7 +87,7 @@ const pick = (value: Localized | null, lang: Lang): string => value?.[lang] ?? "
 
 export type RenderedEmail = { subject: string; html: string; text: string };
 
-export function renderInvoiceEmail(data: InvoiceData): RenderedEmail {
+export function renderInvoiceEmail(data: InvoiceData, pdfAttached = false): RenderedEmail {
   const lang = data.customer.lang;
   const t = T[lang];
   const rtl = lang === "ar";
@@ -219,15 +216,7 @@ export function renderInvoiceEmail(data: InvoiceData): RenderedEmail {
         </table>
         <p style="margin:10px 0 0;font-size:11px;color:rgba(26,26,26,0.4);text-align:${start};">${esc(t.vatNote)}</p>
       </td></tr>
-${
-  data.taxInvoiceUrl
-    ? `
-      <tr><td style="padding:14px 28px 0;">
-        <a href="${esc(data.taxInvoiceUrl)}" style="display:block;padding:13px 16px;border-radius:12px;background:${RED};color:#ffffff;font-size:14px;font-weight:700;text-align:center;text-decoration:none;">${esc(t.taxInvoice)}</a>
-        <p style="margin:8px 0 0;font-size:11px;color:rgba(26,26,26,0.45);text-align:center;">${esc(t.taxInvoiceNote)}</p>
-      </td></tr>`
-    : ""
-}
+${taxInvoiceHtml(lang, data.taxInvoiceUrl, pdfAttached, "14px 28px 0")}
 
 ${
   data.memberships.length
@@ -284,7 +273,7 @@ ${
     `${t.total}: ${money(data.totalHalalas)} SAR`,
     "",
     t.vatNote,
-    ...(data.taxInvoiceUrl ? ["", `${t.taxInvoice}: ${data.taxInvoiceUrl}`, t.taxInvoiceNote] : []),
+    ...taxInvoiceText(lang, data.taxInvoiceUrl, pdfAttached),
     ...(data.memberships.length
       ? ["", t.membershipUsed, ...data.memberships.flatMap((m) => membershipText(m, lang))]
       : []),

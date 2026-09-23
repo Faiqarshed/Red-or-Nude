@@ -14,6 +14,7 @@ export type SendMailInput = {
   replyTo?: string | null;
   /** Shows up in the provider's reporting; one tag per kind of mail we send. */
   tags?: string[];
+  attachments?: { filename: string; content: Buffer }[];
 };
 
 export type SendMailResult =

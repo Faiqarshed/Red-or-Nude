@@ -21,6 +21,8 @@ import { startPurchase } from "@/lib/payments/purchase";
 import { giftCardLine } from "@/lib/payments/lines";
 
 export const dynamic = "force-dynamic";
+// The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
+export const maxDuration = 60;
 
 const body = z.object({
   // Whole riyals, and one of the salon's active amounts (checked below).

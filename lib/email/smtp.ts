@@ -78,6 +78,7 @@ export async function sendMailViaSmtp(input: SendMailInput): Promise<SendMailRes
       // The text part is the one written by our templates, never auto-derived.
       text: input.text,
       replyTo: input.replyTo || undefined,
+      attachments: input.attachments,
       // Tags have no SMTP equivalent; kept as a header so they still show up in
       // a relay's own reporting if it reads custom headers.
       headers: input.tags?.length ? { "X-Entity-Ref-ID": input.tags.join(",") } : undefined,

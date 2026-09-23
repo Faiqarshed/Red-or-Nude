@@ -179,12 +179,14 @@ describe("ordering a treat from the chair", () => {
       ],
       endsAt: new Date("2026-09-22T15:00:00Z"),
       taxInvoiceUrl: "https://streampay.sa/s/x",
+      pdfAttached: false,
     });
     expect(text).toContain("Hot coffee: 15.00 SAR");
     expect(text).toContain("French Tip (+15 min): 50.00 SAR");
     expect(text).toContain("Paid: 65.00 SAR");
     expect(text).toContain("now finishes at 18:00");
     expect(html).toContain("https://streampay.sa/s/x");
+    expect(text).toContain("couldn't attach your tax invoice PDF");
   });
 
   it("leaves the appointment's own payment untouched", async () => {

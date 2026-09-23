@@ -6,7 +6,8 @@
 > invoice number, VAT lines or the VAT number. It keeps the appointment, tickets,
 > items, discounts and total paid, says prices include VAT, and links to
 > StreamPay's invoice ("View your tax invoice", `payments.raw.invoiceUrl`, read
-> at settle). StreamPay's API offers no PDF, so the link is not an attachment.
+> at settle). StreamPay's PDF is attached when it can be fetched
+> (docs/PAYMENTS-STATUS.md, "The PDF is attached"); otherwise the email says so.
 > Sections below that describe VAT figures or `INV-` numbers are history.
 
 Every paid web booking emails the customer a booking confirmation. Sent over

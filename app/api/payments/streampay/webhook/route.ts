@@ -25,6 +25,8 @@ import { verifyWebhookSignature } from "@/lib/payments/streampay";
 import { refForLink, revivePayment, settlePayment } from "@/lib/payments/settle";
 
 export const dynamic = "force-dynamic";
+// The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
+export const maxDuration = 60;
 
 const HANDLED = new Set(["PAYMENT_SUCCEEDED", "PAYMENT_MARKED_AS_PAID", "PAYMENT_REFUNDED", "PAYMENT_PARTIALLY_REFUNDED"]);
 

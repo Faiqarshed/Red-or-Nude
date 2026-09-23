@@ -1,5 +1,6 @@
 // Emailing the booking confirmation for a paid booking (not a tax invoice:
-// StreamPay issues that, and the email links to it — see data.ts).
+// StreamPay issues that; the email attaches its PDF when it can and links to it
+// always — see lib/payments/invoice-pdf.ts).
 //
 // Deliberately total: this is called from the payment path, after the card has
 // been charged and the tickets issued. At that point the booking is real whether
@@ -8,6 +9,7 @@
 
 import "server-only";
 import { sendMail } from "@/lib/email";
+import { taxInvoicePdf } from "@/lib/payments/invoice-pdf";
 import { buildBookingInvoice } from "./data";
 import { renderInvoiceEmail } from "./template";
 
@@ -26,7 +28,8 @@ export async function sendBookingInvoice(bookingIds: string[]): Promise<SendInvo
     // No email on file — walk-ins and phone bookings legitimately have none.
     if (!invoice) return { sent: false, reason: "no-email" };
 
-    const { subject, html, text } = renderInvoiceEmail(invoice);
+    const pdf = await taxInvoicePdf(invoice.taxInvoiceUrl);
+    const { subject, html, text } = renderInvoiceEmail(invoice, !!pdf);
 
     const result = await sendMail({
       to: invoice.customer.email,
@@ -36,6 +39,7 @@ export async function sendBookingInvoice(bookingIds: string[]): Promise<SendInvo
       text,
       replyTo: process.env.MAIL_REPLY_TO?.trim() || null,
       tags: ["booking-confirmation"],
+      attachments: pdf ? [pdf] : undefined,
     });
 
     if (!result.ok) {

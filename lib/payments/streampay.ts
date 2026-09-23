@@ -19,7 +19,7 @@ import type { Discount, GatewayPayment, Line, Payer, PaymentDriver, PaymentMetho
 
 // ---------------------------------------------------------------- transport --
 
-function base(): string {
+export function base(): string {
   return (process.env.STREAMPAY_BASE_URL?.trim() || "https://stream-app-service.streampay.sa").replace(
     /\/+$/,
     "",
