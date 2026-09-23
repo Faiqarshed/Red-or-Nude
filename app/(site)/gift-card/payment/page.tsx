@@ -11,7 +11,7 @@ import { CheckingModal, PayNoticeModal, PayStep, Steps } from "@/components/PayF
 import { GiftCardArt } from "@/components/gift/GiftCardArt";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
-import { clearGiftSelection, loadGiftSelection, type GiftSelection } from "@/lib/giftcard-selection";
+import { clearGiftSelection, loadGiftSelection, saveGiftSelection, type GiftSelection } from "@/lib/giftcard-selection";
 
 // Figma: Desktop-2 gift-card payment step (325:7705) + success modal (325:8088).
 //
@@ -43,7 +43,12 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
   };
 
   useEffect(() => {
-    setSelection(loadGiftSelection());
+    const sel = loadGiftSelection();
+    if (sel && !sel.attemptId) {
+      sel.attemptId = crypto.randomUUID();
+      saveGiftSelection(sel);
+    }
+    setSelection(sel);
   }, []);
 
   const total = selection?.amountSar ?? 0;
@@ -91,6 +96,7 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
           recipientEmail: selection.recipientEmail || undefined,
           message: selection.message || undefined,
           lang,
+          attemptId: selection.attemptId,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -104,7 +110,15 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
       }
 
       // Nothing was issued on a decline, so retrying is safe and cheap.
-      setError(data.error === "payment-declined" ? c.payDecline.declined : gp.failed);
+      setError(
+        data.error === "payment-declined"
+          ? c.payDecline.declined
+          : data.error === "too-many"
+            ? gp.tooMany
+            : data.error === "unverified"
+              ? gp.unconfirmed
+              : gp.failed,
+      );
     } catch {
       setError(gp.failed);
     } finally {

@@ -9,12 +9,14 @@
 // the card is issued once that payment is verified (lib/payments/purchase.ts) —
 // on the spot with the fake driver, after the embedded checkout with StreamPay.
 
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { emailField, nameField } from "@/lib/account/fields";
 import { db } from "@/lib/db";
-import { giftCardDesigns, giftCardValues } from "@/lib/db/schema";
+import { giftCardDesigns, giftCardValues, payments } from "@/lib/db/schema";
+import { clientIp, throttled } from "@/lib/throttle";
 import { startPurchase } from "@/lib/payments/purchase";
 import { giftCardLine } from "@/lib/payments/lines";
 
@@ -31,11 +33,29 @@ const body = z.object({
   recipientEmail: emailField.optional().or(z.literal("")),
   message: z.string().max(500).optional(),
   lang: z.enum(["ar", "en"]).optional(),
+  /** This attempt, made by the page (lib/giftcard-selection.ts); see GiftIntent. */
+  attemptId: z.string().uuid().optional(),
   /** Dev-only, to exercise the decline path. Stripped in production. */
   simulate: z.literal("decline").optional(),
 });
 
+/**
+ * New gift card checkouts allowed per IP, and per buyer email, in an hour.
+ *
+ * The page needs no account and a card is worth money the moment it is issued,
+ * which is what people testing stolen cards look for: every decline they cause
+ * counts against the salon's StreamPay account. A reload or a double tap resumes
+ * the same checkout (attemptId), so it does not count as a new one.
+ */
+const GIFT_TRIES_PER_HOUR = 5;
+
 export async function POST(request: Request) {
+  const ip = clientIp(request);
+  // Cheap first line, per server instance. The count below is the real limit.
+  if (throttled(`gift-card:${ip}`, { windowMs: 3_600_000, max: GIFT_TRIES_PER_HOUR * 2 })) {
+    return NextResponse.json({ error: "too-many" }, { status: 429 });
+  }
+
   let payload: unknown;
   try {
     payload = await request.json();
@@ -51,6 +71,19 @@ export async function POST(request: Request) {
     );
   }
   const d = parsed.data;
+
+  // Counted in the database, so it holds across server instances.
+  const email = d.buyerEmail?.trim().toLowerCase() || null;
+  const [{ tries }] = await db
+    .select({ tries: sql<number>`count(*)::int` })
+    .from(payments)
+    .where(
+      sql`${payments.raw} -> 'intent' ->> 'kind' = 'gift_card'
+        and ${payments.createdAt} > now() - interval '1 hour'
+        and (${payments.raw} ->> 'ip' = ${ip}
+          ${email ? sql`or lower(${payments.raw} -> 'intent' ->> 'buyerEmail') = ${email}` : sql``})`,
+    );
+  if (tries >= GIFT_TRIES_PER_HOUR) return NextResponse.json({ error: "too-many" }, { status: 429 });
 
   // Only the amounts the salon sells (/admin/gift-cards). There is no custom
   // amount: each amount is its own StreamPay product, see giftCardLine.
@@ -83,11 +116,14 @@ export async function POST(request: Request) {
       recipientEmail: d.recipientEmail || null,
       message: d.message || null,
       lang: d.lang ?? "ar",
+      // Missing, the purchase simply never resumes an earlier checkout.
+      attemptId: d.attemptId ?? randomUUID(),
     },
     amountHalalas: d.amountSar * 100,
     lines: [giftCardLine(d.amountSar)],
     title: "Gift card",
     back: "/gift-card/payment",
+    ip,
     payer: { name: d.buyerName || null, email: d.buyerEmail || null },
     simulate: d.simulate,
   });

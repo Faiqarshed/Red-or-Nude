@@ -288,7 +288,7 @@ const ar = {
     reviewNotInvited: "لم تُرسل دعوة تقييم لهذا الحجز.",
     reviewNoComment: "بدون ملاحظة",
     statuses: {
-      pending: "بانتظار التأكيد",
+      pending: "محجوز مؤقتاً",
       confirmed: "مؤكد",
       checked_in: "بانتظار الفنية",
       in_progress: "جارٍ التنفيذ",
@@ -1087,7 +1087,7 @@ const en: AdminStrings = {
     reviewNotInvited: "No rating invitation was created for this booking.",
     reviewNoComment: "No note left",
     statuses: {
-      pending: "Pending",
+      pending: "Held",
       confirmed: "Confirmed",
       checked_in: "Waiting for technician",
       in_progress: "In progress",

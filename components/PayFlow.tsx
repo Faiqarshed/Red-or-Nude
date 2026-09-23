@@ -4,7 +4,7 @@
 // payment column (StreamPay's checkout and the reason the last attempt failed)
 // and the two modals — checking on return from the bank, and a failed payment.
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { PayLogos } from "./PaymentMethods";
 import StreamPayCheckout, { type PaymentOutcome } from "./StreamPayCheckout";
 import { Lock } from "./icons";
@@ -17,7 +17,7 @@ export function PayStep({
   notice,
   sub,
 }: {
-  checkout: { ref: string; url: string };
+  checkout: { ref: string; url: string; expiresAt?: string };
   onDone: (outcome: PaymentOutcome) => void;
   notice: string | null;
   sub: string;
@@ -29,6 +29,7 @@ export function PayStep({
       <div className="text-start">
         <h1 className="font-display text-2xl font-extrabold text-ink sm:text-3xl">{p.payTitle}</h1>
         <p className="mt-1.5 max-w-[560px] text-[13px] leading-relaxed text-ink/55 sm:text-sm">{sub}</p>
+        {checkout.expiresAt && <TimeLeft until={checkout.expiresAt} />}
       </div>
 
       {notice && (
@@ -52,6 +53,23 @@ export function PayStep({
         <PayLogos small />
       </div>
     </section>
+  );
+}
+
+/** How long this checkout stays payable. Hidden once it has run out: the next status check says so. */
+function TimeLeft({ until }: { until: string }) {
+  const { c } = useI18n();
+  const [left, setLeft] = useState(() => Date.parse(until) - Date.now());
+  useEffect(() => {
+    const tick = setInterval(() => setLeft(Date.parse(until) - Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [until]);
+  if (!(left > 0)) return null;
+  const s = Math.floor(left / 1000);
+  return (
+    <p className="mt-2 text-[12px] font-semibold text-ink/55" aria-live="off">
+      {c.payment.timeLeft.replace("{t}", `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`)}
+    </p>
   );
 }
 

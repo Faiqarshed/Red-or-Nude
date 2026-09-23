@@ -15,6 +15,13 @@ export type GiftSelection = {
   /** Optional: where the buyer's receipt, with the code, is sent. */
   senderEmail?: string;
   message: string;
+  /**
+   * This purchase attempt, made on the payment page. A reload or a second tap
+   * reuses it and so resumes the same checkout; a stranger buying an identical
+   * card never has it. Editing the card in the builder saves a new selection
+   * without one, which starts a new attempt.
+   */
+  attemptId?: string;
 };
 
 const KEY = "ron-giftcard";

@@ -31,6 +31,14 @@ export const fakeDriver: PaymentDriver = {
 
   async cancel() {},
 
+  async refundedHalalas() {
+    return 0;
+  },
+
+  async listPayments() {
+    return [];
+  },
+
   // No decline path here on purpose. A real gateway can refuse a refund and
   // lib/payments/refund.ts handles that, but the fake driver never took the
   // money in the first place, so there is nothing it could plausibly fail on.

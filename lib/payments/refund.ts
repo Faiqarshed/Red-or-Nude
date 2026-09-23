@@ -10,11 +10,12 @@
 import "server-only";
 import { and, eq, inArray, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, customers, payments, refunds } from "@/lib/db/schema";
+import { bookings, customers, giftCards, payments, refunds } from "@/lib/db/schema";
 import { sendMail } from "@/lib/email";
 import { esc } from "@/lib/email/html";
 import { formatSAR } from "@/lib/money";
-import { getDriver } from "./index";
+import { alertOwner } from "./alert";
+import { getDriver, mergeRaw } from "./index";
 import type { Intent } from "./purchase";
 
 /**
@@ -63,6 +64,13 @@ async function refundPaid(which: SQL, reason: string, label: string): Promise<Re
     const total = rows.reduce((sum, r) => sum + r.amountHalalas, 0);
     // A free booking was "paid" at zero and never reached a gateway.
     if (total === 0) return { ok: false };
+
+    // Marked first, so the PAYMENT_REFUNDED webhook this refund sets off is not
+    // taken for a refund made outside the app (refundedOutside, below).
+    await db
+      .update(payments)
+      .set({ raw: mergeRaw(payments.raw, { refundingAt: new Date().toISOString() }) })
+      .where(inArray(payments.id, rows.map((r) => r.id)));
 
     // Every row of one bill shares a providerRef and the same gateway payment;
     // taking the first is taking the transaction they all belong to.
@@ -164,4 +172,71 @@ async function refundRecipient(row: RefundedRow): Promise<{ email: string; lang:
     .where(eq(customers.id, customerId))
     .limit(1);
   return c?.email ? { email: c.email, lang: c.lang } : null;
+}
+
+/**
+ * StreamPay says money went back on this payment (the PAYMENT_REFUNDED and
+ * PAYMENT_PARTIALLY_REFUNDED webhooks). Our own refunds are already recorded;
+ * one made from their dashboard was not, and left the booking confirmed and a
+ * refunded gift card still spendable.
+ *
+ * Fully refunded: the payment is recorded as refunded and a gift card it bought
+ * is frozen. A booking or membership is left to the owner, who is told either
+ * way — what a refund from the dashboard means for an appointment is a person's
+ * call. Never throws.
+ */
+export async function refundedOutside(ref: string): Promise<void> {
+  try {
+    const rows = await db
+      .select()
+      .from(payments)
+      .where(and(eq(payments.providerRef, ref), eq(payments.status, "paid")));
+    // Refunded already (ours, recorded), or never paid.
+    if (rows.length === 0) return;
+    // Our own refund, still being recorded.
+    const refundingAt = (rows[0].raw as { refundingAt?: string } | null)?.refundingAt;
+    if (refundingAt && Date.now() - Date.parse(refundingAt) < 10 * 60_000) return;
+
+    const total = rows.reduce((sum, r) => sum + r.amountHalalas, 0);
+    const back = await getDriver().refundedHalalas(rows[0].raw);
+    if (back <= 0) return;
+    const full = back >= total;
+
+    if (full) {
+      await db.transaction(async (tx) => {
+        const claimed = await tx
+          .update(payments)
+          .set({ status: "refunded", updatedAt: new Date() })
+          .where(and(inArray(payments.id, rows.map((r) => r.id)), eq(payments.status, "paid")))
+          .returning({ id: payments.id });
+        if (claimed.length === 0) return;
+        await tx.insert(refunds).values(
+          rows.map((r) => ({ paymentId: r.id, amountHalalas: r.amountHalalas, reason: "outside-app", actorId: null })),
+        );
+        const cards = rows.map((r) => r.giftCardId).filter((id): id is string => Boolean(id));
+        if (cards.length > 0) {
+          await tx.update(giftCards).set({ status: "cancelled", updatedAt: new Date() }).where(inArray(giftCards.id, cards));
+        }
+      });
+    }
+
+    const ids = rows.map((r) => r.bookingId ?? r.treatBookingId).filter((id): id is string => Boolean(id));
+    const codes = ids.length
+      ? (await db.select({ code: bookings.code }).from(bookings).where(inArray(bookings.id, ids))).map((b) => b.code)
+      : [];
+    const what = [
+      codes.length ? `bookings ${codes.join(", ")} (still confirmed: cancel them if they should not stand)` : null,
+      rows.some((r) => r.giftCardId) ? (full ? "a gift card, now frozen" : "a gift card, still active") : null,
+      rows.some((r) => r.customerPackId) ? "a membership (still active: remove it if it should not stand)" : null,
+    ].filter(Boolean);
+    await alertOwner(
+      `refunded:${ref}`,
+      full ? "A payment was refunded outside the app" : "A payment was partly refunded outside the app",
+      `Payment ${ref}: ${formatSAR(back)} of ${formatSAR(total)} SAR went back through StreamPay's dashboard.
+` +
+        `It paid for ${what.join("; ") || "nothing we can find"}.`,
+    );
+  } catch (err) {
+    console.error(`[payments] could not record the outside refund of ${ref}`, err);
+  }
 }

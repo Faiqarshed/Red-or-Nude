@@ -99,9 +99,22 @@ on the spot.
 `PAY_WINDOW_MIN`. If money still arrives for a hold that is gone, settle refunds it
 in full automatically and logs `late payment auto-refunded`.
 
-**Refunds** (customer cancellation, unchanged policy) go through
-`POST /payments/{payment_id}/refund`; the StreamPay payment id is kept on
-`payments.raw.paymentId` when the payment settles.
+**Refunds** go through `POST /payments/{payment_id}/refund`; the StreamPay
+payment id is kept on `payments.raw.paymentId` when the payment settles. Every
+refund first asks `GET /payments/{payment_id}` how much has already gone back,
+so a retry, or a refund someone made in the dashboard, is recorded instead of
+sent twice. The refund reply has no status field: a 2xx is the refund.
+
+**Webhook events** (register these four): `PAYMENT_SUCCEEDED` and
+`PAYMENT_MARKED_AS_PAID` settle the payment; `PAYMENT_REFUNDED` records a refund
+made outside the app and freezes the gift card it bought;
+`PAYMENT_PARTIALLY_REFUNDED` alerts the owner. When StreamPay cannot answer our
+"was it paid?", the webhook replies 503 so it is sent again.
+
+**Written-off payments.** A payment marked failed is asked about again (about
+15 min, 1 h, 6 h, 24 h, 47 h), and at once on a success webhook: money that
+landed after its link expired is confirmed or refunded, never lost. Details and
+the reasons for each rule: [PAYMENT-HARDENING-PLAN.md](PAYMENT-HARDENING-PLAN.md).
 
 ## 4. Environment
 

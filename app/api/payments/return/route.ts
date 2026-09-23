@@ -11,6 +11,9 @@ import { settlePayment } from "@/lib/payments/settle";
 
 export const dynamic = "force-dynamic";
 
+const RETURN_PAGES =
+  /^\/(booking\/payment|gift-card\/payment|memberships\/payment(\?pack=[0-9a-f-]{36})?|station\/[0-9a-f-]{36})$/;
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const ref = z.string().uuid().safeParse(url.searchParams.get("ref"));
@@ -18,10 +21,11 @@ export async function GET(request: Request) {
     await settlePayment(ref.data).catch((err) => console.error("[payments] return settle failed", err));
   }
 
-  // Only a path on this site — an absolute URL would make this an open redirect.
-  // `\` too: browsers read `/\evil.com` as `//evil.com`.
+  // Only the pages that open a checkout. "Any path on this site" was not enough:
+  // browsers strip a tab or newline, so `/\t/evil.com` passed that check and
+  // landed on evil.com — a phishing link that starts with our own domain.
   const b = url.searchParams.get("back") ?? "/";
-  const back = /^\/(?![\/\\])/.test(b) ? b : "/";
+  const back = RETURN_PAGES.test(b) ? b : "/";
   // StreamPay appends its own `status` (paid | failed …). Only a hint for the
   // page's message — the page still asks /api/payments/status before believing
   // anything, so a hand-edited URL cannot confirm a booking.

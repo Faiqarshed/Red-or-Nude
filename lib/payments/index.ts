@@ -47,6 +47,15 @@ export const checkoutOpen = (bookingId: AnyColumn) => sql<boolean>`exists (
     and p.created_at > now() - make_interval(mins => ${PAY_WINDOW_MIN})
 )`;
 
+/** The checkout a page embeds. `expiresAt` drives the countdown beside it. */
+export type Checkout = { ref: string; url: string; expiresAt?: string };
+
+/** The checkout saved on a payment row's `raw`, if it reached one. */
+export function checkoutOf(ref: string, raw: unknown): Checkout | null {
+  const r = raw as { url?: string; expiresAt?: string } | null;
+  return r?.url ? { ref, url: r.url, expiresAt: r.expiresAt } : null;
+}
+
 /** One row of the receipt. `key` names the StreamPay product (see streampay.ts). */
 export type Line = {
   key: string;
@@ -128,6 +137,18 @@ export type PaymentDriver = {
   cancel(raw: unknown): Promise<void>;
   /** Send money back for a charge already made. See lib/payments/refund.ts. */
   refund(input: RefundInput): Promise<RefundResult>;
+  /** How much of a paid charge has gone back so far, however it was refunded. */
+  refundedHalalas(raw: unknown): Promise<number>;
+  /** Every payment the gateway holds in a period, for the daily comparison with ours. */
+  listPayments(from: Date, to: Date): Promise<GatewayPayment[]>;
+};
+
+export type GatewayPayment = {
+  /** The gateway's payment id — `payments.raw.paymentId` on ours once settled. */
+  id: string;
+  /** Collected, refunded in full, refunded in part, or anything else. */
+  state: "paid" | "refunded" | "partly-refunded" | "other";
+  amountHalalas: number;
 };
 
 /**
@@ -137,7 +158,14 @@ export type PaymentDriver = {
  */
 export function getDriver(): PaymentDriver {
   const driver = process.env.PAYMENT_DRIVER?.trim();
-  if (driver === "streampay") return streampayDriver;
+  if (driver === "streampay") {
+    // Every return link is built from SITE_URL. Missing, it falls back to
+    // localhost, and a customer who paid is sent to a page that does not exist.
+    if (process.env.NODE_ENV === "production" && !process.env.SITE_URL?.trim().startsWith("https://")) {
+      throw new Error("[payments] SITE_URL must be set to the site's https:// address");
+    }
+    return streampayDriver;
+  }
   if (driver === "fake" || process.env.NODE_ENV !== "production") return fakeDriver;
   throw new Error("[payments] PAYMENT_DRIVER must be 'streampay' (or 'fake' for a staff-only deploy)");
 }

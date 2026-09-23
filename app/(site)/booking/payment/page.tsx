@@ -82,6 +82,8 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
   const [tickets, setTickets] = useState<Ticket[] | null>(null);
   /** Set once the hold exists, so a retry after a decline doesn't re-book. */
   const [heldCode, setHeldCode] = useState<string | null>(null);
+  /** Asking what became of a hold she came back to (see resumeHeld). */
+  const [resuming, setResuming] = useState(false);
   /** The open StreamPay checkout, once Pay has been pressed. */
   const [checkout, setCheckout] = useState<{ ref: string; url: string } | null>(null);
   const [phoneTouched, setPhoneTouched] = useState(false);
@@ -140,10 +142,29 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       const held = loadCheckout()?.held;
       setHeldCode(held?.code ?? null);
       if (held?.email) setEmail(held.email);
-    } else released.current = releaseHold();
+    } else {
+      // Back here any other way — Back from the bank's page, a dropped
+      // connection, a reload. A hold the server kept is one she is paying for
+      // or has paid: show her that, never a Pay button that books her twice.
+      released.current = releaseHold().then((kept) => {
+        if (kept) void resumeHeld(kept.held);
+      });
+    }
     const saved = loadBooking();
     if (saved) setBooking(saved);
     setLoaded(true);
+  }, []);
+
+  // Leaving checkout — closing the tab, going elsewhere — lets her chair go at
+  // once instead of when the hold runs out. The server keeps a hold she is still
+  // paying for (her bank's page is also a "leaving"), so this cannot cost her it.
+  useEffect(() => {
+    const onHide = () => {
+      const held = loadCheckout()?.held;
+      if (held) navigator.sendBeacon("/api/bookings/release", JSON.stringify(held));
+    };
+    window.addEventListener("pagehide", onHide);
+    return () => window.removeEventListener("pagehide", onHide);
   }, []);
 
   // What she chose here last time — a treat, a code, a reward — so going back to
@@ -542,28 +563,50 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
         setHeldCode(code);
       }
 
-      // Step 2 — the checkout. Only a verified payment confirms anything.
-      const pay = await fetch("/api/payments/confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
-      });
-
-      const data = await pay.json().catch(() => ({}));
-      if (pay.ok && data.checkout) {
-        setCheckout(data.checkout);
-        return;
-      }
-      if (pay.ok) {
-        setTickets(data.tickets);
-        clearBooking();
-        return;
-      }
-      showPayError(data.error);
+      await payHeld(code);
     } catch {
       setError(p.bookingFailed);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  /**
+   * Step 2 — the checkout. Only a verified payment confirms anything. A hold
+   * already paid comes back as its tickets; one being paid, as the same checkout.
+   */
+  const payHeld = async (code: string, resumed = false) => {
+    const pay = await fetch("/api/payments/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+
+    const data = await pay.json().catch(() => ({}));
+    if (pay.ok && data.checkout) {
+      setCheckout(data.checkout);
+      if (resumed) notifyPay(p.resumedPayment);
+      return;
+    }
+    if (pay.ok) {
+      setTickets(data.tickets);
+      clearBooking();
+      return;
+    }
+    showPayError(data.error);
+  };
+
+  /** Her kept hold (releaseHold): paid shows the tickets, paying reopens it. */
+  const resumeHeld = async (held: { code: string; email: string }) => {
+    setHeldCode(held.code);
+    setEmail(held.email);
+    setResuming(true);
+    try {
+      await payHeld(held.code, true);
+    } catch {
+      setError(p.bookingFailed);
+    } finally {
+      setResuming(false);
     }
   };
 
@@ -573,7 +616,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       // The hold is gone; a retry would confirm nothing, so send them back.
       setHeldCode(null);
       notifyPay(p.expired);
-    } else if (code === "unconfirmed" || code === "in-progress") notifyPay(p.unconfirmed);
+    } else if (code === "unconfirmed" || code === "in-progress" || code === "unverified") notifyPay(p.unconfirmed);
     else notifyPay(p.bookingFailed);
   };
 
@@ -1240,7 +1283,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
 
       <SiteFooter />
 
-      {checkingPayment && <CheckingModal />}
+      {(checkingPayment || resuming) && <CheckingModal />}
       {noticeOpen && payNotice && !checkingPayment && (
         <PayNoticeModal message={payNotice} retry={paying} onClose={() => setNoticeOpen(false)} />
       )}

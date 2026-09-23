@@ -21,5 +21,12 @@ export async function GET(request: Request) {
 
   const result = await reconcilePayments();
   const problems = new URL(request.url).searchParams.has("report") ? await reportPaymentProblems() : undefined;
+
+  // "Still running" to an outside monitor (healthchecks.io). The job is the net
+  // under every payment; if it stops — a wrong secret, a broken deploy — the
+  // monitor emails when this ping does not arrive, instead of nobody noticing.
+  const ping = process.env.HEALTHCHECK_URL?.trim();
+  if (ping) await fetch(ping, { signal: AbortSignal.timeout(5_000) }).catch(() => {});
+
   return NextResponse.json({ ok: true, ...result, problems });
 }
