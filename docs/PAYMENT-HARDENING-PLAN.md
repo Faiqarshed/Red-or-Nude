@@ -189,6 +189,8 @@ Numbers match the 26-item list. H items are new ones from the senior's review.
   - verify with StreamPay (as for every event) and mark our payment `refunded`;
   - **freeze the gift card** it bought;
   - alert the owner, so the booking or membership is sorted out under the refund rule.
+- `PAYMENT_PARTIALLY_REFUNDED` (in their dashboard's event list, not in their docs): no automatic action, because we can't tell what the part was for. Alert the owner.
+- **Webhook events to tick in StreamPay's dashboard:** `PAYMENT_SUCCEEDED`, `PAYMENT_REFUNDED`, `PAYMENT_PARTIALLY_REFUNDED`, `PAYMENT_MARKED_AS_PAID`. Nothing else: failed, cancelled and pay-attempt events are already covered by the return page and status check, and invoice and subscription events aren't used. There's no chargeback or dispute event, so the daily recheck stays.
 - **Daily recheck (the net).** A daily job lists StreamPay payments for the last 30 days (`GET /api/v2/payments` with `from_date`/`to_date`) and compares them with ours. It catches:
   - a refund webhook we missed (their retries stop after about 20 h);
   - **chargebacks and disputes**, which have no event in StreamPay's docs;
