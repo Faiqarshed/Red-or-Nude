@@ -287,9 +287,16 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/settle-pend
   the audit risk, and ours was not ZATCA-compliant (no QR, numbers not
   sequential). StreamPay's totals and VAT matched ours on all 16 booking
   invoices checked, to the halala.
-- **No PDF attachment.** StreamPay's API has no invoice PDF endpoint, and its
-  public invoice page is a web app. Ask StreamPay support whether a PDF
-  endpoint exists, or whether they email the invoice to the customer themselves.
+- **The PDF is attached.** Booking, membership and chair-purchase emails carry
+  StreamPay's tax invoice as a PDF. The public API has none (`pdf_link` is
+  null), so this uses what the Download button on StreamPay's invoice page
+  calls: the invoice link redirects to `billing.streampay.sa/v2/invoice-consent/{id}`,
+  and `GET /api/v2/consumer_portal/consent/{id}/payment-pdf` (no key) answers
+  with a file link valid for 1 hour, which we download at once. It is
+  undocumented, so it is best-effort: we wait at most 20 s, and if it fails the
+  email says the PDF couldn't be attached and keeps the link, and the owner gets
+  one alert an hour. Routes that can send a receipt allow 60 s for this.
+  **Ask StreamPay** to confirm this endpoint is fine to use or to document it.
 - **Only bookings get our confirmation email.** Gift card buyers get the card
   receipt, and memberships get no email from us, so neither gets the invoice
   link yet. The VAT figures to report come from StreamPay's reports, not our
@@ -390,8 +397,8 @@ Things StreamPay's docs do not state and the code guesses at, defensively:
   the gift card frozen.
 - A real refund through our code: the reply is recorded as refunded (their
   reply has no status field; the code no longer expects one).
-- StreamPay's payment record has a `pdf_link` field (their OpenAPI spec). If it
-  is the invoice PDF, it can be attached to the confirmation email.
+- The confirmation email of a sandbox payment arrives with `tax-invoice.pdf`
+  attached (checked against a sandbox invoice from code: 28 KB, 3.6 s).
 - **Real bank cards** (needs a real card; the sandbox OTP page is Moyasar's test
   page): one 1 SAR mada payment on live keys, and a card from a second bank if
   possible, landing back on our page.

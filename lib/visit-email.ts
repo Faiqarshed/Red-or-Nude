@@ -11,6 +11,7 @@ import { bookings, customers, payments } from "@/lib/db/schema";
 import { esc } from "@/lib/email/html";
 import { brandedEmail, INK, RED, sendReceipt, side, textTail } from "@/lib/email/shell";
 import { formatSAR } from "@/lib/money";
+import { taxInvoicePdf } from "@/lib/payments/invoice-pdf";
 import type { TreatItem } from "@/lib/payments/purchase";
 import { TIMEZONE } from "@/lib/time";
 
@@ -50,6 +51,7 @@ export type VisitEmailInput = {
   /** Her finish time after the add-ons, when they moved it. */
   endsAt: Date | null;
   taxInvoiceUrl: string | null;
+  pdfAttached: boolean;
 };
 
 export function renderVisitEmail(input: VisitEmailInput) {
@@ -78,6 +80,7 @@ export function renderVisitEmail(input: VisitEmailInput) {
     subject: t.subject,
     title: t.title,
     taxInvoiceUrl: input.taxInvoiceUrl,
+    pdfAttached: input.pdfAttached,
     body: `
         <p style="margin:0 0 6px;font-size:15px;font-weight:600;color:${INK};text-align:${start};">${esc(t.greeting(input.customerName))}</p>
         <p style="margin:0 0 14px;font-size:14px;line-height:1.6;color:rgba(26,26,26,0.6);text-align:${start};">${esc(t.intro)}</p>
@@ -97,7 +100,7 @@ export function renderVisitEmail(input: VisitEmailInput) {
     t.vatNote,
     "",
     endsAt ? `${t.howTo} ${t.newEnd(endsAt)}` : t.howTo,
-    ...textTail(lang, input.taxInvoiceUrl),
+    ...textTail(lang, input.taxInvoiceUrl, input.pdfAttached),
   ].join("\n");
 
   return { subject: t.subject, html, text };
@@ -117,15 +120,18 @@ export async function sendVisitEmail(bookingId: string, paymentId: string, items
     if (!to) return;
     const [payment] = await db.select({ raw: payments.raw }).from(payments).where(eq(payments.id, paymentId)).limit(1);
     const url = (payment?.raw as { invoiceUrl?: unknown } | null)?.invoiceUrl;
+    const invoiceUrl = typeof url === "string" ? url : null;
+    const pdf = await taxInvoicePdf(invoiceUrl);
 
     const { subject, html, text } = renderVisitEmail({
       customerName: customer.name,
       lang: customer.lang,
       items,
       endsAt: items.some((i) => i.durationMin > 0) ? b.endsAt : null,
-      taxInvoiceUrl: typeof url === "string" ? url : null,
+      taxInvoiceUrl: invoiceUrl,
+      pdfAttached: !!pdf,
     });
-    await sendReceipt("visit-addition", { to, toName: customer.name, subject, html, text });
+    await sendReceipt("visit-addition", { to, toName: customer.name, subject, html, text, attachments: pdf ? [pdf] : undefined });
   } catch (err) {
     console.error("[visit] could not build or send the visit email", err);
   }

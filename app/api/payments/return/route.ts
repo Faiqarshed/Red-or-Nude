@@ -10,6 +10,8 @@ import { z } from "zod";
 import { settlePayment } from "@/lib/payments/settle";
 
 export const dynamic = "force-dynamic";
+// The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
+export const maxDuration = 60;
 
 const RETURN_PAGES =
   /^\/(booking\/payment|gift-card\/payment|memberships\/payment(\?pack=[0-9a-f-]{36})?|station\/[0-9a-f-]{36})$/;

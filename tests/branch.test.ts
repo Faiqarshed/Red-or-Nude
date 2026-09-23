@@ -508,6 +508,9 @@ describe("a party is one bill and one unit", () => {
     const { html, text } = renderInvoiceEmail(invoice!);
     expect(html).toContain(url);
     expect(text).toContain(url);
+    // Without the PDF she is told so, and pointed at the link.
+    expect(text).toContain("تعذّر إرفاق فاتورتك الضريبية");
+    expect(renderInvoiceEmail(invoice!, true).text).toContain("مرفقة بهذه الرسالة");
     // No second set of VAT figures to disagree with StreamPay's.
     expect(html).not.toMatch(/VAT no\.|Subtotal \(excl\. VAT\)|Tax Invoice/);
   });

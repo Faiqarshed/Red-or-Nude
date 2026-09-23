@@ -22,6 +22,8 @@ const recent = new Map<string, { at: number; answer: Settled }>();
 const REUSE_MS = 5_000;
 
 export const dynamic = "force-dynamic";
+// The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
+export const maxDuration = 60;
 
 export async function GET(request: Request) {
   // A page polls about 20 times a minute; three open tabs is still well inside.

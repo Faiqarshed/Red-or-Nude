@@ -14,6 +14,8 @@ import { z } from "zod";
 import { confirmBookingPayment } from "@/lib/payments/confirm";
 
 export const dynamic = "force-dynamic";
+// The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
+export const maxDuration = 60;
 
 const body = z.object({
   code: z.string().trim().min(4).max(20),

@@ -152,7 +152,7 @@ describe("a credit on a solo booking", () => {
     expect(left.lines).toEqual([expect.objectContaining({ left: 2, granted: 3 })]);
 
     // The purchase email says the same numbers.
-    const { text } = renderMembershipEmail({ customerName: "Pack tester", lang: "en", priceHalalas: 50_000, taxInvoiceUrl: null, membership: left });
+    const { text } = renderMembershipEmail({ customerName: "Pack tester", lang: "en", priceHalalas: 50_000, taxInvoiceUrl: null, pdfAttached: false, membership: left });
     expect(text).toContain("2 of 3 left");
   });
 
