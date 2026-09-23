@@ -31,12 +31,7 @@ One idea: **money goes back to the card only when she paid and never got what sh
 | The salon reschedules | The salon's call, no money moves |
 | The wallet balance | Admin cannot edit it. Only cancellations and small chair refunds add to it. It can be spent on **everything**: bookings, gift cards, memberships and chair purchases |
 
-The senior recommends the salon confirms three things with its legal adviser and accountant before the wallet goes live:
-- that credit-only is allowed under Saudi consumer-protection and e-commerce rules;
-- that the policy is shown at checkout with an explicit "I accept";
-- the VAT treatment of credit notes and of spending credit.
-
-These are questions for the client. They don't change this rule.
+The senior suggested launching with card refunds and waiting for the salon's legal adviser before going credit-only. **Not adopted:** this rule ships at go-live, with the wallet as its own PR (see "Wallet" below).
 
 ## Already handled: nothing to build, nothing to set up
 
@@ -126,7 +121,8 @@ Numbers match the 26-item list. H items are new ones from the senior's review.
 **6. Webhook dropped on a StreamPay blip: answer "try again"**
 - `settleBookingPayment` / `settlePurchase`: when `verify` throws, return `unverified` instead of `failed`.
 - `settlePayment` maps it to `{ status: "pending" }`.
-- The webhook replies **503**, so StreamPay resends.
+- The webhook replies **503**, so StreamPay resends. Their retries come after 5 min, 30 min, 2 h, 6 h and 12 h.
+- Also treat `PAYMENT_MARKED_AS_PAID` (a payment marked paid by hand in StreamPay's dashboard) as a trigger to settle, like `PAYMENT_SUCCEEDED`. Settle still asks StreamPay; a status it doesn't recognise stays pending + alert (#3).
 
 **8. Return redirect: allow only our pages**
 - `app/api/payments/return/route.ts`: `back` must be `/booking/payment`, `/gift-card/payment`, `/memberships/payment`, or match `^/station/[A-Za-z0-9-]+$`. Anything else goes to `/`.
@@ -188,12 +184,17 @@ Numbers match the 26-item list. H items are new ones from the senior's review.
 
 ### Right after go-live
 
-**5 + 22. Daily recheck against StreamPay** (senior, Q6)
-- A daily job lists StreamPay payments for the last 30 days (`GET /api/v2/payments` with `from_date`/`to_date`, confirmed by the senior) and compares them with ours.
-- Any refund, chargeback or payment we don't know about goes into the report.
-- **A gift card whose payment was refunded or charged back is frozen automatically.**
-- This also covers #22 (daily totals comparison) and is the final net for #3.
-- Ask StreamPay whether they send refund or dispute webhooks, to make it real-time later.
+**5 + 22. Refunds outside our app: webhook first, daily recheck as the net** (senior, Q6)
+- **Webhook (instant).** StreamPay sends `PAYMENT_REFUNDED` when a payment is refunded, including from their dashboard ([docs](https://docs.streampay.sa/webhooks/)). The webhook route handles it:
+  - verify with StreamPay (as for every event) and mark our payment `refunded`;
+  - **freeze the gift card** it bought;
+  - alert the owner, so the booking or membership is sorted out under the refund rule.
+- **Daily recheck (the net).** A daily job lists StreamPay payments for the last 30 days (`GET /api/v2/payments` with `from_date`/`to_date`) and compares them with ours. It catches:
+  - a refund webhook we missed (their retries stop after about 20 h);
+  - **chargebacks and disputes**, which have no event in StreamPay's docs;
+  - payments we don't know about.
+
+  Any mismatch goes into the report. This also covers #22 (daily totals) and is the final net for #3.
 
 **7. StreamPay down: honest message + owner alert**
 - #6 already keeps the page polling. After a return it ends on the existing `unconfirmed` text ("don't pay again").
@@ -238,8 +239,8 @@ Numbers match the 26-item list. H items are new ones from the senior's review.
 **Webhook lookup index** (senior, suggestion 2)
 - Expression index on `payments ((raw->>'linkId'))` once volume grows.
 
-### Wallet: its own PR, after the salon confirms (senior, Q5)
-Scope:
+### Wallet: its own PR, shipped with go-live
+The refund rule above needs a wallet. It's built as a separate PR (not in this hardening work) and ships at go-live. What it needs:
 - a `wallet_txns` ledger (customer, booking, amount, reason), with no admin editing;
 - balance on /account;
 - "Use my credit" at **every** checkout (bookings, gift cards, memberships, chair purchases), sent to StreamPay as a coupon like points. A bill fully covered by credit never reaches StreamPay, the same as a zero bill today.
@@ -260,14 +261,13 @@ Scope:
 
 ### Questions
 **For StreamPay:**
-- refund/dispute webhooks;
+- is there any event for chargebacks or disputes (none in their webhook docs)?
+- what payment status a "marked as paid" payment has;
 - the full list of payment statuses;
 - refund fees;
 - what happens to a refund when the balance is low.
 
 **For the client** (from the senior):
-- whether credit-only for cancellations is legal, and whether it's shown at checkout with an accept;
-- VAT on credit;
 - who may refund from StreamPay's dashboard;
 - how chargebacks are handled;
 - whether any promo codes are private (a coupon's name prints the code on the invoice).
@@ -281,7 +281,7 @@ Scope:
    - then the checks before live keys and #26.
 2. **Right after:** #5 + #22, #7, #14, #15, #16, #19, #20, H3, H4.
 3. **Soon:** #18b, #21, H5, the webhook index.
-4. **Wallet:** a separate PR once the salon confirms.
+4. **Wallet:** a separate PR, shipped with go-live.
 
 One commit per group, docs in the same commit.
 
