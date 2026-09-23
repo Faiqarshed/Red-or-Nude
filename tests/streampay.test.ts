@@ -156,7 +156,11 @@ describe("the return page", () => {
       (await (await paymentReturn(new Request(`http://x/api/payments/return?back=${encodeURIComponent(back)}`))).text())
         .match(/location\.replace\((".*?")\)/)![1];
     expect(await target("/gift-card/payment")).toBe('"/gift-card/payment"');
-    for (const evil of ["//evil.com", "/\\evil.com", "https://evil.com", "evil.com"]) {
+    const pack = randomUUID();
+    expect(await target(`/memberships/payment?pack=${pack}`)).toBe(`"/memberships/payment?pack=${pack}"`);
+    expect(await target(`/station/${pack}`)).toBe(`"/station/${pack}"`);
+    // A tab or newline is stripped by the browser, turning these into //evil.com.
+    for (const evil of ["//evil.com", "/\\evil.com", "https://evil.com", "evil.com", "/\t/evil.com", "/\n/evil.com", "/account"]) {
       expect(await target(evil)).toBe('"/"');
     }
   });
@@ -372,7 +376,7 @@ describe("the safety net under the webhook", () => {
     expect(rows.every((r) => r.status === "pending")).toBe(true);
   });
 
-  it("refunds a paid purchase that was never delivered", async () => {
+  it("delivers a paid purchase late rather than refunding it, when it still can", async () => {
     const ref = randomUUID();
     await db.insert(payments).values({
       provider: "fake", providerRef: ref, method: "card", amountHalalas: 7500, status: "paid",
@@ -381,7 +385,8 @@ describe("the safety net under the webhook", () => {
     try {
       await reconcilePayments();
       const [row] = await db.select().from(payments).where(eq(payments.providerRef, ref));
-      expect(row.status).toBe("refunded");
+      expect(row.status).toBe("paid");
+      expect(row.giftCardId).not.toBeNull();
     } finally {
       await db.delete(refunds).where(sql`${refunds.paymentId} in (select id from payments where ${ours})`);
       await db.delete(payments).where(ours);

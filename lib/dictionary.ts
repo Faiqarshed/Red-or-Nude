@@ -192,6 +192,8 @@ const ar = {
     secure: "دفع آمن ومشفر",
     methodsNote: "ادفعي بمدى أو فيزا أو ماستركارد أو Apple Pay في الخطوة التالية.",
     unconfirmed: "لم نتمكن من تأكيد الدفع بعد. تحققي من بريدك وحجوزاتك قبل المحاولة مرة أخرى.",
+    resumedPayment: "بدأتِ الدفع لهذا الحجز من قبل. أكمليه من هنا ولا تبدئي حجزاً جديداً.",
+    timeLeft: "تبقى صفحة الدفع مفتوحة لمدة {t}",
     confirm: "تأكيد",
     successTitle: "تم الحجز بنجاح!",
     successSub: "أرسلنا الفاتورة وتفاصيل الموعد والرقم المرجعي إلى بريدك الإلكتروني",
@@ -558,6 +560,7 @@ const ar = {
     paySub: "أدخلي بيانات بطاقتك أو مدى أو استخدمي Apple Pay. تصدر بطاقة الهدية فور إتمام الدفع.",
     failed: "تعذر إصدار بطاقة الهدية، حاولي مرة أخرى",
     unconfirmed: "لم نتأكد من الدفع بعد. لا تدفعي مرة أخرى، وتواصلي مع الصالون إن لم تصل البطاقة.",
+    tooMany: "محاولات كثيرة. انتظري ساعة ثم حاولي مرة أخرى.",
   },
 
   // Date/time formatting (fixed June 2026 picker).
@@ -786,6 +789,8 @@ const en: Content = {
     secure: "Secure encrypted payment",
     methodsNote: "Pay by mada, Visa, Mastercard or Apple Pay in the next step.",
     unconfirmed: "We couldn't confirm the payment yet. Check your email and bookings before trying again.",
+    resumedPayment: "You already started paying for this booking. Finish it here instead of booking again.",
+    timeLeft: "This payment stays open for {t}",
     confirm: "Confirm",
     successTitle: "Booking Confirmed!",
     successSub: "Your invoice, appointment details and booking reference are on their way to your inbox",
@@ -1151,6 +1156,7 @@ const en: Content = {
     paySub: "Enter your card or mada details, or use Apple Pay. The gift card is issued the moment it goes through.",
     failed: "Couldn't issue the gift card, please try again",
     unconfirmed: "We couldn't confirm your payment yet. Please don't pay again, and contact the salon if the card doesn't arrive.",
+    tooMany: "Too many tries. Please wait an hour and try again.",
   },
 
   payDecline: {

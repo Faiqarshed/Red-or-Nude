@@ -37,7 +37,7 @@ import { assignIfToday } from "@/lib/assign";
 import { siteOrigin } from "@/lib/site";
 import { bookingLines } from "./lines";
 import { refundRef } from "./refund";
-import { getDriver, mergeRaw, PAY_WINDOW_MIN, type Verdict } from "./index";
+import { checkoutOf, getDriver, mergeRaw, PAY_WINDOW_MIN, type Checkout, type Verdict } from "./index";
 
 export type ConfirmedTicket = {
   code: string;
@@ -55,12 +55,16 @@ export type ConfirmedTicket = {
   totalHalalas: number;
 };
 
-export type ConfirmError = "not-found" | "expired" | "in-progress" | "payment-declined" | "failed";
+/**
+ * `unverified`: StreamPay did not answer "was it paid?". Nothing is known, so
+ * nothing is changed — it reads as still pending, and the next check asks again.
+ */
+export type ConfirmError = "not-found" | "expired" | "in-progress" | "payment-declined" | "failed" | "unverified";
 
 export type ConfirmResult =
   | { ok: true; tickets: ConfirmedTicket[]; totalHalalas: number }
   /** Not paid yet: the page embeds this checkout, then asks /api/payments/status. */
-  | { ok: true; checkout: { ref: string; url: string } }
+  | { ok: true; checkout: Checkout }
   | {
       ok: false;
       /**
@@ -78,7 +82,7 @@ export type ConfirmResult =
  * party pending — so `payments_booking_live_unique` decides which one owns the
  * attempt, and the loser lands here before either has charged anything.
  */
-function isLiveAttemptConflict(err: unknown): boolean {
+export function isLiveAttemptConflict(err: unknown): boolean {
   for (let e = err; e instanceof Error; e = e.cause) {
     if (e.message.includes("payments_booking_live_unique")) return true;
   }
@@ -87,6 +91,9 @@ function isLiveAttemptConflict(err: unknown): boolean {
 
 /** A row whose attempt reached a gateway checkout — something verify() can ask about. */
 const hasCheckout = (raw: unknown) => Boolean((raw as { linkId?: string } | null)?.linkId);
+
+/** A start that has not reached a checkout by now never will: see confirmBookingPayment. */
+const STUCK_START_MS = 2 * 60_000;
 
 export type ConfirmInput = {
   /** Any member's booking code; a group is resolved from it. */
@@ -112,9 +119,20 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
         .orderBy(asc(bookings.createdAt), asc(bookings.id))
     : [anchor];
 
-  // Already swept, already paid, or cancelled — either way there is nothing to
-  // charge for and the customer needs to pick a slot again.
-  if (members.some((m) => m.status !== "pending")) return { ok: false, error: "expired" };
+  if (members.some((m) => m.status !== "pending")) {
+    // Already paid: her tickets, not "pick a slot again". She is back here from
+    // a second tab, or from Back on her bank's page, and is booked.
+    const [paid] = await db
+      .select({ ref: payments.providerRef })
+      .from(payments)
+      .where(and(inArray(payments.bookingId, members.map((m) => m.id)), eq(payments.status, "paid")))
+      .limit(1);
+    if (paid?.ref && members.every((m) => m.status !== "cancelled" && m.status !== "no_show")) {
+      return settleBookingPayment(paid.ref);
+    }
+    // Swept or cancelled: nothing to charge for, and she needs a slot again.
+    return { ok: false, error: "expired" };
+  }
 
   const billTotal = members.reduce((sum, m) => sum + m.totalHalalas, 0);
   const driver = getDriver();
@@ -137,11 +155,12 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     // Only a checkout that is over — declined, expired — falls through to a
     // fresh one; settle has already marked its rows failed.
     if (outcome.ok || outcome.error !== "payment-declined") return outcome;
-  } else if (open && Date.now() - open.createdAt.getTime() > holdMin * 60_000) {
+  } else if (open && Date.now() - open.createdAt.getTime() > STUCK_START_MS) {
     // A row that never got as far as a checkout: the process died mid-charge.
-    // Past the hold window there is no checkout left to protect, so bury it.
-    // Inside the window she is still refused below, deliberately: that charge
-    // may yet land, and nothing can ask the gateway about it.
+    // Nothing is still running after STUCK_START_MS (each StreamPay call times
+    // out at 10 s), so bury it and let her try again, rather than refusing her
+    // until her hold runs out. A charge that was only slow, not dead, finds its
+    // row buried when it finishes and switches its link off (below).
     // The whole party's rows, not just `open`: one left pending holds
     // payments_booking_live_unique and refuses every retry.
     await db
@@ -250,11 +269,19 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
   }
 
   if (charge.status === "pending") {
-    await db
+    const saved = await db
       .update(payments)
       .set({ raw: charge.raw, updatedAt: new Date() })
-      .where(eq(payments.providerRef, ref));
-    return { ok: true, checkout: { ref, url: charge.checkoutUrl } };
+      .where(and(eq(payments.providerRef, ref), eq(payments.status, "pending")))
+      .returning({ id: payments.id });
+    if (saved.length === 0) {
+      // Buried as stuck while this charge was still running, and she may have
+      // started another since: two payable links for one booking is how she
+      // pays twice. This one goes.
+      await driver.cancel(charge.raw);
+      return { ok: false, error: "failed" };
+    }
+    return { ok: true, checkout: checkoutOf(ref, charge.raw) ?? { ref, url: charge.checkoutUrl } };
   }
 
   if (charge.status !== "paid") {
@@ -314,12 +341,12 @@ export async function settleBookingPayment(ref: string, known?: Verdict): Promis
     verdict = known ?? (await driver.verify(rows[0].raw));
   } catch (err) {
     console.error(`[payments] could not verify ${ref}`, err);
-    return { ok: false, error: "failed" };
+    return { ok: false, error: "unverified" };
   }
 
   if (verdict.status === "pending") {
-    const url = (rows[0].raw as { url?: string } | null)?.url;
-    return url ? { ok: true, checkout: { ref, url } } : { ok: false, error: "in-progress" };
+    const checkout = checkoutOf(ref, rows[0].raw);
+    return checkout ? { ok: true, checkout } : { ok: false, error: "in-progress" };
   }
 
   if (verdict.status === "failed") {
@@ -365,6 +392,14 @@ export async function settleBookingPayment(ref: string, known?: Verdict): Promis
       // takes one payment, so this is belt and braces — but it is money.
       if (verdict.amountHalalas !== billTotal) throw new Error("amount-mismatch");
 
+      // Too late to be any use to her: the money came through after her
+      // appointment began (a bank that held it for hours, a StreamPay outage).
+      // Refunded below rather than confirmed for a time already gone. Only a
+      // late payment can get here — the booking flow refuses a time already
+      // past — so one settled inside its pay window is left alone.
+      const late = Date.now() - rows[0].createdAt.getTime() > PAY_WINDOW_MIN * 60_000;
+      if (late && members.some((m) => m.startsAt.getTime() <= Date.now())) throw new Error("started");
+
       // One call per queue, and each run's numbers put back beside the guest
       // who asked for them, so `numbers[i]` still belongs to `members[i]`.
       const numbers: string[] = new Array(members.length);
@@ -400,7 +435,12 @@ export async function settleBookingPayment(ref: string, known?: Verdict): Promis
     const why = (err as Error).message;
     if (claimed.length > 0 && why === "amount-mismatch") {
       // Paid a sum that is not the bill. Refunding "the bill" would be the wrong
-      // number, so this one is a person's job — loud, with both figures.
+      // number, so this one is a person's job — loud, with both figures, and
+      // marked so the settle job's refund retry leaves it alone.
+      await db
+        .update(payments)
+        .set({ raw: mergeRaw(payments.raw, { amountMismatch: verdict.amountHalalas }) })
+        .where(eq(payments.providerRef, ref));
       console.error(
         `[payments] ${ref} paid ${verdict.amountHalalas} for a bill of ${billTotal}; not confirmed. REFUND OWED — settle by hand`,
       );

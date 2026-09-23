@@ -60,13 +60,59 @@ the booking suites) unless it says otherwise.
 - **A refund that fails, or money we hold for nothing:** listed in the report
   email to `PAYMENTS_ALERT_EMAIL`, instead of only a log line.
 
+**Added by the hardening work** (docs/PAYMENT-HARDENING-PLAN.md; tests in
+`tests/payment-hardening.test.ts`)
+
+- **StreamPay not answering** is "still pending", never "failed". The page keeps
+  checking and ends on "don't pay again"; the webhook answers 503 so StreamPay
+  resends it. Five failed calls in a row email the owner once, and again when
+  StreamPay is back.
+- **Money on a payment we had marked failed** (its link expired while she was on
+  her bank's page, or a status we did not know) is found: the settle job asks
+  again at about 15 min, 1 h, 6 h, 24 h and 47 h, and a success webhook for it
+  asks at once. It is confirmed or delivered if that is still possible, refunded
+  otherwise, and the owner is told. A StreamPay status we do not know counts as
+  still processing, with an alert; a `COMPLETED` link never counts as failed.
+- **Refunds are safe to retry.** Before refunding, we ask StreamPay how much has
+  already gone back. That also fixes a real bug: StreamPay's refund reply has no
+  status field, and the old code read one, so every real refund would have been
+  logged as failed.
+- **Refunds made outside the app** (StreamPay's dashboard): the
+  `PAYMENT_REFUNDED` webhook records them and freezes the gift card they bought;
+  the owner is emailed to sort out a booking or membership.
+  `PAYMENT_PARTIALLY_REFUNDED` emails the owner only.
+- **Back from the bank's page, a dropped connection, a reload:** the checkout
+  finds the hold she is paying for or has paid, and shows her ticket or reopens
+  the same checkout. She is never offered a second Pay for it.
+- **A lapsed hold's chair** is asked about before it is released: if she paid in
+  the last seconds, she is confirmed instead of refunded. A lapsed hold with no
+  checkout no longer shows its slot as taken.
+- **Paid late for a time already gone** (a booking whose appointment started, a
+  chair purchase after the visit ended): refunded, never confirmed. A chair
+  purchase of 10 SAR or less is owed as wallet credit instead; until the wallet
+  ships, it is listed in the daily report for the desk.
+- **A purchase whose delivery died** is delivered again by the settle job before
+  anything is refunded.
+- **Gift cards:** each attempt has its own id, so two strangers buying the same
+  card can no longer share a checkout. At most 5 new gift card checkouts an hour
+  per IP and per buyer email.
+- **The same points from two tabs** can only be spent once (checked again under
+  the customer lock).
+- **Two bookings can never overlap on one chair**: a database rule
+  (`bookings_station_no_overlap`, migration 0028), not only the booking code.
+- **Checkout countdown** on every payment page; pending bookings show as **Held**
+  in admin; leaving the checkout releases the chair at once.
+
 **Configuration safety**
 
 - In production, payments are refused unless `PAYMENT_DRIVER` is set to
   `streampay` (or `fake` on purpose for a staff-only deploy). A forgotten
   variable can no longer make every booking free.
-- The webhook is signature-checked (HMAC, 5-minute replay window) and the return
-  page only redirects to paths on our own site.
+- The webhook is signature-checked (HMAC, 5-minute replay window). The return
+  page only redirects to our own checkout pages; "any path on this site" could be
+  tricked into another site with a tab character.
+- In production, payments are also refused when `SITE_URL` is missing or not
+  `https://`, and `STREAMPAY_DEBUG` is ignored (it would log personal data).
 
 ---
 
@@ -127,17 +173,24 @@ What the code does today, and what has to change:
 - **Late payment = refund, not the booking.** If she pays after her hold was
   released, she gets her money back rather than her chair. Deliberate: holding
   every abandoned checkout's chair until the settle job answers would block slots
-  for other customers.
+  for other customers. Before a lapsed hold is released, StreamPay is asked about
+  its checkout, so this now only happens when StreamPay could not answer.
+- **Some limits are counted per server instance:** the owner-alert "once an
+  hour", the StreamPay-down counter, the status-check answer reused for 5 s, and
+  the first-line request limits. The gift card limit itself is counted in the
+  database. Move them to a table only if several instances make the alerts noisy.
+- **Card testing inside one checkout.** Our limit stops new gift card checkouts;
+  it cannot see several cards tried inside one StreamPay checkout. Ask StreamPay
+  what they limit per link.
 - **Amount mismatch** (paid ≠ bill) is not refunded automatically, because there
   is no right number to refund. It is logged `REFUND OWED` and appears in the
   report. Should never happen: the link total is checked when it is created.
 - **Partly refunded from StreamPay's dashboard before we settle** still confirms
   the booking / delivers the purchase (failing it would keep the rest of her
   money for nothing). Fully refunded counts as unpaid.
-- **Two tabs buying the same gift card / pack at the same instant** can each open
-  a checkout. It takes two pages and two separate payments; the result is two of
-  the thing, refundable. Closing it fully is a partial unique index on pending
-  purchase intents — left out as more than the risk.
+- **Two tabs buying the same pack at the same instant** can each open a
+  checkout. It takes two pages and two separate payments; the result is two of
+  the thing, refundable. (Gift cards no longer can: each attempt has its own id.)
 - **Promo `max_uses` race** — two holds can both pass the last use
   (`lib/promo.ts`). Not new.
 - **Gift cards come in the salon's preset amounts only; the custom amount is
@@ -253,8 +306,9 @@ The code is done; these are the steps only people with access can do.
 **StreamPay account holder** (login to app.streampay.sa):
 
 1. Settings → Webhooks → add `https://<domain>/api/payments/streampay/webhook`
-   for `PAYMENT_SUCCEEDED`, and copy the signing secret it shows. There is no API
-   for this. **Until it exists, the settle job is the only thing that catches a
+   for **`PAYMENT_SUCCEEDED`, `PAYMENT_MARKED_AS_PAID`, `PAYMENT_REFUNDED` and
+   `PAYMENT_PARTIALLY_REFUNDED`** (nothing else), and copy the signing secret it
+   shows. There is no API for this. **Until it exists, the settle job is the only thing that catches a
    customer who closed her tab — see §3.**
 2. Payment methods: cards (mada, Visa, Mastercard) and Apple Pay on; Tamara,
    installments and Amex off. Links send `payment_methods: null`, so the
@@ -272,12 +326,15 @@ The code is done; these are the steps only people with access can do.
    without it), `STREAMPAY_API_KEY`, `STREAMPAY_API_SECRET`,
    `STREAMPAY_WEBHOOK_SECRET` (from step 1 above),
    `STREAMPAY_BASE_URL=https://stream-app-service.streampay.sa`,
-   `SITE_URL=https://<domain>`, `PAYMENTS_ALERT_EMAIL` (who gets the problem
-   report), and `CRON_SECRET` if it is not already set (the other crons use it
-   too; Vercel sends it on every cron call). Redeploy after.
-2. `npm run db:migrate` — migration `0027_streampay` (one table, two columns with
-   defaults; no data changes). Must run before the first checkout, or every
-   checkout fails.
+   `SITE_URL=https://<domain>` (production refuses payments without an https
+   one), `PAYMENTS_ALERT_EMAIL` (who gets the problem report and the alerts),
+   `HEALTHCHECK_URL` (a healthchecks.io check the settle job pings every run; it
+   emails you if the job stops), and `CRON_SECRET` if it is not already set.
+   Redeploy after.
+2. `npm run db:migrate` — migrations `0027_streampay` (one table, two columns
+   with defaults) and `0028_no_chair_overlap` (enables the `btree_gist` extension
+   and adds the overlap rule; checked: no existing overlaps on staging). Must
+   run before the first checkout.
 3. `npm run streampay:sync` once — pushes the catalogue to StreamPay. Optional
    (checkout creates missing products), but makes the first payments faster.
 4. After deploy, check Vercel → Crons lists `settle-pending?report=1`, and run it
@@ -294,7 +351,22 @@ The code is done; these are the steps only people with access can do.
 2. **Gift-card VAT** — the sale is sent to StreamPay as VAT-exempt (a voucher is
    usually taxed when spent). To flip: `vatExempt` on the gift-card line in
    `app/api/gift-cards/route.ts`, then re-run `npm run streampay:sync`.
-3. **Vercel Pro**, and with it the settle job every 5 minutes (§3).
+3. **Production is on Azure.** Its scheduler runs the settle job every 5 minutes
+   (`/api/cron/settle-pending`) and the report once a day
+   (`/api/cron/settle-pending?report=1`); the look-back (`LOOKBACK` in
+   `lib/payments/reconcile.ts`) then drops from 7 days to 48 hours. Vercel stays
+   on its 2-day schedule while it is only for testing. **No live money before the
+   5-minute schedule runs.**
+
+**How long paying takes** (the senior's question: is a 15-minute hold right?).
+Review after the first month of live payments:
+
+```sql
+select percentile_cont(0.5) within group (order by updated_at - created_at) as median,
+       max(updated_at - created_at) as slowest
+from payments where status = 'paid' and booking_id is not null and amount_halalas > 0
+  and created_at > now() - interval '30 days';
+```
 
 ---
 
@@ -313,3 +385,13 @@ Things StreamPay's docs do not state and the code guesses at, defensively:
   it switches to the banking app.
 - Whether a link whose total after coupons is very small (e.g. under 1 SAR) is
   accepted.
+- A refund from StreamPay's dashboard sends `PAYMENT_REFUNDED` with our ref in
+  `data.metadata` (or the link id), and our record then shows it refunded and
+  the gift card frozen.
+- A real refund through our code: the reply is recorded as refunded (their
+  reply has no status field; the code no longer expects one).
+- StreamPay's payment record has a `pdf_link` field (their OpenAPI spec). If it
+  is the invoice PDF, it can be attached to the confirmation email.
+- **Real bank cards** (needs a real card; the sandbox OTP page is Moyasar's test
+  page): one 1 SAR mada payment on live keys, and a card from a second bank if
+  possible, landing back on our page.

@@ -24,7 +24,7 @@ import { sendMembershipEmail } from "@/lib/membership-email";
 import { sendVisitEmail } from "@/lib/visit-email";
 import { siteOrigin } from "@/lib/site";
 import { refundRef } from "./refund";
-import { getDriver, mergeRaw, PAY_WINDOW_MIN, type Line, type Payer, type Verdict } from "./index";
+import { checkoutOf, getDriver, mergeRaw, PAY_WINDOW_MIN, type Checkout, type Line, type Payer, type Verdict } from "./index";
 
 export type GiftIntent = {
   kind: "gift_card";
@@ -36,6 +36,12 @@ export type GiftIntent = {
   recipientEmail: string | null;
   message: string | null;
   lang: "ar" | "en";
+  /**
+   * Scopes "resume the checkout already open for this purchase" to one buyer.
+   * Without it two strangers buying the same card for "Mom" within the pay
+   * window matched each other's intent and shared one checkout — and its code.
+   */
+  attemptId?: string;
 };
 export type PackIntent = { kind: "pack"; customerId: string; packId: string };
 /**
@@ -65,7 +71,7 @@ export type Delivered =
 
 export type PurchaseResult =
   | { ok: true; delivered: Delivered }
-  | { ok: true; checkout: { ref: string; url: string } }
+  | { ok: true; checkout: Checkout }
   | {
       ok: false;
       /**
@@ -73,7 +79,7 @@ export type PurchaseResult =
        * second tap already added, a pack withdrawn mid-checkout. The money has
        * been sent back (or the log says REFUND OWED); a retry is a new purchase.
        */
-      error: "payment-declined" | "failed" | "not-delivered" | "not-found";
+      error: "payment-declined" | "failed" | "not-delivered" | "not-found" | "unverified";
     };
 
 export async function startPurchase(input: {
@@ -84,6 +90,8 @@ export async function startPurchase(input: {
   payer: Payer;
   /** The page to come back to after a full-window checkout. */
   back: string;
+  /** Who asked, for the gift card limit (app/api/gift-cards). */
+  ip?: string;
   simulate?: "decline";
 }): Promise<PurchaseResult> {
   // The same purchase already has a live checkout: Pay pressed again, a reload,
@@ -120,7 +128,7 @@ export async function startPurchase(input: {
     method: "card",
     amountHalalas: input.amountHalalas,
     status: "pending",
-    raw: { intent: input.intent },
+    raw: { intent: input.intent, ...(input.ip ? { ip: input.ip } : {}) },
   });
 
   let charge;
@@ -144,7 +152,7 @@ export async function startPurchase(input: {
 
   if (charge.status === "pending") {
     await saveCheckout(ref, charge.raw);
-    return { ok: true, checkout: { ref, url: charge.checkoutUrl } };
+    return { ok: true, checkout: checkoutOf(ref, charge.raw) ?? { ref, url: charge.checkoutUrl } };
   }
   if (charge.status !== "paid") {
     await markFailed(ref);
@@ -175,9 +183,9 @@ export async function settlePurchase(ref: string, known?: Verdict): Promise<Purc
     // this caller "not delivered" would show her a failure for a purchase that
     // lands a second later, so it is still pending. Past the grace it is real,
     // and lib/payments/reconcile.ts refunds it.
-    const url = (row.raw as { url?: string } | null)?.url;
-    if (url && Date.now() - row.updatedAt.getTime() < DELIVERY_GRACE_MS) {
-      return { ok: true, checkout: { ref, url } };
+    const checkout = checkoutOf(ref, row.raw);
+    if (checkout && Date.now() - row.updatedAt.getTime() < DELIVERY_GRACE_MS) {
+      return { ok: true, checkout };
     }
     return { ok: false, error: "not-delivered" };
   }
@@ -190,12 +198,12 @@ export async function settlePurchase(ref: string, known?: Verdict): Promise<Purc
     verdict = known ?? (await driver.verify(row.raw));
   } catch (err) {
     console.error(`[purchase] could not verify ${ref}`, err);
-    return { ok: false, error: "failed" };
+    return { ok: false, error: "unverified" };
   }
 
   if (verdict.status === "pending") {
-    const url = (row.raw as { url?: string }).url;
-    return url ? { ok: true, checkout: { ref, url } } : { ok: false, error: "failed" };
+    const checkout = checkoutOf(ref, row.raw);
+    return checkout ? { ok: true, checkout } : { ok: false, error: "failed" };
   }
   if (verdict.status === "failed") {
     await markFailed(ref);
@@ -232,7 +240,7 @@ export async function settlePurchase(ref: string, known?: Verdict): Promise<Purc
 
   let delivered: Delivered | null = null;
   try {
-    delivered = await deliver(row.id, intent, row.amountHalalas);
+    delivered = await deliver(row.id, intent, row.amountHalalas, paidLate(row));
   } catch (err) {
     console.error(`[purchase] ${ref} (${intent.kind}) paid but not delivered`, err);
     // The grant and its link to this row commit together, so the row is the
@@ -242,14 +250,59 @@ export async function settlePurchase(ref: string, known?: Verdict): Promise<Purc
   }
 
   if (!delivered) {
-    const back = row.amountHalalas > 0 ? await refundRef(ref, "not-delivered") : { ok: true };
-    console.error(`[purchase] ${ref}: ${back.ok ? "refunded" : "REFUND OWED — settle by hand"}`);
+    const back = row.amountHalalas > 0 ? await refundOrCredit(ref, row.amountHalalas, intent) : true;
+    console.error(`[purchase] ${ref}: ${back ? "refunded or owed as credit" : "REFUND OWED — settle by hand"}`);
     return { ok: false, error: "not-delivered" };
   }
   return { ok: true, delivered };
 }
 
-async function deliver(paymentId: string, intent: Intent, amountHalalas: number): Promise<Delivered | null> {
+/**
+ * A chair purchase this small is not worth a card refund: the card fees and a
+ * 5-14 day wait cost more than a coffee. It goes to her wallet instead.
+ */
+export const CHAIR_CREDIT_MAX_HALALAS = 1000;
+
+/**
+ * Give back a paid purchase that could not be delivered: to her card, or —
+ * a chair purchase of CHAIR_CREDIT_MAX_HALALAS or less — as wallet credit.
+ * True when it is settled one way or the other.
+ */
+export async function refundOrCredit(ref: string, amountHalalas: number, intent: Intent): Promise<boolean> {
+  if (intent.kind === "treat" && amountHalalas <= CHAIR_CREDIT_MAX_HALALAS) {
+    // ponytail: the wallet is its own PR. Until it ships, the credit is marked
+    // here and listed in the daily report for the desk to settle.
+    await db
+      .update(payments)
+      .set({ raw: mergeRaw(payments.raw, { owedCredit: amountHalalas }) })
+      .where(eq(payments.providerRef, ref));
+    return true;
+  }
+  return (await refundRef(ref, "not-delivered")).ok;
+}
+
+/**
+ * Deliver a paid purchase again, for the settle job: the process that should
+ * have delivered it died first. Almost always works, which beats refunding her
+ * and making her buy it again. True when it is delivered.
+ */
+export async function redeliver(ref: string): Promise<boolean> {
+  const [row] = await db.select().from(payments).where(eq(payments.providerRef, ref)).limit(1);
+  const intent = (row?.raw as { intent?: Intent } | null)?.intent;
+  if (!row || row.status !== "paid" || !intent) return false;
+  try {
+    return (await deliver(row.id, intent, row.amountHalalas, true)) !== null;
+  } catch (err) {
+    console.error(`[purchase] ${ref} could not be delivered again`, err);
+    const [fresh] = await db.select().from(payments).where(eq(payments.id, row.id)).limit(1);
+    return Boolean(fresh && (await deliveredOf(fresh, intent)));
+  }
+}
+
+/** Settled after its pay window: StreamPay was down, the bank held it, or the job found it. */
+const paidLate = (row: { createdAt: Date }) => Date.now() - row.createdAt.getTime() > PAY_WINDOW_MIN * 60_000;
+
+async function deliver(paymentId: string, intent: Intent, amountHalalas: number, late: boolean): Promise<Delivered | null> {
   if (intent.kind === "gift_card") {
     const card = await issueGiftCard({
       paymentId,
@@ -299,6 +352,21 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number)
   // the same chair lock a new booking takes (reserveStations), so the time she
   // was offered cannot have been sold to someone else in between; if it was,
   // nothing is added and the purchase is not delivered.
+  // Paid late, after her visit was over (a bank that held the payment,
+  // StreamPay down): nothing can be brought to a chair she has left. Not
+  // delivered, so refundOrCredit gives the money back. A payment on time was
+  // checked against her visit a moment ago, before she was charged.
+  if (late) {
+    const [visit] = await db
+      .select({ status: bookings.status, endsAt: bookings.endsAt })
+      .from(bookings)
+      .where(eq(bookings.id, intent.bookingId))
+      .limit(1);
+    if (!visit || ["completed", "cancelled", "no_show"].includes(visit.status) || visit.endsAt.getTime() < Date.now()) {
+      return null;
+    }
+  }
+
   const extraMin = intent.items.reduce((s, i) => s + i.durationMin, 0);
   await db.transaction(async (tx) => {
     if (extraMin > 0) {

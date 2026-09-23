@@ -276,8 +276,10 @@ describe("a web booking, numbered when the card clears", () => {
 
     const before = await counters([f.branchA, f.branchB], day);
     const again = await confirmBookingPayment({ code: held.bookings[0].code });
-    expect(again.ok).toBe(false);
-    expect(again.ok ? "" : again.error).toBe("expired");
+    // Her tickets again, not "pick a slot again": she is booked.
+    expect(again.ok && "tickets" in again ? again.tickets.map((t) => t.ticketNo) : null).toEqual(
+      first.ok && "tickets" in first ? first.tickets.map((t) => t.ticketNo) : [],
+    );
 
     // A second attempt must not mint a second pair of numbers.
     const after = await counters([f.branchA, f.branchB], day);

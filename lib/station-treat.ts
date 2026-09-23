@@ -55,7 +55,7 @@ type Name = { ar: string; en: string };
 export type TreatResult =
   | { ok: true; names: Name[] }
   /** Pay on this checkout, then ask /api/payments/status. */
-  | { ok: true; checkout: { ref: string; url: string } }
+  | { ok: true; checkout: { ref: string; url: string; expiresAt?: string } }
   | { ok: false; reason: TreatRefusal };
 
 /** The booking running on this sticker's chair now, or why there is none. */

@@ -9,6 +9,7 @@
 // GET /api/payments/status — this route is never the one that learns it was paid.
 
 import { NextResponse } from "next/server";
+import { clientIp, throttled } from "@/lib/throttle";
 import { z } from "zod";
 import { confirmBookingPayment } from "@/lib/payments/confirm";
 
@@ -31,9 +32,15 @@ const STATUS = {
   "in-progress": 409,
   "payment-declined": 402,
   failed: 500,
+  // StreamPay did not answer: she may well have paid. The page says "don't pay again".
+  unverified: 503,
 } as const;
 
 export async function POST(request: Request) {
+  // Each call can open a StreamPay checkout; a person needs a handful an hour.
+  if (throttled(`confirm:${clientIp(request)}`, { windowMs: 3_600_000, max: 30 })) {
+    return NextResponse.json({ error: "too-many" }, { status: 429 });
+  }
   let payload: unknown;
   try {
     payload = await request.json();

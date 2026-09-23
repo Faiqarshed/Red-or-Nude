@@ -9,12 +9,13 @@ import "server-only";
 // a fixed amount, so the checkout can only ever show the number our screen
 // showed. charge() checks that before handing the link back, and refuses if not.
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { streampayIds } from "@/lib/db/schema";
 import { toNationalDigits } from "@/lib/phone";
-import type { Discount, Line, Payer, PaymentDriver, PaymentMethod, Verdict } from "./index";
+import { alertOwner } from "./alert";
+import type { Discount, GatewayPayment, Line, Payer, PaymentDriver, PaymentMethod, Verdict } from "./index";
 
 // ---------------------------------------------------------------- transport --
 
@@ -34,17 +35,28 @@ function apiKey(): string {
 }
 
 async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${base()}/api/v2${path}`, {
-    method,
-    headers: { "x-api-key": apiKey(), "content-type": "application/json", accept: "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    cache: "no-store",
-    signal: AbortSignal.timeout(20_000),
-  });
-  const text = await res.text();
-  // STREAMPAY_DEBUG=1 prints every call both ways. Dev only: bodies carry the
-  // customer's name, phone and email.
-  if (process.env.STREAMPAY_DEBUG === "1") {
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetch(`${base()}/api/v2${path}`, {
+      method,
+      headers: { "x-api-key": apiKey(), "content-type": "application/json", accept: "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+      // Short: a checkout makes several calls in a row, and a server killed
+      // halfway through them leaves her stuck on "in progress".
+      signal: AbortSignal.timeout(10_000),
+    });
+    text = await res.text();
+  } catch (err) {
+    noteFailure();
+    throw err;
+  }
+  if (res.status >= 500) noteFailure();
+  else noteSuccess();
+  // STREAMPAY_DEBUG=1 prints every call both ways. Never in production: bodies
+  // carry the customer's name, phone and email.
+  if (process.env.STREAMPAY_DEBUG === "1" && process.env.NODE_ENV !== "production") {
     console.log(`[streampay:debug] ${method} ${path}`, body === undefined ? "" : JSON.stringify(body, null, 2));
     console.log(`[streampay:debug] ← ${res.status}`, text.slice(0, 4000));
   }
@@ -52,13 +64,49 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
   return (text ? JSON.parse(text) : {}) as T;
 }
 
+/**
+ * StreamPay not answering, counted across calls. Five in a row tell the owner
+ * once, and the first answer after that says it is back — so the front desk
+ * knows why paid customers are waiting, instead of finding out from them.
+ * ponytail: per server instance.
+ */
+let failures = 0;
+
+function noteFailure() {
+  if (++failures === 5) {
+    void alertOwner(
+      "streampay-down",
+      "StreamPay is not answering",
+      "Five calls to StreamPay in a row failed. Payments are still taken, and each is confirmed once StreamPay answers again. Customers are told not to pay twice.",
+    );
+  }
+}
+
+function noteSuccess() {
+  if (failures >= 5) void alertOwner("streampay-back", "StreamPay is answering again", "Waiting payments are being confirmed.");
+  failures = 0;
+}
+
+/** How much of a payment has gone back, however it was refunded (us, or their dashboard). */
+async function refundedSoFar(paymentId: string): Promise<number> {
+  const p = await api<{ amount_refunded?: string | null }>("GET", `/payments/${paymentId}`);
+  return Math.round(Number(p.amount_refunded ?? 0) * 100);
+}
+
 /** 12345 halalas → "123.45". Their amounts are decimal SAR strings. */
 const sar = (halalas: number) => (halalas / 100).toFixed(2);
 
 // ------------------------------------------------------------ id lookup table --
 
+/**
+ * Ids belong to one StreamPay account. Keyed by it, a database moved from
+ * sandbox to live keys (or to another account) recreates its products instead
+ * of sending checkouts to ids the new account has never seen.
+ */
+const scoped = (key: string) => `${createHash("sha256").update(apiKey()).digest("hex").slice(0, 8)}:${key}`;
+
 async function lookup(key: string) {
-  const [row] = await db.select().from(streampayIds).where(eq(streampayIds.key, key)).limit(1);
+  const [row] = await db.select().from(streampayIds).where(eq(streampayIds.key, scoped(key))).limit(1);
   return row ?? null;
 }
 
@@ -68,7 +116,7 @@ async function lookup(key: string) {
  * the loser's object is left unused, which costs nothing.
  */
 async function remember(key: string, streampayId: string, priceId: string | null, signature: string | null) {
-  await db.insert(streampayIds).values({ key, streampayId, priceId, signature }).onConflictDoNothing();
+  await db.insert(streampayIds).values({ key: scoped(key), streampayId, priceId, signature }).onConflictDoNothing();
   return (await lookup(key))!.streampayId;
 }
 
@@ -131,7 +179,7 @@ export async function syncProduct(
   await db
     .update(streampayIds)
     .set({ priceId, signature, updatedAt: new Date() })
-    .where(eq(streampayIds.key, key));
+    .where(eq(streampayIds.key, scoped(key)));
   return have.streampayId;
 }
 
@@ -239,9 +287,25 @@ type StreamPayment = {
 };
 
 /** What our `payments.raw` holds while a checkout is open. */
-type Pending = { linkId: string; url: string };
+type Pending = { linkId: string; url: string; expiresAt?: string };
 
 const METHOD: Record<string, PaymentMethod> = { MADA: "mada", APPLE_PAY: "apple" };
+
+/**
+ * Every payment status StreamPay has (`PaymentStatusEnum` in their OpenAPI
+ * spec), sorted by what it means for us. Anything else is new to us and is
+ * treated as still processing, with an alert, never as failed: a payment we
+ * wrongly write off is money taken with nothing given for it.
+ *
+ * Fully refunded counts as over: confirming a booking the money has already
+ * gone back for would be giving it away. Partly refunded still counts as paid —
+ * our own refunds are always whole, so a partial one was a goodwill credit
+ * from their dashboard, and failing the booking over it would keep the rest of
+ * her money for nothing.
+ */
+const PAID = ["SUCCEEDED", "SETTLED", "PARTIALLY_REFUNDED"];
+const WAITING = ["PENDING", "PROCESSING", "UNDER_REVIEW"];
+const OVER = ["FAILED", "FAILED_INITIATION", "CANCELED", "EXPIRED", "REFUNDED"];
 
 /**
  * Same product twice (two guests, same service) is one item with a quantity.
@@ -306,7 +370,11 @@ export const streampayDriver: PaymentDriver = {
       );
     }
 
-    return { status: "pending", checkoutUrl: link.url, raw: { linkId: link.id, url: link.url } satisfies Pending };
+    return {
+      status: "pending",
+      checkoutUrl: link.url,
+      raw: { linkId: link.id, url: link.url, expiresAt: input.expiresAt.toISOString() } satisfies Pending,
+    };
   },
 
   async verify(raw): Promise<Verdict> {
@@ -319,12 +387,7 @@ export const streampayDriver: PaymentDriver = {
     );
     const all = invoices.data.flatMap((i) => (i.payments ?? []).map((p) => ({ ...p, invoiceId: i.id })));
 
-    // Fully refunded counts as not paid: confirming a booking the money has
-    // already gone back for would be giving it away. Partly refunded still
-    // counts as paid — our own refunds are always whole, so a partial one was
-    // a goodwill credit from their dashboard, and failing the booking over it
-    // would keep the rest of her money for nothing.
-    const paid = all.find((p) => ["SUCCEEDED", "SETTLED", "PARTIALLY_REFUNDED"].includes(p.current_status));
+    const paid = all.find((p) => PAID.includes(p.current_status));
     if (paid) {
       // Their invoice is the tax invoice (ours is a booking confirmation that
       // links to it). A failed read costs only the link, never the payment.
@@ -345,11 +408,23 @@ export const streampayDriver: PaymentDriver = {
         },
       };
     }
-    if (all.some((p) => ["PENDING", "PROCESSING", "UNDER_REVIEW"].includes(p.current_status))) {
+    const unknown = all.filter((p) => ![...PAID, ...WAITING, ...OVER].includes(p.current_status));
+    if (unknown.length > 0) {
+      await alertOwner(
+        `status:${linkId}`,
+        "A payment has a status we don't know",
+        `Payment link ${linkId}: ${unknown.map((p) => `${p.id} is ${p.current_status}`).join(", ")}. ` +
+          "It is treated as still processing. Check it in StreamPay's dashboard.",
+      );
       return { status: "pending" };
     }
+    if (all.some((p) => WAITING.includes(p.current_status))) return { status: "pending" };
+    if (all.some((p) => p.current_status === "REFUNDED")) return { status: "failed" };
 
     const link = await api<PaymentLink>("GET", `/payment_links/${linkId}`);
+    // COMPLETED means the link took its one payment, even if the invoice does
+    // not show it yet. Never written off: the next check will find it.
+    if (link.status === "COMPLETED") return { status: "pending" };
     const open =
       link.status === "ACTIVE" && (!link.valid_until || new Date(link.valid_until).getTime() > Date.now());
     return open ? { status: "pending" } : { status: "failed" };
@@ -366,19 +441,67 @@ export const streampayDriver: PaymentDriver = {
     }
   },
 
+  async listPayments(from, to) {
+    const out: GatewayPayment[] = [];
+    // 100 a page, their maximum. ponytail: 30 pages is 3,000 payments a month;
+    // raise it, or narrow the window, if the salon ever takes more.
+    for (let page = 1; page <= 30; page++) {
+      const q = new URLSearchParams({ from_date: from.toISOString(), to_date: to.toISOString(), limit: "100", page: String(page) });
+      const res = await api<{
+        data: { id: string; current_status: string; amount?: string; amount_in_smallest_unit?: number }[];
+        pagination?: { has_next_page?: boolean };
+      }>("GET", `/payments?${q}`);
+      for (const p of res.data) {
+        out.push({
+          id: p.id,
+          state: PAID.includes(p.current_status) && p.current_status !== "PARTIALLY_REFUNDED"
+            ? "paid"
+            : p.current_status === "REFUNDED"
+              ? "refunded"
+              : p.current_status === "PARTIALLY_REFUNDED"
+                ? "partly-refunded"
+                : "other",
+          amountHalalas: p.amount_in_smallest_unit ?? Math.round(Number(p.amount ?? 0) * 100),
+        });
+      }
+      if (!res.pagination?.has_next_page) break;
+    }
+    return out;
+  },
+
+  async refundedHalalas(raw) {
+    const { paymentId } = (raw ?? {}) as { paymentId?: string };
+    return paymentId ? refundedSoFar(paymentId) : 0;
+  },
+
+  /**
+   * Safe to call again for the same payment: it first asks how much has gone
+   * back already, so a retry after a lost answer, or a refund someone made in
+   * their dashboard, is recorded rather than sent twice.
+   */
   async refund(input) {
     const { paymentId } = (input.raw ?? {}) as { paymentId?: string };
     if (!paymentId) {
       console.error("[streampay] refund: no StreamPay payment id on the row");
       return { status: "failed" };
     }
-    const res = await api<{ current_status?: string }>("POST", `/payments/${paymentId}/refund`, {
-      amount: sar(input.amountHalalas),
-      refund_reason: "OTHER",
-      refund_note: input.reason?.slice(0, 512) ?? null,
-    });
-    const ok = res.current_status === "REFUNDED" || res.current_status === "PARTIALLY_REFUNDED";
-    return { status: ok ? "refunded" : "failed", raw: res };
+    if ((await refundedSoFar(paymentId)) >= input.amountHalalas) {
+      return { status: "refunded", raw: { alreadyRefunded: true } };
+    }
+    try {
+      // The reply is the refund row itself, with no status: a 2xx means it went.
+      const res = await api<unknown>("POST", `/payments/${paymentId}/refund`, {
+        amount: sar(input.amountHalalas),
+        refund_reason: "OTHER",
+        refund_note: input.reason?.slice(0, 512) ?? null,
+      });
+      return { status: "refunded", raw: res };
+    } catch (err) {
+      // A timeout can hide a refund that went through. Ask before calling it failed.
+      console.error(`[streampay] refund of ${paymentId} errored; checking whether it went through`, err);
+      const done = await refundedSoFar(paymentId).catch(() => 0);
+      return done >= input.amountHalalas ? { status: "refunded", raw: { confirmedAfterError: true } } : { status: "failed" };
+    }
   },
 };
 

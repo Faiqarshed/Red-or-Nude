@@ -281,18 +281,26 @@ export function loadCheckout(): CheckoutChoices | null {
  * Let go of her own unpaid hold, if checkout left one. Called wherever a new
  * one might be made — the booking pages and checkout itself — so her old hold
  * never shows her own time as taken. Resolves once the server has answered.
+ *
+ * Returns the hold when the server kept it: a payment for it is in flight, or
+ * it is already booked. It stays saved then, so the checkout resumes it instead
+ * of booking and charging her a second time.
  */
-export async function releaseHold(): Promise<void> {
+export async function releaseHold(): Promise<{ held: NonNullable<CheckoutChoices["held"]>; kept: "paying" | "booked" } | null> {
   const saved = loadCheckout();
-  if (!saved?.held) return;
-  saveCheckout({ ...saved, held: null });
-  await fetch("/api/bookings/release", {
+  if (!saved?.held) return null;
+  const answer = await fetch("/api/bookings/release", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(saved.held),
-  }).catch(() => {
-    /* the hold expires on its own; this only brings that forward */
-  });
+  })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  if (answer?.kept === "paying" || answer?.kept === "booked") return { held: saved.held, kept: answer.kept };
+  // Released or gone. With no answer at all it stays saved: she may have paid
+  // for it, and the next visit asks again.
+  if (answer) saveCheckout({ ...(loadCheckout() ?? saved), held: null });
+  return null;
 }
 
 /** Why a time restored from checkout can't be kept, or null when it still can. */

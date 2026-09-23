@@ -17,11 +17,28 @@
 // Arabia has no DST, so the conversion is a fixed +3 offset (see lib/time.ts).
 
 import "server-only";
-import { and, asc, eq, gt, gte, lt, ne, or, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, gte, lt, ne, or, isNull, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
 import { bookings, branchHours, closures, stations } from "@/lib/db/schema";
 import { UTC_OFFSET_HOURS, riyadhWeekday } from "@/lib/time";
-import { getSettings } from "@/lib/settings";
+import { getSettings, SETTING_DEFAULTS } from "@/lib/settings";
+import { checkoutOpen } from "@/lib/payments";
+
+/**
+ * Not a web hold that has lapsed: pending past `booking_hold_min` with no
+ * checkout still open. Such a hold keeps nothing — sweepExpiredHolds cancels it
+ * the moment anyone books at the branch — but it is only swept then, so on a
+ * quiet branch it showed its slot as taken for hours. Same rule as the sweep.
+ *
+ * reserveStations does not need it: createBookings sweeps just before it.
+ */
+const stillHolds = sql`not (
+  ${bookings.status} = 'pending' and ${bookings.source} = 'web'
+  and ${bookings.createdAt} < now() - make_interval(mins => coalesce(
+    (select (value #>> '{}')::int from settings where key = 'booking_hold_min'),
+    ${SETTING_DEFAULTS.booking_hold_min}))
+  and not ${checkoutOpen(bookings.id)}
+)`;
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -124,9 +141,10 @@ async function loadContext(branchId: string, from: Date, to: Date): Promise<Cont
           // and then refused it as `slot-taken`.
           lt(bookings.startsAt, to),
           gt(bookings.endsAt, from),
-          // Cancelled and no-show slots are free again.
+          // Cancelled and no-show slots are free again, and so is a lapsed hold.
           ne(bookings.status, "cancelled"),
           ne(bookings.status, "no_show"),
+          stillHolds,
         ),
       ),
   ]);
@@ -460,6 +478,7 @@ export async function stationFreeWindow(
           gt(bookings.endsAt, from),
           ne(bookings.status, "cancelled"),
           ne(bookings.status, "no_show"),
+          stillHolds,
         ),
       )
       .orderBy(asc(bookings.startsAt))

@@ -37,5 +37,8 @@ export function throttled(key: string, { windowMs = 60_000, max = 10 }: Throttle
 
 /** The caller's address, or `"unknown"` when the host doesn't forward one. */
 export function clientIp(request: Request): string {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const first = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  // Azure's front door adds the client's port ("1.2.3.4:5678", "[::1]:5678"),
+  // which changes per connection and would make every request a new address.
+  return first?.replace(/^\[(.+)\]:\d+$/, "$1").replace(/^(\d+\.\d+\.\d+\.\d+):\d+$/, "$1") || "unknown";
 }

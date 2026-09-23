@@ -636,11 +636,13 @@ describe("the no-show sweep waits out the grace period", () => {
     const { no_show_grace_min: grace } = await getSettings(["no_show_grace_min"]);
 
     const guest = (await db.insert(customers).values({ phone: "0500000094" }).returning())[0];
-    const [chair] = await db
+    // A chair each: two appointments four minutes apart on one chair overlap,
+    // which the database refuses (bookings_station_no_overlap).
+    const chairs = await db
       .select({ id: stations.id })
       .from(stations)
       .where(and(eq(stations.branchId, f.branchA), eq(stations.active, true)))
-      .limit(1);
+      .limit(2);
 
     // Two minutes either side of the line rather than exactly on it: the sweep
     // reads the database's own now(), which moves between building these rows
@@ -650,12 +652,12 @@ describe("the no-show sweep waits out the grace period", () => {
       { code: "RON-GRACE2", offset: -(grace + 2) * MIN, expect: "no_show" },
     ];
 
-    for (const r of rows) {
+    for (const [i, r] of rows.entries()) {
       await db.insert(bookings).values({
         code: r.code,
         branchId: f.branchA,
         customerId: guest.id,
-        stationId: chair.id,
+        stationId: chairs[i].id,
         serviceId: f.svcA.id,
         startsAt: new Date(Date.now() + r.offset),
         endsAt: new Date(Date.now() + r.offset + HOUR),

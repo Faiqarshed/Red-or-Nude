@@ -13,6 +13,29 @@ Fixed decisions:
 - The gift card code visible via the ref (old #5) is accepted.
 - Production moves to **Azure**. While testing on Vercel the settle job stays every 2 days. **No live money is taken before the Azure 5-minute schedule is running** (senior, should-fix 2).
 
+## Status (feat/payment-hardening)
+
+**Built**, with a test each in `tests/payment-hardening.test.ts`:
+- #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #18, #19, #20, #21, #22, #24;
+- H1, H2, H3;
+- the overlap rule (migration 0028).
+
+**Found while building:** StreamPay's refund reply has no status field, and the old code read one. Every real refund would have been logged as failed. Fixed in #13.
+
+**Changed while building:**
+- #11 and #12 apply only to payments settled after their pay window. The booking flow already refuses a time in the past, so only a late payment can reach them.
+- #4 asks StreamPay before releasing a lapsed hold, but no longer spares a hold when StreamPay cannot answer. A payment that lands later is refunded, as before.
+- H4 needs no code: it's a query in PAYMENTS-STATUS.md §4.
+- H5 is dropped: H1 frees the slot without a sweep.
+
+**#5 + #22:** the daily report run compares the last 30 days of StreamPay's payments with ours, one payment at a time (`compareWithGateway`), instead of comparing totals. It catches missed refunds and payments we never recorded. It needs checking against the sandbox: the response shape comes from their OpenAPI spec.
+
+**Not built here:**
+- The wallet (its own PR).
+- The Azure schedule (deploy).
+- #17, #23, #25 (not building).
+- #26 (needs a real card).
+
 ## Refund rule (decided)
 
 One idea: **money goes back to the card only when she paid and never got what she paid for.** Once a booking is confirmed or an item delivered, it's wallet credit or nothing.
