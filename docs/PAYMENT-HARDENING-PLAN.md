@@ -10,10 +10,74 @@ The triggers are dropped internet, our site or StreamPay being down, lost messag
 
 Fixed decisions (not changing):
 - Card entry stays on our page (StreamPay embed); OTP on StreamPay's page.
-- The chair is reserved at Pay.
-- The hold stays at 15 min.
 - The gift card code visible via the ref (#5 old) is accepted.
 - Production moves to **Azure**. While testing on Vercel the settle job stays every 2 days. On Azure it becomes every 5 min, plus a separate daily report.
+
+## Already handled: nothing to build, nothing to set up
+
+These are covered by the code as it is today. They need no change and no configuration.
+
+**Money and pricing**
+- **Price tampering:** the server re-prices every bill from the catalogue and ignores any figure the browser sends.
+- **StreamPay's total must equal ours:** after creating the payment link we compare its total with ours. If they differ, the link is switched off before anyone can pay.
+- **Paid amount different from the bill:** not confirmed and not delivered, and listed in the report for a person to refund. Should never happen, because of the check above.
+- **Zero bill** (membership credit, a 100% code or points covering everything): confirmed without ever reaching StreamPay.
+- **Invalid promo code or points at checkout:** the booking is refused with the reason; she's never silently charged full price.
+- **Gift card amounts:** only the salon's preset amounts are accepted.
+
+**Never charging twice, never confirming twice**
+- **Double tap, second tab, reload:** the database allows only one live payment per booking (`payments_booking_live_unique`), and each StreamPay link accepts one payment. Pressing Pay again reopens the same checkout.
+- **Return page, status check, webhook and settle job arriving together:** a single database update from pending to paid decides who confirms; the rest read the result.
+- **Webhook sent twice or replayed:** the second one finds it already paid and does nothing.
+
+**Trust and security**
+- **A fake "paid" in the URL or the webhook body:** never believed. We always ask StreamPay directly.
+- **Forged webhook:** HMAC signature check, accepted only within 5 minutes. A missing secret rejects every webhook rather than accepting them.
+- **Card numbers:** typed only into StreamPay's box and never reach our server.
+- **Production running the fake payment driver by mistake:** payments are refused unless StreamPay is configured.
+
+**Crashes and failures**
+- **Our server crashes while confirming a booking:** confirming is one database transaction, so it all happens or none of it does.
+- **Our server crashes while delivering a gift card, membership or chair purchase:** delivery and its link to the payment are saved together, so it's all or nothing.
+- **Her internet drops before Pay reaches us:** nothing is charged, and the chair stays held for a retry.
+- **Our answer to Pay never reaches her:** the checkout is saved on our side, so pressing Pay again reopens it.
+- **Our request to StreamPay never arrives:** the attempt fails cleanly and she can retry. Nothing is charged.
+- **StreamPay's answer to "was it paid?" is lost:** the next check asks again.
+- **Our database is down:** everything waits, StreamPay retries the webhook, and the settle job catches up.
+- **StreamPay's checkout script is blocked:** she's sent to StreamPay's hosted payment page instead.
+
+**Payment outcomes**
+- **Card declined:** the same checkout stays open for another card, and the chair stays held.
+- **3-D Secure still processing:** treated as pending, not failed.
+- **She pays after her hold expired:** automatic full card refund + email.
+- **She paid for a gift card, membership or chair item we couldn't deliver:** automatic full card refund + email.
+- **She paid and closed the tab, and the webhook never came:** the settle job finds it (every 2 days while testing on Vercel, every 5 min on Azure).
+- **Anything a person must look at** (a refund owed, a payment with no answer from StreamPay): listed in the report email.
+
+**Chairs and credits**
+- **Two people booking the same chair at the same time:** a database row lock on the branch's chairs puts them in line, and a unique index backs it up. Whoever presses Pay first gets the chair; the other is told before entering a card.
+- **Membership credit spent twice:** row lock + unique index.
+- **Staff delete a paid booking:** the payment record survives.
+
+Go-live setup still needed (not code) is listed in `docs/PAYMENTS-STATUS.md` §4: register the webhook, production env vars, migration, `streampay:sync`, the Azure timers, the real card test.
+
+## Awaiting senior confirmation: the chair reservation (hold)
+
+How it works today:
+1. When she presses **Pay**, the chair is reserved first: a *pending* booking row in the database. Grabbing the chair uses a database row lock for a few milliseconds.
+2. The payment opens on our page (StreamPay's box). The OTP opens on StreamPay's page, then she comes back to us.
+3. Paid: the booking is confirmed and she gets her ticket.
+4. Not paid: the reservation lapses after **15 min** (up to about **25 min** if a payment is still open), and the chair is free again. It's released lazily, when someone else books at that branch.
+5. Two people, one chair: whoever presses Pay first gets it. The other is told "that time was just taken" before entering a card.
+
+Why not reserve only after payment is confirmed? Two customers could then both pay for the last chair, and one would need a card refund (5 to 14 days, fees, chargeback risk). Gift cards and memberships can't run out, so they have no reservation and are created only after payment.
+
+Questions sent to the senior:
+1. Are you OK with reserving the chair at Pay rather than at payment confirmation?
+2. Is 15 min, plus up to 10 min while a payment is open, the right length?
+3. Is it acceptable that an abandoned payment blocks the chair for up to about 25 min?
+
+Until answered, the plan assumes: reserve at Pay, hold 15 min. The overlap rule below (no two overlapping bookings on one chair, enforced by the database) is independent of these answers.
 
 ## Decisions and how each is built
 
