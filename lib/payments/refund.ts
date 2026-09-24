@@ -15,6 +15,7 @@ import { sendMail } from "@/lib/email";
 import { esc } from "@/lib/email/html";
 import { formatSAR } from "@/lib/money";
 import { alertOwner } from "./alert";
+import { errorText, logPaymentEvent } from "./events";
 import { getDriver, mergeRaw } from "./index";
 import type { Intent } from "./purchase";
 
@@ -131,6 +132,7 @@ async function refundPaid(which: SQL, reason: string, label: string): Promise<Re
 
     if (result.status !== "refunded") {
       console.error(`[payments] refund declined for ${rows[0].providerRef}; settle by hand`);
+      await logPaymentEvent("refund-failed", { reason, amountHalalas: total, answer: result.raw ?? null }, rows[0].providerRef);
       return { ok: false };
     }
 
@@ -150,6 +152,7 @@ async function refundPaid(which: SQL, reason: string, label: string): Promise<Re
   } catch (err) {
     // Money may or may not have moved. Loud, because a human has to look.
     console.error(`[payments] refund failed for ${label}`, err);
+    await logPaymentEvent("refund-failed", { reason, label, error: errorText(err) });
     return { ok: false };
   }
 }
@@ -157,7 +160,7 @@ async function refundPaid(which: SQL, reason: string, label: string): Promise<Re
 /** Refunds the system made on its own — the customer did not press anything. */
 const AUTOMATIC = new Set(["late-payment", "not-delivered", "wrong-amount", "duplicate-payment"]);
 
-type RefundedRow = { raw: unknown; bookingId: string | null; treatBookingId: string | null };
+type RefundedRow = { providerRef: string | null; raw: unknown; bookingId: string | null; treatBookingId: string | null };
 
 /** Never throws: the money has already gone back; this only says so. */
 async function emailRefund(row: RefundedRow, halalas: number, reason: string): Promise<void> {
@@ -200,6 +203,7 @@ async function emailRefund(row: RefundedRow, halalas: number, reason: string): P
       replyTo: process.env.MAIL_REPLY_TO?.trim() || null,
       tags: ["refund"],
     });
+    await logPaymentEvent("customer-emailed", { about: reason, amountHalalas: halalas }, row.providerRef);
   } catch (err) {
     console.error("[payments] refund email failed", err);
   }
@@ -269,6 +273,7 @@ export async function refundedOutside(ref: string): Promise<void> {
         const cards = rows.map((r) => r.giftCardId).filter((id): id is string => Boolean(id));
         if (cards.length > 0) {
           await tx.update(giftCards).set({ status: "cancelled", updatedAt: new Date() }).where(inArray(giftCards.id, cards));
+          await logPaymentEvent("gift-card-frozen", { giftCardIds: cards }, ref);
         }
       });
     }

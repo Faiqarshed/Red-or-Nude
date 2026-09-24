@@ -15,6 +15,7 @@ import { db } from "@/lib/db";
 import { streampayIds } from "@/lib/db/schema";
 import { toNationalDigits } from "@/lib/phone";
 import { alertOwner } from "./alert";
+import { logPaymentEvent } from "./events";
 import type { Discount, GatewayPayment, Line, Payer, PaymentDriver, PaymentMethod, Verdict } from "./index";
 
 // ---------------------------------------------------------------- transport --
@@ -184,6 +185,7 @@ async function forgetBroken(used: Used[]): Promise<string[]> {
     console.error(`[streampay] ${u.key} (${have.streampayId}) no longer matches StreamPay; making it again`);
     await db.delete(streampayIds).where(eq(streampayIds.key, scoped(u.key)));
     if (there && u.path === "products") await retireLater(have.streampayId);
+    await logPaymentEvent("streampay-id-forgotten", { key: u.key, id: have.streampayId, why: there ? "switched off or edited there" : "deleted there" });
     forgot.push(u.key);
   }
   return forgot;
@@ -237,6 +239,7 @@ export async function syncProduct(key: string, p: ProductVersion): Promise<strin
   });
   const priceId = made.prices?.find((x) => x.is_active)?.id ?? made.prices?.[0]?.id ?? null;
   const id = await remember(vkey, made.id, priceId, signatureOf(p));
+  await logPaymentEvent("product-created", { key, productId: made.id, version: signatureOf(p) });
   // Two checkouts made the same version at once and the other was recorded:
   // this one is unused, and archived like any replaced product.
   if (id !== made.id) await retireLater(made.id);
@@ -245,7 +248,12 @@ export async function syncProduct(key: string, p: ProductVersion): Promise<strin
 
 /** Archive this product once RETIRE_AFTER_MIN has passed (archiveRetiredProducts). */
 async function retireLater(productId: string): Promise<void> {
-  await db.insert(streampayIds).values({ key: scoped(`retire:${productId}`), streampayId: productId }).onConflictDoNothing();
+  const [added] = await db
+    .insert(streampayIds)
+    .values({ key: scoped(`retire:${productId}`), streampayId: productId })
+    .onConflictDoNothing()
+    .returning({ key: streampayIds.key });
+  if (added) await logPaymentEvent("product-retired", { productId, archiveAfterMin: RETIRE_AFTER_MIN });
 }
 
 /** Every version of an item we hold a product for, but `keep`. Old keys (no version) included. */
@@ -318,6 +326,7 @@ export async function archiveRetiredProducts(): Promise<number> {
   for (const r of due) {
     try {
       await api("PUT", `/products/${r.streampayId}`, { is_active: false });
+      await logPaymentEvent("product-archived", { productId: r.streampayId });
       archived++;
     } catch (err) {
       if (!(err instanceof StreamPayError) || err.status >= 500) {
@@ -325,6 +334,7 @@ export async function archiveRetiredProducts(): Promise<number> {
         continue;
       }
       if (err.status !== 404) console.error(`[streampay] StreamPay refused to archive product ${r.streampayId}; left as it is`, err);
+      await logPaymentEvent("product-archive-refused", { productId: r.streampayId, status: err.status });
     }
     await db.delete(streampayIds).where(eq(streampayIds.streampayId, r.streampayId));
   }
@@ -356,39 +366,136 @@ async function ensureCoupon(d: Discount): Promise<string> {
 
 // ----------------------------------------------------------------- customers --
 
-/**
- * Her StreamPay customer record, so the checkout does not ask for her details
- * again and the invoice is addressed to her. Keyed by phone, else email.
- *
- * Null when there is nothing to key on or StreamPay refuses (say, the number is
- * already a customer they hold under another record) — the link then collects
- * her details itself, which is a worse form and not a failed payment.
- */
-function consumerKey(payer: Payer): string | null {
+/** Her details as we send them to StreamPay. Compared with what we last sent, to know when to update it. */
+function consumerFields(payer: Payer) {
   const phone = payer.phone ? `+966${toNationalDigits(payer.phone)}` : null;
   const email = payer.email?.trim().toLowerCase() || null;
-  return phone ? `consumer:${phone}` : email ? `consumer:${email}` : null;
+  return {
+    name: payer.name?.trim() || phone || email,
+    phone_number: phone ?? undefined,
+    email: email ?? undefined,
+    external_id: payer.customerId ?? undefined,
+  };
 }
 
+/** Our customer id: she stays one StreamPay consumer when her phone or email changes. */
+const customerKey = (customerId: string) => `consumer:customer:${customerId}`;
+
+/** A payer with no customer record (a gift card buyer), and consumers made before we kept them by id. */
+function contactKeys(payer: Payer): string[] {
+  const { phone_number, email } = consumerFields(payer);
+  return [phone_number && `consumer:${phone_number}`, email && `consumer:${email}`].filter((k): k is string => Boolean(k));
+}
+
+function consumerKey(payer: Payer): string | null {
+  return payer.customerId ? customerKey(payer.customerId) : (contactKeys(payer)[0] ?? null);
+}
+
+/**
+ * Her StreamPay customer record, so the checkout does not ask for her details
+ * again and the invoice is addressed to her. Kept against our customer id,
+ * made the first time she pays, and updated whenever her name, phone or email
+ * here changes. `streampayCustomer` reads it back.
+ *
+ * If it cannot be made (StreamPay already holds her email or phone under another
+ * record), she is found there by email, then phone, and that record is kept.
+ * Null only when none of that works: the link then collects her details
+ * itself, which is a worse form and not a failed payment.
+ */
 async function ensureConsumer(payer: Payer): Promise<string | null> {
   const key = consumerKey(payer);
   if (!key) return null;
-  const phone = payer.phone ? `+966${toNationalDigits(payer.phone)}` : null;
-  const email = payer.email?.trim().toLowerCase() || null;
+  const fields = consumerFields(payer);
+  const signature = JSON.stringify(fields);
 
-  const have = await lookup(key);
-  if (have) return have.streampayId;
+  let have = await lookup(key);
+  // Made before consumers were kept by customer id: moved under her id, not made twice.
+  for (const old of payer.customerId && !have ? contactKeys(payer) : []) {
+    const row = await lookup(old);
+    if (!row) continue;
+    await remember(key, row.streampayId, null, row.signature);
+    await db.delete(streampayIds).where(eq(streampayIds.key, scoped(old)));
+    have = await lookup(key);
+    break;
+  }
+
+  if (have) {
+    if (have.signature !== signature) await updateConsumer(key, have.streampayId, fields, signature);
+    return have.streampayId;
+  }
   try {
-    const made = await api<{ id: string }>("POST", "/consumers", {
-      name: payer.name?.trim() || phone || email,
-      phone_number: phone ?? undefined,
-      email: email ?? undefined,
-      external_id: payer.customerId ?? undefined,
-    });
-    return remember(key, made.id, null, null);
+    const made = await api<{ id: string }>("POST", "/consumers", fields);
+    return remember(key, made.id, null, signature);
   } catch (err) {
-    console.error(`[streampay] could not create consumer ${key}; checkout will ask for details`, err);
+    const found = await findConsumer(fields).catch(() => null);
+    if (found) {
+      await logPaymentEvent("consumer-found", { consumerId: found, customerId: payer.customerId ?? null });
+      const id = await remember(key, found, null, null);
+      await updateConsumer(key, id, fields, signature);
+      return id;
+    }
+    console.error(`[streampay] could not create or find consumer ${key}; checkout will ask for details`, err);
     return null;
+  }
+}
+
+/** Her existing record at StreamPay: an exact match on email, else on phone. */
+async function findConsumer(fields: ReturnType<typeof consumerFields>): Promise<string | null> {
+  for (const [term, field] of [[fields.email, "email"], [fields.phone_number, "phone_number"]] as const) {
+    if (!term) continue;
+    const q = new URLSearchParams({ search_term: term, limit: "100" });
+    const res = await api<{ data: StreamPayConsumer[] }>("GET", `/consumers?${q}`);
+    const match = res.data.find((c) => !c.is_deleted && c[field]?.toLowerCase() === term.toLowerCase());
+    if (match) return match.id;
+  }
+  return null;
+}
+
+/**
+ * Her details changed here, so they change there too. A refusal from StreamPay
+ * (say CONSUMER_CONTACT_INFO_CHANGE_NOT_ALLOWED) is logged and not asked again
+ * until her details change once more; StreamPay not answering is asked again
+ * next checkout. Never throws: a stale name there is no reason to stop her paying.
+ */
+async function updateConsumer(key: string, id: string, fields: ReturnType<typeof consumerFields>, signature: string) {
+  try {
+    await api("PUT", `/consumers/${id}`, fields);
+    await logPaymentEvent("consumer-updated", { consumerId: id, customerId: fields.external_id ?? null });
+  } catch (err) {
+    if (!(err instanceof StreamPayError) || err.status >= 500) {
+      console.error(`[streampay] could not update consumer ${id}; next checkout`, err);
+      return;
+    }
+    await logPaymentEvent("consumer-update-refused", { consumerId: id, status: err.status, error: err.message.slice(0, 300) });
+  }
+  await db.update(streampayIds).set({ signature, updatedAt: new Date() }).where(eq(streampayIds.key, scoped(key)));
+}
+
+/** Her record as StreamPay holds it. */
+export type StreamPayConsumer = {
+  id: string;
+  name: string | null;
+  phone_number: string | null;
+  email: string | null;
+  /** Our customer id. */
+  external_id: string | null;
+  preferred_language?: string | null;
+  created_at?: string;
+  is_deleted?: boolean;
+};
+
+/**
+ * Our customer's record at StreamPay, asked by the consumer id we keep for her.
+ * Null when she has not paid online yet (no consumer made), or it is gone there.
+ */
+export async function streampayCustomer(customerId: string): Promise<StreamPayConsumer | null> {
+  const have = await lookup(customerKey(customerId));
+  if (!have) return null;
+  try {
+    return await api<StreamPayConsumer>("GET", `/consumers/${have.streampayId}`);
+  } catch (err) {
+    if (err instanceof StreamPayError && err.status === 404) return null;
+    throw err;
   }
 }
 

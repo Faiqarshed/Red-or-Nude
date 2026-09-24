@@ -70,7 +70,6 @@ export const paymentStatus = pgEnum("payment_status", [
   "paid",
   "failed",
   "refunded",
-  "partially_refunded",
 ]);
 
 export const giftCardStatus = pgEnum("gift_card_status", [
@@ -792,6 +791,31 @@ export const streampayIds = pgTable("streampay_ids", {
   signature: text("signature"),
   ...stamps,
 });
+
+/**
+ * Everything that happened to a payment, append-only, whether or not a screen
+ * shows it. Two writers: a database trigger on `payments` (migration 0030) logs
+ * every insert and every change, so no code path can skip it; and
+ * logPaymentEvent (lib/payments/events.ts) logs what is not a row change —
+ * webhooks, alerts, failed refunds, settle runs, StreamPay products, receipts.
+ *
+ * No foreign keys: the record outlives whatever it describes.
+ * ponytail: no retention; prune by `at` if it ever grows too large to keep.
+ */
+export const paymentEvents = pgTable(
+  "payment_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+    paymentId: uuid("payment_id"),
+    providerRef: text("provider_ref"),
+    kind: text("kind").notNull(),
+    detail: jsonb("detail"),
+  },
+  (t) => ({
+    byRef: index("payment_events_ref_idx").on(t.providerRef, t.at),
+  }),
+);
 
 export const refunds = pgTable("refunds", {
   id: uuid("id").primaryKey().defaultRandom(),

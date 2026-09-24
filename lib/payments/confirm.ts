@@ -38,6 +38,7 @@ import { assignIfToday } from "@/lib/assign";
 import { siteOrigin } from "@/lib/site";
 import { bookingLines } from "./lines";
 import { refundRef } from "./refund";
+import { errorText, logPaymentEvent } from "./events";
 import { checkoutOf, getDriver, mergeRaw, PAY_WINDOW_MIN, type Checkout, type Verdict } from "./index";
 
 export type ConfirmedTicket = {
@@ -262,6 +263,7 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
     });
   } catch (err) {
     console.error("[payments] charge threw", err);
+    await logPaymentEvent("checkout-failed", { error: errorText(err) }, ref);
     await db
       .update(payments)
       .set({ status: "failed", updatedAt: new Date() })

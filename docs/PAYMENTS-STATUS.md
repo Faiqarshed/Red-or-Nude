@@ -117,6 +117,15 @@ the booking suites) unless it says otherwise.
 
 ---
 
+- **Everything is on record, in `payment_events`**, whether or not a screen
+  shows it. A database trigger logs every payment created and every change to
+  one (each column from → to, and each detail added), so no code path can skip
+  it; a settle-job re-check that changes nothing is not logged. The code logs
+  the rest: webhooks received, alerts (once an hour per alert), refunds StreamPay
+  refused, checkouts that could not be opened, settle runs and reports,
+  StreamPay products made, retired, archived or made again, gift cards frozen,
+  receipts and refund emails sent. Query it by `provider_ref`. No screen yet.
+
 ## 2. Limitations — what does not work yet
 
 **Refund policy: decided Sept 2026, not built yet**
@@ -358,8 +367,12 @@ The code is done; these are the steps only people with access can do.
    Redeploy after.
 2. `npm run db:migrate` — migrations `0027_streampay` (one table, two columns
    with defaults) and `0028_no_chair_overlap` (enables the `btree_gist` extension
-   and adds the overlap rule; checked: no existing overlaps on staging). Must
-   run before the first checkout.
+   and adds the overlap rule; checked: no existing overlaps on staging),
+   `0029_no_partial_refund_status` (drops the unused `partially_refunded`
+   status; stops rather than guesses if any payment holds it) and
+   `0030_payment_events` (the payment log and its trigger). Must run before the
+   first checkout. Hand-written migrations get a journal `when` after the last
+   one's: drizzle skips, silently, any migration dated before the last applied.
 3. After deploy, check Vercel → Crons lists `settle-pending?report=1`, and run it
    once by hand (the curl above) — expect `{"ok":true,...}`; a 401 means
    `CRON_SECRET` is wrong.

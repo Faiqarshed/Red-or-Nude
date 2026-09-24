@@ -6,20 +6,20 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createHmac, randomUUID } from "node:crypto";
 import { eq, inArray, like, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { addons, bookings, customers, giftCardValues, giftCards, loyaltyTxns, payments, refunds, stations, streampayIds } from "@/lib/db/schema";
+import { addons, bookings, customers, giftCardValues, giftCards, loyaltyTxns, payments, refunds, paymentEvents, stations, streampayIds } from "@/lib/db/schema";
 import { createBookings, heldState, releaseWebHold } from "@/lib/bookings";
 import { getDayAvailability, stationFreeWindow, utcToLocalDate, utcToLocalTime } from "@/lib/availability";
 import { settleBookingPayment } from "@/lib/payments/confirm";
 import { CHAIR_CREDIT_MAX_HALALAS, redeliver, settlePurchase, startPurchase, type GiftIntent, type TreatIntent } from "@/lib/payments/purchase";
 import { compareWithGateway, paymentProblems, reconcilePayments } from "@/lib/payments/reconcile";
 import { revivePayment, settlePayment } from "@/lib/payments/settle";
-import { refundBookings, refundedOutside } from "@/lib/payments/refund";
+import { refundBookings, refundedOutside, refundRef } from "@/lib/payments/refund";
 import { fakeDriver } from "@/lib/payments/fake";
-import { archiveRetiredProducts, RETIRE_AFTER_MIN, retireProduct, streampayDriver, syncProduct, syncProductQuietly } from "@/lib/payments/streampay";
+import { archiveRetiredProducts, RETIRE_AFTER_MIN, retireProduct, streampayCustomer, streampayDriver, syncProduct, syncProductQuietly } from "@/lib/payments/streampay";
 import { giftCardLine } from "@/lib/payments/lines";
 import { POST as webhook } from "@/app/api/payments/streampay/webhook/route";
 import { POST as giftCards_ } from "@/app/api/gift-cards/route";
-import type { Verdict } from "@/lib/payments";
+import type { Payer, Verdict } from "@/lib/payments";
 import { FUTURE, TEST_PHONE, fixtures, reset, taggedAddon, type Fixtures } from "./helpers";
 
 const TAG = "hardening-test";
@@ -341,6 +341,63 @@ describe("streampay verify and refund", () => {
       await archiveRetiredProducts();
       expect(archived).toContain(made[0]);
     });
+  });
+
+  it("keeps her StreamPay consumer by our customer id: updated when she changes, found by email when it cannot be made", async () => {
+    const key = `svc-under-test:${randomUUID()}`;
+    const [sara, huda] = [randomUUID(), randomUUID()];
+    const phone = `05${String(Date.now()).slice(-8)}`;
+    const calls: string[] = [];
+    const consumers: Record<string, { email: string }> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const path = String(url).split("/api/v2")[1];
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      calls.push(`${method} ${path.split("?")[0]}`);
+      if (path === "/products") return reply({ id: randomUUID(), prices: [] });
+      if (method === "POST" && path === "/consumers") {
+        // Huda is already a consumer there, under another record.
+        if (body.external_id === huda) return new Response(JSON.stringify({ error: { code: "DUPLICATE_CONSUMER" } }), { status: 422 });
+        const id = randomUUID();
+        consumers[id] = body;
+        return reply({ id });
+      }
+      if (method === "GET" && path.startsWith("/consumers?")) return reply({ data: [{ id: "huda-there", email: "huda@example.com" }] });
+      if (method === "PUT") return reply({});
+      if (method === "GET") return reply({ id: path.slice(11), ...consumers[path.slice(11)], external_id: sara });
+      return reply({ id: "link", url: "https://pay.test/l", status: "ACTIVE", amount_in_smallest_unit: 5000, consumer: body?.organization_consumer_id });
+    });
+    const pay = (payer: Payer) =>
+      streampayDriver.charge({
+        ref: randomUUID(), amountHalalas: 5000, lines: [{ key, name: "Gel", priceHalalas: 5000, qty: 1 }], discounts: [],
+        title: "t", payer, expiresAt: new Date(Date.now() + 600_000), returnUrl: "https://example.test/r",
+      });
+
+    // Made the old way first, by phone; then paid as a customer: carried over, not made twice.
+    await pay({ phone, email: "sara@example.com" });
+    calls.length = 0;
+    await pay({ customerId: sara, phone, name: "Sara", email: "sara@example.com" });
+    expect(calls).not.toContain("POST /consumers");
+
+    // She changes her email: her record there is updated, not replaced.
+    calls.length = 0;
+    await pay({ customerId: sara, phone, name: "Sara", email: "sara.new@example.com" });
+    expect(calls.filter((c) => c.includes("/consumers"))).toEqual([`PUT /consumers/${Object.keys(consumers)[0]}`]);
+
+    // Asked by our id, StreamPay's record comes back.
+    const there = await streampayCustomer(sara);
+    expect(there).toMatchObject({ id: Object.keys(consumers)[0], external_id: sara });
+    expect(await streampayCustomer(randomUUID())).toBeNull();
+
+    // StreamPay will not make Huda: she is found there by email, and kept.
+    calls.length = 0;
+    await pay({ customerId: huda, name: "Huda", email: "huda@example.com" });
+    expect(calls).toEqual(expect.arrayContaining(["POST /consumers", "GET /consumers", "PUT /consumers/huda-there"]));
+    calls.length = 0;
+    await pay({ customerId: huda, name: "Huda", email: "huda@example.com" });
+    expect(calls.filter((c) => c.includes("/consumers"))).toEqual([]);
+
+    await db.delete(streampayIds).where(sql`${streampayIds.key} like ${`%:${key}@%`} or ${streampayIds.key} like ${`%consumer:customer:${sara}`} or ${streampayIds.key} like ${`%consumer:customer:${huda}`}`);
   });
 
   it("never sends 'the rest' of a payment partly refunded in their dashboard", async () => {
@@ -773,5 +830,40 @@ describe("after the audit", () => {
 
     expect((await refundBookings(guests.map((g) => g.id), "customer-cancelled")).ok).toBe(true);
     expect((await rowsOf(ref)).map((r) => r.status)).toEqual(["refunded", "refunded"]);
+  });
+});
+
+describe("the payment log", () => {
+  const eventsOf = (ref: string) =>
+    db.select().from(paymentEvents).where(eq(paymentEvents.providerRef, ref)).orderBy(paymentEvents.at);
+
+  it("records every payment row change, from the database itself, but not a bare re-check", async () => {
+    const { ref } = await heldWithCheckout();
+    await db.update(payments).set({ raw: sql`${payments.raw} || '{"checkedAt":"2031-01-01T00:00:00Z"}'::jsonb` }).where(eq(payments.providerRef, ref));
+    await db.update(payments).set({ status: "failed" }).where(eq(payments.providerRef, ref));
+    await db.update(payments).set({ raw: sql`${payments.raw} || '{"paidOnOldAttempt":100}'::jsonb` }).where(eq(payments.providerRef, ref));
+
+    const events = await eventsOf(ref);
+    expect(events.map((e) => e.kind)).toEqual(["created", "status", "changed"]);
+    expect(events[1].detail).toMatchObject({ status: { from: "pending", to: "failed" } });
+    expect(events[2].detail).toEqual({ raw: { paidOnOldAttempt: 100 } });
+  });
+
+  it("records a webhook delivery, a refused signature, and a refund StreamPay refused", async () => {
+    const { ref } = await heldWithCheckout();
+    process.env.STREAMPAY_WEBHOOK_SECRET = "whsec_test";
+    const body = JSON.stringify({ event_type: "PAYMENT_FAILED", data: { metadata: { ref } } });
+    const t = String(Math.floor(Date.now() / 1000));
+    const sig = `t=${t},v1=${createHmac("sha256", "whsec_test").update(`${t}.${body}`).digest("hex")}`;
+    await webhook(new Request("http://x", { method: "POST", body, headers: { "x-webhook-signature": sig } }));
+    await webhook(new Request("http://x", { method: "POST", body, headers: { "x-webhook-signature": "t=1,v1=00" } }));
+
+    await db.update(payments).set({ status: "paid", raw: { paymentId: "pay-under-test" } }).where(eq(payments.providerRef, ref));
+    vi.spyOn(fakeDriver, "refund").mockResolvedValue({ status: "failed" });
+    await refundRef(ref, "late-payment");
+
+    expect((await eventsOf(ref)).map((e) => e.kind)).toEqual(expect.arrayContaining(["webhook", "refund-failed"]));
+    const refused = await db.select().from(paymentEvents).where(sql`${paymentEvents.kind} = 'alert' and ${paymentEvents.detail} ->> 'key' = 'webhook-signature'`);
+    expect(refused.length).toBeGreaterThan(0);
   });
 });

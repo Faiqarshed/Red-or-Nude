@@ -59,8 +59,14 @@ ever charged a number the screen didn't show.
 - Promo rules (dates, max uses, minimum spend) stay entirely in our app — StreamPay
   coupons have none of those fields.
 - Prices are VAT-inclusive on both sides.
-- The customer is a StreamPay *consumer* keyed by phone (else email), so the
-  checkout doesn't ask for her details again.
+- The customer is a StreamPay *consumer*, kept against **our customer id**
+  (`streampay_ids`, key `consumer:customer:<id>`), so the checkout doesn't ask
+  for her details again and she stays one consumer when her phone or email
+  changes. Her name, phone or email changing here updates it there at her next
+  checkout. If StreamPay will not create her (it already holds her email or
+  phone), she is found there by email, then phone, and that record is kept.
+  A buyer with no customer record (a gift card) is keyed by phone, else email.
+  `streampayCustomer(customerId)` returns her record as StreamPay holds it.
 
 The receipt is built by [`lib/payments/lines.ts`](../lib/payments/lines.ts) from the
 snapshots on the booking rows, including `promo_discount_halalas` and

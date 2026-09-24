@@ -21,6 +21,8 @@ import { db } from "@/lib/db";
 import { payments } from "@/lib/db/schema";
 import { mergeRaw } from "@/lib/payments";
 import { refundedOutside } from "@/lib/payments/refund";
+import { alertOwner } from "@/lib/payments/alert";
+import { logPaymentEvent } from "@/lib/payments/events";
 import { verifyWebhookSignature } from "@/lib/payments/streampay";
 import { refForLink, revivePayment, settlePayment } from "@/lib/payments/settle";
 
@@ -41,6 +43,15 @@ export async function POST(request: Request) {
     console.log("[streampay:debug] webhook in", request.headers.get("x-webhook-event"), raw);
   }
   if (!verifyWebhookSignature(raw, request.headers.get("x-webhook-signature"))) {
+    // A wrong or missing STREAMPAY_WEBHOOK_SECRET refuses every real delivery
+    // as well as forged ones. Told once an hour (and logged), not per request,
+    // so a flood of forgeries is one line.
+    await alertOwner(
+      "webhook-signature",
+      "A StreamPay webhook was refused: bad signature",
+      "If StreamPay's deliveries are failing, STREAMPAY_WEBHOOK_SECRET does not match the secret in their dashboard. " +
+        "Payments still confirm through the checkout page and the settle job, only later.",
+    );
     return NextResponse.json({ error: "bad-signature" }, { status: 401 });
   }
 
@@ -54,10 +65,11 @@ export async function POST(request: Request) {
   // A failure needs nothing from us: the checkout stays open for another card,
   // and expiry is found by the next ask.
   const type = event.event_type ?? "";
-  if (!HANDLED.has(type)) return NextResponse.json({ ok: true });
-
   const linkId = event.data?.payment_link?.id;
   const ref = event.data?.metadata?.ref ?? (linkId ? await refForLink(linkId) : null);
+  // Every signed delivery, handled or not, is on record.
+  await logPaymentEvent("webhook", { event: type, linkId: linkId ?? null, handled: HANDLED.has(type) }, ref);
+  if (!HANDLED.has(type)) return NextResponse.json({ ok: true });
   // Not one of ours — a payment taken on a link made by hand in their dashboard.
   if (!ref) return NextResponse.json({ ok: true });
 
