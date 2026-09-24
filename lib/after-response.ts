@@ -10,8 +10,7 @@
 // ponytail: fire-and-forget, so a server restarted mid-send loses that email.
 // Move to an outbox table if that is ever seen.
 
-const serverless = () =>
-  Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.FUNCTIONS_WORKER_RUNTIME);
+const serverless = () => Boolean(process.env.VERCEL || process.env.FUNCTIONS_WORKER_RUNTIME);
 
 /** Never throws: what runs here must not be able to unsay what came before it. */
 export async function afterResponse(what: string, work: () => Promise<unknown>): Promise<void> {

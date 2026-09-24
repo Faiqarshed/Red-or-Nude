@@ -11,9 +11,9 @@ import { createBookings, heldState, releaseWebHold } from "@/lib/bookings";
 import { getDayAvailability, stationFreeWindow, utcToLocalDate, utcToLocalTime } from "@/lib/availability";
 import { settleBookingPayment } from "@/lib/payments/confirm";
 import { CHAIR_CREDIT_MAX_HALALAS, redeliver, settlePurchase, startPurchase, type GiftIntent, type TreatIntent } from "@/lib/payments/purchase";
-import { compareWithGateway, reconcilePayments } from "@/lib/payments/reconcile";
+import { compareWithGateway, paymentProblems, reconcilePayments } from "@/lib/payments/reconcile";
 import { revivePayment, settlePayment } from "@/lib/payments/settle";
-import { refundBookings } from "@/lib/payments/refund";
+import { refundBookings, refundedOutside } from "@/lib/payments/refund";
 import { fakeDriver } from "@/lib/payments/fake";
 import { archiveRetiredProducts, RETIRE_AFTER_MIN, retireProduct, streampayDriver, syncProduct, syncProductQuietly } from "@/lib/payments/streampay";
 import { giftCardLine } from "@/lib/payments/lines";
@@ -218,6 +218,52 @@ describe("streampay verify and refund", () => {
       "POST /payment_links",
     ]);
     await db.delete(streampayIds).where(like(streampayIds.key, `%:${key}@%`));
+  });
+
+  it("makes a product edited in their dashboard again, when a link's total is not ours", async () => {
+    const key = `svc-under-test:${randomUUID()}`;
+    const line = { key, name: "Gel", priceHalalas: 5000, qty: 1 };
+    const input = {
+      ref: randomUUID(), amountHalalas: 5000, lines: [line], discounts: [], title: "t", payer: {},
+      expiresAt: new Date(Date.now() + 600_000), returnUrl: "https://example.test/r",
+    };
+    // Someone set the first product to 60 SAR in StreamPay's dashboard.
+    const priceOf: Record<string, string> = {};
+    const calls: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const path = String(url).split("/api/v2")[1];
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${path}`);
+      if (method === "POST" && path === "/products") {
+        const id = randomUUID();
+        priceOf[id] = Object.keys(priceOf).length === 0 ? "60.00" : "50.00";
+        return reply({ id, prices: [] });
+      }
+      if (method === "GET" && path.startsWith("/products/")) {
+        return reply({ is_active: true, prices: [{ currency: "SAR", amount: priceOf[path.slice(10)], is_active: true }] });
+      }
+      if (method === "PATCH") return reply({});
+      if (method === "POST" && path === "/payment_links") {
+        const used = JSON.parse(String(init?.body)).items[0].product_id;
+        return reply({ id: "link", url: "https://pay.test/l", status: "ACTIVE", amount_in_smallest_unit: Math.round(Number(priceOf[used]) * 100) });
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    expect((await streampayDriver.charge(input)).status).toBe("pending");
+    expect(calls.map((c) => c.replace(/[0-9a-f-]{36}/, "id"))).toEqual([
+      "POST /products",
+      "POST /payment_links",
+      "PATCH /payment_links/link/status",
+      "GET /products/id",
+      "POST /products",
+      "POST /payment_links",
+    ]);
+    // The edited product is archived after the hour, like any retired one.
+    const [edited] = Object.keys(priceOf);
+    expect(await db.select().from(streampayIds).where(like(streampayIds.key, `%:retire:${edited}`))).toHaveLength(1);
+    await db.delete(streampayIds).where(like(streampayIds.key, `%:${key}@%`));
+    await db.delete(streampayIds).where(like(streampayIds.key, `%:retire:${edited}`));
   });
 
   /** StreamPay's products endpoints, answering with a fresh id per product made. */
@@ -643,12 +689,62 @@ describe("after the audit", () => {
     expect((await settlePayment(next)).status).toBe("paid");
   });
 
-  it("#3: leaves both to a person when the newer checkout may be paid too", async () => {
+  it("#3: paid twice waits while the newer checkout is in progress, then refunds the extra payment", async () => {
     const { booking, old, next } = await oldPaidNewerOpen({ status: "pending" });
+    // Nothing decided yet: the newer one may still be paid, or fail.
     expect((await rowsOf(next))[0].status).toBe("pending");
     const [row] = await rowsOf(old);
     expect(row.status).toBe("failed");
     expect((row.raw as { paidOnOldAttempt?: number }).paidOnOldAttempt).toBe(booking.totalHalalas);
+
+    // The newer one is paid, and the booking stands on it. The next recheck
+    // refunds the old one: it bought nothing (the refund rule).
+    await db.update(payments).set({ status: "paid" }).where(eq(payments.providerRef, next));
+    await db.update(bookings).set({ status: "confirmed" }).where(eq(bookings.id, booking.id));
+    expect(await revivePayment(old)).toBe(true);
+
+    expect((await rowsOf(old))[0].status).toBe("refunded");
+    expect((await db.select().from(refunds).where(eq(refunds.paymentId, row.id))).map((r) => r.reason)).toEqual(["duplicate-payment"]);
+    expect((await rowsOf(next))[0].status).toBe("paid");
+    expect((await bookingOf(booking.id)).status).toBe("confirmed");
+  });
+
+  it("#3: records the duplicate payment's refund, so it leaves the report", async () => {
+    const { old } = await oldPaidNewerOpen({ status: "pending" });
+    const [row] = await rowsOf(old);
+    // StreamPay's payment id is kept, so their refund and the daily comparison find it.
+    expect((row.raw as { paymentId?: string }).paymentId).toBe("pay-under-test");
+    // Still unresolved a day on, so the report asks a person.
+    await db.update(payments).set({ createdAt: ago(25 * 60) }).where(eq(payments.providerRef, old));
+    expect((await paymentProblems()).oldAttempts.map((p) => p.ref)).toContain(old);
+
+    // The owner refunds it in StreamPay, as the alert asked.
+    vi.spyOn(fakeDriver, "refundedHalalas").mockResolvedValue(row.amountHalalas);
+    await refundedOutside(old);
+
+    expect((await rowsOf(old))[0].status).toBe("refunded");
+    expect((await db.select().from(refunds).where(eq(refunds.paymentId, row.id))).map((r) => r.reason)).toEqual(["outside-app"]);
+    expect((await paymentProblems()).oldAttempts.map((p) => p.ref)).not.toContain(old);
+  });
+
+  it("refunds what she paid for a purchase paid at the wrong amount, and delivers nothing", async () => {
+    const intent: GiftIntent = {
+      kind: "gift_card", amountSar: 75, designId: null, buyerName: TAG, buyerEmail: null,
+      recipientName: randomUUID(), recipientEmail: null, message: null, lang: "en",
+    };
+    const ref = randomUUID();
+    await db.insert(payments).values({
+      provider: "fake", providerRef: ref, method: "card", amountHalalas: 7500, status: "pending", raw: { intent },
+    });
+
+    expect(await settlePurchase(ref, paid(7000))).toEqual({ ok: false, error: "not-delivered" });
+
+    const [row] = await rowsOf(ref);
+    expect(row.status).toBe("refunded");
+    expect(row.giftCardId).toBeNull();
+    expect((await db.select().from(refunds).where(eq(refunds.paymentId, row.id))).map((r) => [r.reason, r.amountHalalas])).toEqual([
+      ["wrong-amount", 7000],
+    ]);
   });
 
   it("never refunds part of a bill", async () => {

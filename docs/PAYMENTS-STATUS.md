@@ -89,8 +89,9 @@ the booking suites) unless it says otherwise.
   checkout no longer shows its slot as taken.
 - **Paid late for a time already gone** (a booking whose appointment started, a
   chair purchase after the visit ended): refunded, never confirmed. A chair
-  purchase of 10 SAR or less is owed as wallet credit instead; until the wallet
-  ships, it is listed in the daily report for the desk.
+  purchase of 10 SAR or less is owed as wallet credit instead: marked
+  `owedCredit` on the payment, and turned into real credit by the wallet.
+  Nobody is emailed about it before then.
 - **A purchase whose delivery died** is delivered again by the settle job before
   anything is refunded.
 - **Gift cards:** each attempt has its own id, so two strangers buying the same
@@ -108,7 +109,7 @@ the booking suites) unless it says otherwise.
 - In production, payments are refused unless `PAYMENT_DRIVER` is set to
   `streampay` (or `fake` on purpose for a staff-only deploy). A forgotten
   variable can no longer make every booking free.
-- The webhook is signature-checked (HMAC, 5-minute replay window). The return
+- The webhook is signature-checked (HMAC, up to 24 h old to let StreamPay's retries through). The return
   page only redirects to our own checkout pages; "any path on this site" could be
   tricked into another site with a tab character.
 - In production, payments are also refused when `SITE_URL` is missing or not
@@ -182,9 +183,17 @@ What the code does today, and what has to change:
 - **Card testing inside one checkout.** Our limit stops new gift card checkouts;
   it cannot see several cards tried inside one StreamPay checkout. Ask StreamPay
   what they limit per link.
-- **Amount mismatch** (paid ≠ bill) is not refunded automatically, because there
-  is no right number to refund. It is logged `REFUND OWED` and appears in the
-  report. Should never happen: the link total is checked when it is created.
+- **Amount mismatch** (paid ≠ bill): never confirmed or delivered, and what she
+  paid (not the bill) is refunded to her card automatically, retried by the
+  settle job. Should never happen: the link total is checked when it is created.
+- **Paid twice** (an old payment lands after a newer one confirmed the booking):
+  the extra payment is refunded to her card automatically, and she is emailed
+  that her booking stands. While the newer one is still in progress, the recheck
+  waits for it: if it fails, the old payment confirms her instead.
+- **The report only lists what automation gave up on:** a refund or delivery
+  still failing after a day of settle runs, a duplicate payment still not
+  refunded after a day, or StreamPay not answering for an hour. Owed chair
+  credit is not listed: the wallet handles it.
 - **Partly refunded from StreamPay's dashboard before we settle** still confirms
   the booking / delivers the purchase (failing it would keep the rest of her
   money for nothing). Fully refunded counts as unpaid.
@@ -351,12 +360,10 @@ The code is done; these are the steps only people with access can do.
    with defaults) and `0028_no_chair_overlap` (enables the `btree_gist` extension
    and adds the overlap rule; checked: no existing overlaps on staging). Must
    run before the first checkout.
-3. `npm run streampay:sync` once — pushes the catalogue to StreamPay. Optional
-   (checkout creates missing products), but makes the first payments faster.
-4. After deploy, check Vercel → Crons lists `settle-pending?report=1`, and run it
+3. After deploy, check Vercel → Crons lists `settle-pending?report=1`, and run it
    once by hand (the curl above) — expect `{"ok":true,...}`; a 401 means
    `CRON_SECRET` is wrong.
-5. Smoke test: one booking paid with mada `4201320111111010`, then walk the table
+4. Smoke test: one booking paid with mada `4201320111111010`, then walk the table
    in [PAYMENTS-STREAMPAY.md §5](PAYMENTS-STREAMPAY.md). Must include: **pay, then
    close the tab immediately** — the booking must be confirmed by the webhook.
 
@@ -366,7 +373,7 @@ The code is done; these are the steps only people with access can do.
    before go-live, and ask the accountant the credit-note question.
 2. **Gift-card VAT** — the sale is sent to StreamPay as VAT-exempt (a voucher is
    usually taxed when spent). To flip: `vatExempt` on the gift-card line in
-   `app/api/gift-cards/route.ts`, then re-run `npm run streampay:sync`.
+   `app/api/gift-cards/route.ts`. The next checkout makes the new product version.
 3. **Production is on Azure.** Its scheduler runs the settle job every 5 minutes
    (`/api/cron/settle-pending`) and the report once a day
    (`/api/cron/settle-pending?report=1`); the look-back (`LOOKBACK` in

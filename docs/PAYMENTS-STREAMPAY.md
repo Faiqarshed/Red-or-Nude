@@ -47,9 +47,14 @@ ever charged a number the screen didn't show.
   Switching an item off or deleting it does the same (our checkout already
   refuses it for anyone new); switching it back on inside the hour cancels the
   archive. Archived products stay on the invoices that name them.
-- If StreamPay refuses a new link, each product, coupon and customer it used is
-  looked up there; one deleted (404) or switched off in their dashboard is made
-  again, and the link is tried once more (#18b).
+- If StreamPay refuses a new link, or totals it differently from us, each
+  product, coupon and customer it used is looked up there. One deleted (404),
+  switched off, or edited in their dashboard so its price or amount is no longer
+  ours is made again from our catalogue (an edited product is archived after the
+  hour), the link is tried once more, and the owner is emailed (#18b).
+- **Rule for staff:** products and coupons are edited in our admin only, never
+  in StreamPay's dashboard. The self-heal limits a mistake to one refused
+  checkout; it does not make editing there safe.
 - Coupons are made the first time a label + amount pair is seen, then reused.
 - Promo rules (dates, max uses, minimum spend) stay entirely in our app — StreamPay
   coupons have none of those fields.
@@ -149,9 +154,7 @@ Test and live keys use the same base URL; the key decides which.
 ## 5. Testing against the sandbox
 
 1. Test keys in `.env.local`, `PAYMENT_DRIVER=streampay`, `npm run db:migrate`.
-2. `npm run streampay:sync` — pushes the catalogue; check the products in their
-   dashboard.
-3. Expose the dev server (`cloudflared tunnel --url http://localhost:3000` or
+2. Expose the dev server (`cloudflared tunnel --url http://localhost:3000` or
    ngrok), set `SITE_URL` to that URL, and register
    `<SITE_URL>/api/payments/streampay/webhook` in the StreamPay dashboard for
    `PAYMENT_SUCCEEDED`.
@@ -180,7 +183,6 @@ signatures, concurrent settles, late-payment refunds ([`tests/streampay.test.ts`
 
 - Live keys and webhook secret in production env; webhook registered against the
   production `SITE_URL`.
-- `npm run streampay:sync` against production.
 - In the StreamPay dashboard: cards + Apple Pay on; Tamara, installments, Amex off
   (links send `payment_methods: null`, so the dashboard decides).
 - Apple Pay: `public/.well-known/apple-developer-merchantid-domain-association`
@@ -205,4 +207,3 @@ signatures, concurrent settles, late-payment refunds ([`tests/streampay.test.ts`
 | `app/api/payments/{confirm,status,streampay/webhook}` | Routes |
 | `app/api/payments/return` | Where StreamPay redirects |
 | `components/StreamPayCheckout.tsx` | The embed + status polling |
-| `scripts/streampay-sync.ts` | Catalogue backfill |

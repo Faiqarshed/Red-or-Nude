@@ -137,30 +137,54 @@ async function remember(key: string, streampayId: string, priceId: string | null
   return (await lookup(key))!.streampayId;
 }
 
+type StreamObject = {
+  is_active?: boolean;
+  is_price_exempt_from_vat?: boolean;
+  prices?: { currency: string; amount: string; is_active: boolean }[];
+  discount_value?: string;
+  is_percentage?: boolean;
+};
+
+/** An id of ours to check at StreamPay, and what it must still look like there. */
+type Used = { key: string; path: "products" | "coupons" | "consumers"; matches?: (o: StreamObject) => boolean };
+
+const halalasOf = (amount: string | undefined) => Math.round(Number(amount ?? Number.NaN) * 100);
+
+/** Still the price and VAT flag we made it with. */
+const productMatches = (o: StreamObject, l: Line) =>
+  halalasOf(o.prices?.find((x) => x.currency === "SAR" && x.is_active)?.amount) === l.priceHalalas &&
+  Boolean(o.is_price_exempt_from_vat) === Boolean(l.vatExempt);
+
+/** Still the fixed amount we made it with. */
+const couponMatches = (o: StreamObject, d: Discount) => !o.is_percentage && halalasOf(o.discount_value) === d.halalas;
+
 /**
- * After StreamPay refused a checkout: which of the ids it used no longer work
- * there? A product, coupon or customer deleted in their dashboard (404), or a
- * product or coupon switched off (`is_active: false`). Those are forgotten, so
- * the next use makes them again, and true is returned. Asked of StreamPay
- * rather than read from the refusal, whose wording their docs do not give.
- * An id it cannot answer about is left alone.
+ * After StreamPay refused a checkout, or totalled it differently from us: which
+ * of the ids it used no longer describe what StreamPay holds? Deleted there
+ * (404), switched off, or edited in their dashboard so the price or amount is no
+ * longer ours. Those are forgotten, so the next use makes them again from our
+ * catalogue; a product is also archived after RETIRE_AFTER_MIN, since its price
+ * there is not one we sell at. Asked of StreamPay rather than read from the
+ * refusal, whose wording their docs do not give. An id it cannot answer about
+ * is left alone. Returns the keys forgotten.
  */
-async function forgetBroken(used: { key: string; path: string }[]): Promise<boolean> {
-  let forgot = false;
-  for (const { key, path } of used) {
-    const have = await lookup(key);
+async function forgetBroken(used: Used[]): Promise<string[]> {
+  const forgot: string[] = [];
+  for (const u of used) {
+    const have = await lookup(u.key);
     if (!have) continue;
-    let gone: boolean;
+    let there: StreamObject | null;
     try {
-      gone = (await api<{ is_active?: boolean }>("GET", `/${path}/${have.streampayId}`)).is_active === false;
+      there = await api<StreamObject>("GET", `/${u.path}/${have.streampayId}`);
     } catch (err) {
       if (!(err instanceof StreamPayError && err.status === 404)) continue;
-      gone = true;
+      there = null;
     }
-    if (!gone) continue;
-    console.error(`[streampay] ${key} (${have.streampayId}) no longer works at StreamPay; making it again`);
-    await db.delete(streampayIds).where(eq(streampayIds.key, scoped(key)));
-    forgot = true;
+    if (there && there.is_active !== false && (!u.matches || u.matches(there))) continue;
+    console.error(`[streampay] ${u.key} (${have.streampayId}) no longer matches StreamPay; making it again`);
+    await db.delete(streampayIds).where(eq(streampayIds.key, scoped(u.key)));
+    if (there && u.path === "products") await retireLater(have.streampayId);
+    forgot.push(u.key);
   }
   return forgot;
 }
@@ -462,28 +486,42 @@ export const streampayDriver: PaymentDriver = {
       });
     };
 
-    let link: PaymentLink;
-    try {
-      link = await createLink();
-    } catch (err) {
-      // Refused (4xx): maybe for an id of ours that no longer works there. Once,
-      // with those forgotten and made again; anything else is a real refusal.
-      const used = [
-        ...items.map((l) => ({ key: versionKey(l.key, l), path: "products" })),
-        ...discounts.map((d) => ({ key: couponKey(d), path: "coupons" })),
-        ...[consumerKey(input.payer)].filter((k): k is string => k !== null).map((key) => ({ key, path: "consumers" })),
-      ];
-      if (!(err instanceof StreamPayError) || err.status >= 500 || !(await forgetBroken(used))) throw err;
-      link = await createLink();
-    }
-
-    // The safety check the whole design is built around: StreamPay's total must
+    // A link, or why not: refused (4xx), or a total that is not ours, which is
+    // the safety check the whole design is built around. StreamPay's total must
     // be ours to the halala, or nobody pays on this link.
-    if (link.amount_in_smallest_unit !== input.amountHalalas) {
+    const attempt = async (): Promise<PaymentLink | Error> => {
+      let link: PaymentLink;
+      try {
+        link = await createLink();
+      } catch (err) {
+        if (err instanceof StreamPayError && err.status < 500) return err;
+        throw err;
+      }
+      if (link.amount_in_smallest_unit === input.amountHalalas) return link;
       await streampayDriver.cancel({ linkId: link.id, url: link.url } satisfies Pending);
-      throw new Error(
-        `[streampay] ${input.ref}: link ${link.id} totals ${link.amount_in_smallest_unit}, we charge ${input.amountHalalas}`,
+      return new Error(`[streampay] ${input.ref}: link ${link.id} totals ${link.amount_in_smallest_unit}, we charge ${input.amountHalalas}`);
+    };
+
+    let link = await attempt();
+    if (link instanceof Error) {
+      // Maybe an id of ours no longer describes what StreamPay holds: deleted,
+      // switched off, or edited in their dashboard. Those are made again from
+      // our catalogue, once; if none was, it is a real refusal.
+      const used: Used[] = [
+        ...items.map((l) => ({ key: versionKey(l.key, l), path: "products" as const, matches: (o: StreamObject) => productMatches(o, l) })),
+        ...discounts.map((d) => ({ key: couponKey(d), path: "coupons" as const, matches: (o: StreamObject) => couponMatches(o, d) })),
+        ...[consumerKey(input.payer)].filter((k): k is string => k !== null).map((key) => ({ key, path: "consumers" as const })),
+      ];
+      const healed = await forgetBroken(used);
+      if (healed.length === 0) throw link;
+      await alertOwner(
+        "streampay-healed",
+        "A StreamPay product or coupon no longer matched our catalogue",
+        `${healed.join(", ")}: deleted, switched off or edited in StreamPay's dashboard. Made again from our catalogue. ` +
+          "Edit products and coupons in our admin only, never in StreamPay's dashboard.",
       );
+      link = await attempt();
+      if (link instanceof Error) throw link;
     }
 
     return {
@@ -559,9 +597,9 @@ export const streampayDriver: PaymentDriver = {
 
   async listPayments(from, to) {
     const out: GatewayPayment[] = [];
-    // 100 a page, their maximum. ponytail: 30 pages is 3,000 payments a month;
-    // raise it, or narrow the window, if the salon ever takes more.
-    for (let page = 1; page <= 30; page++) {
+    // 100 a page, their maximum. ponytail: 100 pages is 10,000 payments in the
+    // comparison window; past that the rest is not compared, and the log says so.
+    for (let page = 1; page <= 100; page++) {
       const q = new URLSearchParams({ from_date: from.toISOString(), to_date: to.toISOString(), limit: "100", page: String(page) });
       const res = await api<{
         data: { id: string; current_status: string; amount?: string; amount_in_smallest_unit?: number }[];
@@ -581,6 +619,7 @@ export const streampayDriver: PaymentDriver = {
         });
       }
       if (!res.pagination?.has_next_page) break;
+      if (page === 100) console.error("[streampay] over 10,000 payments to compare; the oldest were not checked");
     }
     return out;
   },
@@ -632,13 +671,21 @@ export const streampayDriver: PaymentDriver = {
 
 /**
  * `X-Webhook-Signature: t=<timestamp>,v1=<hmac>`, the HMAC being SHA-256 over
- * `${t}.${rawBody}` with the webhook secret. Five minutes of clock skew either
- * way, so a captured delivery cannot be replayed next week.
+ * `${t}.${rawBody}` with the webhook secret.
+ *
+ * Accepted up to WEBHOOK_MAX_AGE_MS old: StreamPay retries a failed delivery
+ * for about 20.5 hours (5 min, 30 min, 2 h, 6 h, 12 h), and their docs do not
+ * say whether a retry is signed again. A tighter window would refuse every
+ * retry, and answering 503 so they retry would do nothing. A replay within it
+ * costs nothing: the body is only a nudge, and the verdict is always asked of
+ * StreamPay. Five minutes of clock skew into the future.
  *
  * Their docs do not say whether the digest is hex or base64, or whether `t` is
  * seconds or milliseconds; both of each are accepted — neither weakens the
  * check, which is still an HMAC under a secret only we and they hold.
  */
+const WEBHOOK_MAX_AGE_MS = 24 * 3_600_000;
+
 export function verifyWebhookSignature(rawBody: string, header: string | null, now = Date.now()): boolean {
   const secret = process.env.STREAMPAY_WEBHOOK_SECRET?.trim();
   if (!secret || !header) return false;
@@ -654,9 +701,9 @@ export function verifyWebhookSignature(rawBody: string, header: string | null, n
   if (!t || !v1 || !/^\d+$/.test(t)) return false;
 
   const ms = t.length > 11 ? Number(t) : Number(t) * 1000;
-  if (Math.abs(now - ms) > 5 * 60_000) return false;
+  if (now - ms > WEBHOOK_MAX_AGE_MS || ms - now > 5 * 60_000) return false;
 
   const mac = createHmac("sha256", secret).update(`${t}.${rawBody}`).digest();
-  const given = Buffer.from(v1, /^[0-9a-f]+$/i.test(v1) && v1.length === 64 ? "hex" : "base64");
+  const given = Buffer.from(v1, "hex");
   return given.length === mac.length && timingSafeEqual(given, mac);
 }

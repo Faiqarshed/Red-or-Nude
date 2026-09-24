@@ -139,9 +139,12 @@ describe("the webhook signature", () => {
     expect(verifyWebhookSignature(body, null, now)).toBe(false);
   });
 
-  it("refuses a genuine delivery replayed long after it was sent", () => {
+  it("accepts StreamPay's last retry, about 20.5 hours on, and nothing older than a day", () => {
     process.env.STREAMPAY_WEBHOOK_SECRET = secret;
-    expect(verifyWebhookSignature(body, sign(body), now + 6 * 60_000)).toBe(false);
+    expect(verifyWebhookSignature(body, sign(body), now + 1235 * 60_000)).toBe(true);
+    expect(verifyWebhookSignature(body, sign(body), now + 25 * 3_600_000)).toBe(false);
+    // Signed in the future: only clock skew is allowed.
+    expect(verifyWebhookSignature(body, sign(body), now - 6 * 60_000)).toBe(false);
   });
 
   it("refuses everything while no secret is configured", () => {
@@ -287,6 +290,12 @@ describe("settling a payment", () => {
 
     const rows = await db.select().from(bookings).where(inArray(bookings.id, members.map((m) => m.id)));
     expect(rows.every((r) => r.status === "pending" && r.ticketNo === null)).toBe(true);
+
+    // And what she paid, not the bill, goes straight back to her card.
+    const paid = await db.select().from(payments).where(eq(payments.providerRef, ref));
+    expect(paid.every((p) => p.status === "refunded")).toBe(true);
+    const back = await db.select().from(refunds).where(inArray(refunds.paymentId, paid.map((p) => p.id)));
+    expect(back.map((r) => [r.reason, r.amountHalalas])).toEqual([["wrong-amount", held.totalHalalas - 100]]);
   });
 });
 
@@ -396,8 +405,8 @@ describe("the safety net under the webhook", () => {
   it("names money we hold for nothing in the daily report", async () => {
     const { held, members } = await holdDiscountedPair();
     const ref = await pendingAttempt(members);
-    // Paid, then swept, and the refund never went through.
-    await db.update(payments).set({ status: "paid", updatedAt: ago(30) }).where(eq(payments.providerRef, ref));
+    // Paid, then swept, and the refund has kept failing for a day.
+    await db.update(payments).set({ status: "paid", updatedAt: ago(25 * 60) }).where(eq(payments.providerRef, ref));
     await db
       .update(bookings)
       .set({ status: "cancelled", cancelReason: "payment-timeout" })

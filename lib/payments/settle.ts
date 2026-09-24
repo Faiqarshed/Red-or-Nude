@@ -9,6 +9,7 @@ import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { payments } from "@/lib/db/schema";
 import { formatSAR } from "@/lib/money";
+import { refundRef } from "./refund";
 import { alertOwner } from "./alert";
 import { isLiveAttemptConflict, settleBookingPayment, type ConfirmedTicket } from "./confirm";
 import { settlePurchase, type Delivered } from "./purchase";
@@ -27,7 +28,8 @@ export type Settled =
   | { status: "pending"; checkout?: { ref: string; url: string }; unverified?: true }
   | { status: "failed"; error: string };
 
-export async function settlePayment(ref: string): Promise<Settled> {
+/** `known`: the verdict when the caller already has it (a revived payment); otherwise StreamPay is asked. */
+export async function settlePayment(ref: string, known?: Verdict): Promise<Settled> {
   const [row] = await db
     .select({ bookingId: payments.bookingId })
     .from(payments)
@@ -36,14 +38,14 @@ export async function settlePayment(ref: string): Promise<Settled> {
   if (!row) return { status: "failed", error: "not-found" };
 
   if (row.bookingId) {
-    const r = await settleBookingPayment(ref);
+    const r = await settleBookingPayment(ref, known);
     if (!r.ok && r.error === "unverified") return { status: "pending", unverified: true };
     if (!r.ok) return { status: "failed", error: r.error };
     if ("checkout" in r) return { status: "pending", checkout: r.checkout };
     return { status: "paid", result: { kind: "booking", tickets: r.tickets, totalHalalas: r.totalHalalas } };
   }
 
-  const r = await settlePurchase(ref);
+  const r = await settlePurchase(ref, known);
   if (!r.ok && r.error === "unverified") return { status: "pending", unverified: true };
   if (!r.ok) return { status: "failed", error: r.error };
   if ("checkout" in r) return { status: "pending", checkout: r.checkout };
@@ -82,33 +84,38 @@ export async function revivePayment(ref: string): Promise<boolean> {
   }
   if (verdict.status !== "paid") return false;
 
+  // A newer attempt for the same booking holds payments_booking_live_unique.
+  // Still only a checkout, it is switched off and this payment takes its place:
+  // leaving it open was a second way to pay for one booking.
+  const bookingIds = rows.map((r) => r.bookingId).filter((id): id is string => Boolean(id));
+  let newer: Newer = "gone";
+  let reopened = await reopen(ref);
+  if (!reopened && bookingIds.length > 0) {
+    newer = await retireOpenAttempt(ref, bookingIds);
+    reopened = newer === "gone" && (await reopen(ref));
+  }
+  if (!reopened) {
+    // Paid twice: a newer payment for the booking is paid, or still in
+    // progress. Marked with StreamPay's ids, so it can be refunded, and so the
+    // daily comparison knows it.
+    await db
+      .update(payments)
+      .set({ raw: mergeRaw(payments.raw, { ...verdict.raw, paidOnOldAttempt: verdict.amountHalalas }) })
+      .where(eq(payments.providerRef, ref));
+    // The newer one paid: the booking stands on it, so this one bought nothing
+    // and goes back to her card (the refund rule). Still in progress: asked
+    // again on the back-off, and its outcome decides: this one refunded, or
+    // this one confirms her. A refund that fails is retried there too.
+    if (newer === "paid") await refundRef(ref, "duplicate-payment");
+    return true;
+  }
   await alertOwner(
     `revived:${ref}`,
     "A payment we had written off was paid",
     `Payment ${ref}: ${formatSAR(verdict.amountHalalas)} SAR arrived after it was marked failed. ` +
       "It is being confirmed now, or refunded automatically if that is no longer possible.",
   );
-  // A newer attempt for the same booking holds payments_booking_live_unique.
-  // Still only a checkout, it is switched off and this payment takes its place:
-  // leaving it open was a second way to pay for one booking.
-  const bookingIds = rows.map((r) => r.bookingId).filter((id): id is string => Boolean(id));
-  const reopened = (await reopen(ref)) || (bookingIds.length > 0 && (await retireOpenAttempt(ref, bookingIds)) && (await reopen(ref)));
-  if (!reopened) {
-    // The newer attempt is paid, or may still be: two payments for one
-    // booking, and refunding the right one is a person's job.
-    await db
-      .update(payments)
-      .set({ raw: mergeRaw(payments.raw, { paidOnOldAttempt: verdict.amountHalalas }) })
-      .where(eq(payments.providerRef, ref));
-    await alertOwner(
-      `old-attempt:${ref}`,
-      "A booking may have been paid twice",
-      `Payment ${ref} (${formatSAR(verdict.amountHalalas)} SAR) came through while a newer payment for the same booking was paid or still in progress. Check both in StreamPay and refund one.`,
-    );
-    return true;
-  }
-  if (rows[0].bookingId) await settleBookingPayment(ref, verdict);
-  else await settlePurchase(ref, verdict);
+  await settlePayment(ref, verdict);
   return true;
 }
 
@@ -126,13 +133,16 @@ async function reopen(ref: string): Promise<boolean> {
   }
 }
 
+/** The booking's other live attempt: paid (the booking stands on it), still open, or now gone. */
+type Newer = "paid" | "open" | "gone";
+
 /**
  * Take the booking's other live attempt out of the way, if it is only a
  * checkout nobody paid on. Its link is switched off first, so she cannot pay
  * on it between the question and the answer; it is marked failed only when
- * StreamPay then says nothing is paid or waiting on it. True when it is gone.
+ * StreamPay then says nothing is paid or waiting on it.
  */
-async function retireOpenAttempt(ref: string, bookingIds: string[]): Promise<boolean> {
+async function retireOpenAttempt(ref: string, bookingIds: string[]): Promise<Newer> {
   const live = await db
     .select()
     .from(payments)
@@ -143,18 +153,18 @@ async function retireOpenAttempt(ref: string, bookingIds: string[]): Promise<boo
         ne(payments.providerRef, ref),
       ),
     );
-  if (live.some((r) => r.status === "paid")) return false;
+  if (live.some((r) => r.status === "paid")) return "paid";
 
   const driver = getDriver();
   for (const other of new Set(live.map((r) => r.providerRef))) {
     const raw = live.find((r) => r.providerRef === other)!.raw;
     await driver.cancel(raw);
     const verdict = await driver.verify(raw).catch(() => null);
-    if (verdict?.status !== "failed") return false;
+    if (verdict?.status !== "failed") return "open";
     await db
       .update(payments)
       .set({ status: "failed", updatedAt: new Date() })
       .where(and(eq(payments.providerRef, other!), eq(payments.status, "pending")));
   }
-  return true;
+  return "gone";
 }

@@ -7,11 +7,11 @@
 import "server-only";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, customers, payments } from "@/lib/db/schema";
+import { bookings, customers } from "@/lib/db/schema";
 import { esc } from "@/lib/email/html";
 import { brandedEmail, INK, RED, sendReceipt, side, textTail } from "@/lib/email/shell";
 import { formatSAR } from "@/lib/money";
-import { taxInvoicePdf } from "@/lib/payments/invoice-pdf";
+import { taxInvoiceOf } from "@/lib/payments/invoice-pdf";
 import type { TreatItem } from "@/lib/payments/purchase";
 import { TIMEZONE } from "@/lib/time";
 
@@ -118,10 +118,7 @@ export async function sendVisitEmail(bookingId: string, paymentId: string, items
     const [customer] = await db.select().from(customers).where(eq(customers.id, b.customerId)).limit(1);
     const to = customer?.email?.trim();
     if (!to) return;
-    const [payment] = await db.select({ raw: payments.raw }).from(payments).where(eq(payments.id, paymentId)).limit(1);
-    const url = (payment?.raw as { invoiceUrl?: unknown } | null)?.invoiceUrl;
-    const invoiceUrl = typeof url === "string" ? url : null;
-    const pdf = await taxInvoicePdf(invoiceUrl);
+    const { url: invoiceUrl, pdf } = await taxInvoiceOf(paymentId);
 
     const { subject, html, text } = renderVisitEmail({
       customerName: customer.name,
