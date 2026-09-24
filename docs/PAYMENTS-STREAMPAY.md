@@ -36,9 +36,20 @@ ever charged a number the screen didn't show.
 | Loyalty points | fixed coupon "Loyalty points −X" | `coupon:Loyalty points:<halalas>` |
 | Total = 0 | never reaches StreamPay | — |
 
-- Products are made **once per catalogue item**, when the admin saves it (and
-  again at checkout if missing or out of date). A price change archives the old
-  StreamPay price and makes a new one.
+- Products are made **once per version of a catalogue item** (its name, price
+  and VAT flag), when the admin saves it or at checkout if missing. A product is
+  never edited: a payment link names a product, not a price, so editing one
+  under an open link would change what she is charged, and StreamPay refuses to
+  edit a product already on an issued invoice (`PRODUCT_USED_IN_FINALIZED_INVOICE`).
+- A change of name, price or VAT makes a new product for new checkouts. The old
+  one stays payable for **1 hour** (`RETIRE_AFTER_MIN`), so a checkout already
+  open finishes on the price it showed, and is then archived by the settle job.
+  Switching an item off or deleting it does the same (our checkout already
+  refuses it for anyone new); switching it back on inside the hour cancels the
+  archive. Archived products stay on the invoices that name them.
+- If StreamPay refuses a new link, each product, coupon and customer it used is
+  looked up there; one deleted (404) or switched off in their dashboard is made
+  again, and the link is tried once more (#18b).
 - Coupons are made the first time a label + amount pair is seen, then reused.
 - Promo rules (dates, max uses, minimum spend) stay entirely in our app — StreamPay
   coupons have none of those fields.

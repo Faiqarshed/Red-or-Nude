@@ -115,9 +115,8 @@ export type RefundInput = {
   /** `payments.raw` of the paid attempt, as verify() left it. */
   raw: unknown;
   /**
-   * How much to send back. Not necessarily the whole charge: a group is one
-   * gateway transaction covering several bookings, so cancelling part of a
-   * party is a partial refund of that one transaction.
+   * How much to send back: always the whole charge, every guest on the bill.
+   * There are no partial refunds (lib/payments/refund.ts refuses them).
    */
   amountHalalas: number;
   reason?: string;

@@ -15,7 +15,7 @@
 // *of a service*, never of a pack.
 
 import "server-only";
-import { and, eq, gt, inArray, lt, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customerPacks, packTxns, packs, packServices, payments, services } from "@/lib/db/schema";
 import type { Localized } from "@/lib/db/schema";
@@ -451,10 +451,14 @@ export async function buyPack(
     );
 
     if (paymentId) {
-      await tx
+      // One membership per payment: a second delivery racing this one (two
+      // settle-job runs) rolls its pack back instead of granting another.
+      const linked = await tx
         .update(payments)
         .set({ customerPackId: row.id, updatedAt: new Date() })
-        .where(eq(payments.id, paymentId));
+        .where(and(eq(payments.id, paymentId), isNull(payments.customerPackId)))
+        .returning({ id: payments.id });
+      if (linked.length === 0) throw new Error(`payment ${paymentId} already has its membership`);
     }
 
     return { ok: true as const, customerPackId: row.id };

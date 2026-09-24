@@ -30,7 +30,8 @@ import { checkoutOpen } from "@/lib/payments";
  * the moment anyone books at the branch — but it is only swept then, so on a
  * quiet branch it showed its slot as taken for hours. Same rule as the sweep.
  *
- * reserveStations does not need it: createBookings sweeps just before it.
+ * reserveStations does not need it: every caller sweeps just before it
+ * (createBookings, and withLapsedHoldsReleased in lib/bookings.ts).
  */
 const stillHolds = sql`not (
   ${bookings.status} = 'pending' and ${bookings.source} = 'web'

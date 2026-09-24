@@ -8,6 +8,7 @@
 import { NextResponse } from "next/server";
 import { reconcilePayments, reportPaymentProblems } from "@/lib/payments/reconcile";
 import { cronDenied } from "@/lib/cron";
+import { archiveRetiredProducts } from "@/lib/payments/streampay";
 
 export const dynamic = "force-dynamic";
 // A run talks to StreamPay once or twice per stale checkout; the loop stops
@@ -20,6 +21,11 @@ export async function GET(request: Request) {
   if (denied) return denied;
 
   const result = await reconcilePayments();
+  // Products replaced or switched off over an hour ago (lib/payments/streampay.ts).
+  const archived = await archiveRetiredProducts().catch((err) => {
+    console.error("[cron] could not archive retired StreamPay products", err);
+    return 0;
+  });
   const problems = new URL(request.url).searchParams.has("report") ? await reportPaymentProblems() : undefined;
 
   // "Still running" to an outside monitor (healthchecks.io). The job is the net
@@ -28,5 +34,5 @@ export async function GET(request: Request) {
   const ping = process.env.HEALTHCHECK_URL?.trim();
   if (ping) await fetch(ping, { signal: AbortSignal.timeout(5_000) }).catch(() => {});
 
-  return NextResponse.json({ ok: true, ...result, problems });
+  return NextResponse.json({ ok: true, ...result, archived, problems });
 }

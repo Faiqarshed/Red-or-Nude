@@ -7,7 +7,7 @@
 
 import "server-only";
 import { randomInt } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { giftCards, giftCardTxns, payments } from "@/lib/db/schema";
 
@@ -88,10 +88,14 @@ export async function issueGiftCard(input: IssueGiftCardInput): Promise<IssueRes
         });
 
         if (input.paymentId) {
-          await tx
+          // One card per payment: a second delivery racing this one (two
+          // settle-job runs) rolls its card back instead of issuing another.
+          const linked = await tx
             .update(payments)
             .set({ giftCardId: card.id, updatedAt: new Date() })
-            .where(eq(payments.id, input.paymentId));
+            .where(and(eq(payments.id, input.paymentId), isNull(payments.giftCardId)))
+            .returning({ id: payments.id });
+          if (linked.length === 0) throw new Error(`payment ${input.paymentId} already has its gift card`);
         }
 
         return card;

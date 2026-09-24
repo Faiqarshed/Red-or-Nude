@@ -566,6 +566,10 @@ export const bookings = pgTable(
     slotUnique: uniqueIndex("bookings_station_slot_unique")
       .on(t.stationId, t.startsAt)
       .where(sql`${t.status} not in ('cancelled', 'no_show')`),
+    // Not declarable here: `bookings_station_no_overlap`, an EXCLUDE constraint
+    // refusing any two live bookings whose times overlap on one chair, lives in
+    // hand-written migration drizzle/0028_no_chair_overlap.sql. A lapsed hold
+    // still counts until it is swept (withLapsedHoldsReleased, lib/bookings.ts).
     // One refill per booking, decided by the database rather than by a read
     // that two concurrent requests could both pass. Partial for the same reason
     // as the slot index: a cancelled refill gives the window back.

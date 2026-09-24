@@ -16,7 +16,7 @@ Fixed decisions:
 ## Status (feat/payment-hardening)
 
 **Built**, with a test each in `tests/payment-hardening.test.ts`:
-- #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #18, #19, #20, #21, #22, #24;
+- #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #18a, #18b, #19, #20, #21, #22, #24;
 - H1, H2, H3;
 - the overlap rule (migration 0028).
 
@@ -29,6 +29,17 @@ Fixed decisions:
 - H5 is dropped: H1 frees the slot without a sweep.
 
 **#5 + #22:** the daily report run compares the last 30 days of StreamPay's payments with ours, one payment at a time (`compareWithGateway`), instead of comparing totals. It catches missed refunds and payments we never recorded. It needs checking against the sandbox: the response shape comes from their OpenAPI spec.
+
+**Fixed after the audit** (tests under "after the audit"):
+- H1 let the chair's screen offer time a lapsed hold was keeping, and delivery then refused it and refunded her. A reschedule into such a slot was refused the same way. Both now let lapsed holds go first (`withLapsedHoldsReleased`, `lib/bookings.ts`).
+- Two settle runs at once could deliver one paid gift card or membership twice. The payment now links to one only.
+- A late payment on an old attempt, with a newer checkout still open, left that checkout payable. Its link is now switched off, and the late payment confirms her; if the newer one may be paid too, both go to the owner.
+- **No partial refunds.** A refund is always the whole bill. Anything less is refused and the owner is told, and a payment already partly refunded in StreamPay's dashboard is never topped up.
+- StreamPay ids are scoped by the API key alone, so rotating the secret doesn't orphan them.
+- A small chair purchase owed as credit emails her once, and stays in the report until the wallet ships (no 7-day cutoff).
+- #18b built: when StreamPay refuses a new link (4xx), each id the checkout used is looked up there (`GET /products|coupons|consumers/{id}`). One that is gone (404) or switched off (`is_active: false`) is forgotten and made again, and the link is tried once more. Their error body has no "not found" code for this (their OpenAPI spec only documents a generic 422), so we ask rather than parse.
+- One StreamPay product per version of an item (name, price, VAT). A price change or switching an item off leaves the old product payable for an hour, for checkouts already open, then archives it. Each tax invoice keeps the name and price she paid.
+- Receipts go out after her tickets are on screen, on a long-lived server (`lib/after-response.ts`). On a serverless host they're still awaited.
 
 **Not built here:**
 - The wallet (its own PR).
@@ -166,7 +177,7 @@ Numbers match the 26-item list. H items are new ones from the senior's review.
   - `intent.kind === "treat"` and amount ≤ **10 SAR** (`CHAIR_CREDIT_MAX_HALALAS = 1000`, one constant) → wallet credit + email;
   - otherwise → `refundRef` as today.
   - Gift cards and memberships always get a card refund.
-- **Until the wallet exists:** a small chair refund is marked `owedCredit` on the payment and listed in the daily report for the desk. No card refund.
+- **Until the wallet exists:** a small chair refund is marked `owedCredit` on the payment, she is emailed that it is kept as credit for her next visit, and it is listed in the daily report until the wallet ships. No card refund.
 
 **13. Refund retry, checking first** (moved up: senior, must-fix 2)
 - `refundPaid` (`lib/payments/refund.ts`): before calling `driver.refund`, call `driver.verify(raw)`. If StreamPay already shows it refunded, just record it. Needs a `refunded` verdict (`Verdict` in `lib/payments/index.ts` + `streampay.ts`).
@@ -282,7 +293,7 @@ The refund rule above needs a wallet. It's built as a separate PR (not in this h
 ### Not building
 - **17.** Price change during checkout: left as is.
 - **23.** Refund fails after payout: a question for StreamPay; #13 covers the retry.
-- **25.** Partial refund counted as full: skipped.
+- **25.** Partial refunds: not allowed. Refunds are always the whole bill; see "Fixed after the audit".
 
 ### Questions
 **For StreamPay:**

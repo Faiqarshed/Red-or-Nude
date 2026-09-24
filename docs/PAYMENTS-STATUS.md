@@ -188,6 +188,10 @@ What the code does today, and what has to change:
 - **Partly refunded from StreamPay's dashboard before we settle** still confirms
   the booking / delivers the purchase (failing it would keep the rest of her
   money for nothing). Fully refunded counts as unpaid.
+- **No partial refunds from the app.** A refund is always the whole bill, every
+  guest on it (`lib/payments/refund.ts`). Asked for less, nothing is sent and the
+  owner is emailed. A payment already partly refunded in StreamPay's dashboard
+  is never topped up by us: the rest is the owner's call.
 - **Two tabs buying the same pack at the same instant** can each open a
   checkout. It takes two pages and two separate payments; the result is two of
   the thing, refundable. (Gift cards no longer can: each attempt has its own id.)
@@ -296,6 +300,11 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://<site>/api/cron/settle-pend
   undocumented, so it is best-effort: we wait at most 20 s, and if it fails the
   email says the PDF couldn't be attached and keeps the link, and the owner gets
   one alert an hour. Routes that can send a receipt allow 60 s for this.
+  **She never waits for it:** on a long-lived server (`next start`, Azure App
+  Service or Container Apps) receipts go out after her tickets are shown
+  (`lib/after-response.ts`). On a serverless host (Vercel, Azure Functions) the
+  function would be frozen, so there they are still awaited. **Run production as
+  a long-lived Node server.**
   **Ask StreamPay** to confirm this endpoint is fine to use or to document it.
 - **Only bookings get our confirmation email.** Gift card buyers get the card
   receipt, and memberships get no email from us, so neither gets the invoice
