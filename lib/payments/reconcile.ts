@@ -23,6 +23,7 @@ import { getDriver, mergeRaw, PAY_WINDOW_MIN } from "./index";
 import { redeliver, refundOrCredit, type Intent } from "./purchase";
 import { refundedOutside, refundRef } from "./refund";
 import { revivePayment, settlePayment } from "./settle";
+import { logPaymentEvent } from "./events";
 
 /**
  * How far back an unanswered checkout is still worth asking about. Several
@@ -298,6 +299,7 @@ export async function reportPaymentProblems(): Promise<number> {
     )
     .join("\n\n");
   console.error(`[reconcile] ${count} payment problem(s)\n${text}`);
+  await logPaymentEvent("report", { count, text });
 
   const to = process.env.PAYMENTS_ALERT_EMAIL?.trim();
   if (to) {

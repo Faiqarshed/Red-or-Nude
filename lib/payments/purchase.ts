@@ -26,6 +26,7 @@ import { sendVisitEmail } from "@/lib/visit-email";
 import { siteOrigin } from "@/lib/site";
 import { afterResponse } from "@/lib/after-response";
 import { refundRef } from "./refund";
+import { errorText, logPaymentEvent } from "./events";
 import { checkoutOf, getDriver, mergeRaw, PAY_WINDOW_MIN, type Checkout, type Line, type Payer, type Verdict } from "./index";
 
 export type GiftIntent = {
@@ -148,6 +149,7 @@ export async function startPurchase(input: {
     });
   } catch (err) {
     console.error(`[purchase] ${input.intent.kind} charge threw`, err);
+    await logPaymentEvent("checkout-failed", { error: errorText(err) }, ref);
     await markFailed(ref);
     return { ok: false, error: "failed" };
   }

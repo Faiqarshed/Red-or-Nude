@@ -5,12 +5,14 @@
 import "server-only";
 import { sendMail } from "@/lib/email";
 import { esc } from "@/lib/email/html";
+import { logPaymentEvent } from "./events";
 
 const sent = new Map<string, number>();
 
 /**
  * At most one email per `key` an hour, so a problem that repeats every settle
- * run is one message. Never throws: an alert must not fail the payment path.
+ * run is one message, and one line in the payment log. Never throws: an alert
+ * must not fail the payment path.
  *
  * ponytail: remembered per server instance, so several instances can each send
  * one. Move to a table if that ever becomes noise.
@@ -18,9 +20,10 @@ const sent = new Map<string, number>();
 export async function alertOwner(key: string, subject: string, text: string): Promise<void> {
   console.error(`[payments] ${subject}\n${text}`);
   const to = process.env.PAYMENTS_ALERT_EMAIL?.trim();
-  const last = sent.get(key) ?? 0;
-  if (!to || Date.now() - last < 3_600_000) return;
+  if (Date.now() - (sent.get(key) ?? 0) < 3_600_000) return;
   sent.set(key, Date.now());
+  await logPaymentEvent("alert", { key, subject, text, emailed: Boolean(to) });
+  if (!to) return;
   try {
     await sendMail({ to, subject: `Payments: ${subject}`, text, html: `<pre>${esc(text)}</pre>`, tags: ["payments-alert"] });
   } catch (err) {

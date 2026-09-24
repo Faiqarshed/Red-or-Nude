@@ -10,10 +10,18 @@
 // ponytail: fire-and-forget, so a server restarted mid-send loses that email.
 // Move to an outbox table if that is ever seen.
 
+import { errorText, logPaymentEvent } from "@/lib/payments/events";
+
 const serverless = () => Boolean(process.env.VERCEL || process.env.FUNCTIONS_WORKER_RUNTIME);
 
 /** Never throws: what runs here must not be able to unsay what came before it. */
 export async function afterResponse(what: string, work: () => Promise<unknown>): Promise<void> {
-  const run = work().catch((err) => console.error(`[after-response] ${what} failed`, err));
+  const run = work().then(
+    (result) => logPaymentEvent("receipt", { what, result: result ?? null }),
+    (err) => {
+      console.error(`[after-response] ${what} failed`, err);
+      return logPaymentEvent("receipt", { what, error: errorText(err) });
+    },
+  );
   if (serverless() || process.env.NODE_ENV === "test") await run;
 }

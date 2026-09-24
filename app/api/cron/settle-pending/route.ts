@@ -9,6 +9,7 @@ import { NextResponse } from "next/server";
 import { reconcilePayments, reportPaymentProblems } from "@/lib/payments/reconcile";
 import { cronDenied } from "@/lib/cron";
 import { archiveRetiredProducts } from "@/lib/payments/streampay";
+import { logPaymentEvent } from "@/lib/payments/events";
 
 export const dynamic = "force-dynamic";
 // A run talks to StreamPay once or twice per stale checkout; the loop stops
@@ -27,6 +28,11 @@ export async function GET(request: Request) {
     return 0;
   });
   const problems = new URL(request.url).searchParams.has("report") ? await reportPaymentProblems() : undefined;
+
+  // Only a run that did something: one every 5 minutes that found nothing is not news.
+  if (result.checked + result.refunded + archived + (problems ?? 0) > 0) {
+    await logPaymentEvent("settle-run", { ...result, archived, problems: problems ?? null });
+  }
 
   // "Still running" to an outside monitor (healthchecks.io). The job is the net
   // under every payment; if it stops — a wrong secret, a broken deploy — the
