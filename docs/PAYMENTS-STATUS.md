@@ -143,7 +143,7 @@ Foodpanda credits) that she spends on a later booking.
 | The salon cancels within 3 h | **Not allowed.** Admin cannot cancel inside the window. |
 | She does not come / the salon marks a no-show | She gets **nothing**. |
 | The salon reschedules | Up to the salon, and no money moves. Already works. |
-| The wallet balance | **Admin cannot edit it.** Only cancellations add to it, and only bookings spend it. |
+| The wallet balance | **Admin cannot edit it.** Cancellations, gift cards and small chair refunds add to it, and every checkout can spend it. See `docs/WALLET-PLAN.md`. |
 
 What the code does today, and what has to change:
 
