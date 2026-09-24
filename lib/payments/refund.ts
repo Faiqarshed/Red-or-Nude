@@ -8,7 +8,7 @@
 // back.
 
 import "server-only";
-import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers, giftCards, payments, refunds } from "@/lib/db/schema";
 import { sendMail } from "@/lib/email";
@@ -26,15 +26,50 @@ import type { Intent } from "./purchase";
  */
 export type RefundOutcome = { ok: true; amountHalalas: number } | { ok: false };
 
+/**
+ * Our rows that hold her money: paid, or the second payment for a booking
+ * another payment already confirmed. revivePayment marks that one
+ * `paidOnOldAttempt` and leaves it failed, since a booking can have only one
+ * live payment, but the money on it is real.
+ */
+const holdsMoney = or(
+  eq(payments.status, "paid"),
+  and(eq(payments.status, "failed"), sql`${payments.raw} ? 'paidOnOldAttempt'`),
+)!;
+
+type MoneyRow = { id: string; amountHalalas: number; raw: unknown };
+
+const mismatchOf = (rows: MoneyRow[]) => (rows[0].raw as { amountMismatch?: number } | null)?.amountMismatch;
+
+/**
+ * What she actually paid on these rows, one bill: the bill itself, unless
+ * StreamPay took a different amount (`amountMismatch`, which is never confirmed).
+ */
+const paidOn = (rows: MoneyRow[]) => mismatchOf(rows) ?? rows.reduce((sum, r) => sum + r.amountHalalas, 0);
+
+/**
+ * The `refunds` rows for a whole bill going back: one per guest, each her own
+ * total. A payment for an amount that was not the bill has no per-guest split,
+ * so it is one row, on the first payment, for what she paid. Null actor: the
+ * customer or the system did this, not a member of staff.
+ */
+const refundRows = (rows: MoneyRow[], reason: string) =>
+  mismatchOf(rows) !== undefined
+    ? [{ paymentId: rows[0].id, amountHalalas: paidOn(rows), reason, actorId: null }]
+    : rows.map((r) => ({ paymentId: r.id, amountHalalas: r.amountHalalas, reason, actorId: null }));
+
 /** Refund every paid payment attached to these bookings. See refundPaid. */
 export async function refundBookings(bookingIds: string[], reason: string): Promise<RefundOutcome> {
   if (bookingIds.length === 0) return { ok: false };
-  return refundPaid(inArray(payments.bookingId, bookingIds), reason, bookingIds.join(", "));
+  return refundPaid(and(inArray(payments.bookingId, bookingIds), eq(payments.status, "paid"))!, reason, bookingIds.join(", "));
 }
 
-/** Refund one whole attempt: a late-paid hold, or a purchase that could not be delivered. */
+/**
+ * Refund one whole attempt: a late-paid hold, a purchase that could not be
+ * delivered, a payment for the wrong amount, or a booking paid twice.
+ */
 export async function refundRef(ref: string, reason: string): Promise<RefundOutcome> {
-  return refundPaid(eq(payments.providerRef, ref), reason, ref);
+  return refundPaid(and(eq(payments.providerRef, ref), holdsMoney)!, reason, ref);
 }
 
 /**
@@ -55,13 +90,13 @@ async function refundPaid(which: SQL, reason: string, label: string): Promise<Re
         treatBookingId: payments.treatBookingId,
       })
       .from(payments)
-      .where(and(which, eq(payments.status, "paid")));
+      .where(which);
 
     // An unpaid hold being cancelled, or a booking already refunded. Both are
     // ordinary — the customer simply has no money with us.
     if (rows.length === 0) return { ok: false };
 
-    const total = rows.reduce((sum, r) => sum + r.amountHalalas, 0);
+    const total = paidOn(rows);
     // A free booking was "paid" at zero and never reached a gateway.
     if (total === 0) return { ok: false };
 
@@ -72,7 +107,7 @@ async function refundPaid(which: SQL, reason: string, label: string): Promise<Re
     const [{ onBill }] = await db
       .select({ onBill: sql<number>`count(*)::int` })
       .from(payments)
-      .where(and(inArray(payments.providerRef, refs as string[]), eq(payments.status, "paid")));
+      .where(and(inArray(payments.providerRef, refs as string[]), holdsMoney));
     if (refs.length !== 1 || onBill !== rows.length) {
       await alertOwner(
         `partial-refund:${label}`,
@@ -100,30 +135,16 @@ async function refundPaid(which: SQL, reason: string, label: string): Promise<Re
     }
 
     await db.transaction(async (tx) => {
-      await tx.insert(refunds).values(
-        rows.map((r) => ({
-          paymentId: r.id,
-          amountHalalas: r.amountHalalas,
-          reason,
-          // Null: the customer or the system did this, not a member of staff.
-          actorId: null,
-        })),
-      );
-
+      await tx.insert(refunds).values(refundRows(rows, reason));
       await tx
         .update(payments)
         .set({ status: "refunded", updatedAt: new Date() })
-        .where(
-          inArray(
-            payments.id,
-            rows.map((r) => r.id),
-          ),
-        );
+        .where(inArray(payments.id, rows.map((r) => r.id)));
     });
 
     // She did not ask for this one, and a card refund takes days to show — so
     // she is told, or she sees money gone and nothing to show for it.
-    if (AUTOMATIC.has(reason)) await emailRefund(rows[0], total);
+    if (AUTOMATIC.has(reason)) await emailRefund(rows[0], total, reason);
 
     return { ok: true, amountHalalas: total };
   } catch (err) {
@@ -134,64 +155,53 @@ async function refundPaid(which: SQL, reason: string, label: string): Promise<Re
 }
 
 /** Refunds the system made on its own — the customer did not press anything. */
-const AUTOMATIC = new Set(["late-payment", "not-delivered"]);
+const AUTOMATIC = new Set(["late-payment", "not-delivered", "wrong-amount", "duplicate-payment"]);
 
-export type RefundedRow = { raw: unknown; bookingId: string | null; treatBookingId: string | null };
+type RefundedRow = { raw: unknown; bookingId: string | null; treatBookingId: string | null };
 
 /** Never throws: the money has already gone back; this only says so. */
-async function emailRefund(row: RefundedRow, halalas: number): Promise<void> {
-  const amount = formatSAR(halalas);
-  await tellCustomer(row, "refund", {
-    en: [
-      "Your payment has been refunded — Red or Nude",
-      `We could not complete your order, so your payment of ${amount} SAR has been refunded in full. ` +
-        "Card refunds usually reach your account within 5–14 working days, depending on your bank.",
-    ],
-    ar: [
-      "تم استرداد مبلغك — Red or Nude",
-      `لم نتمكن من إتمام طلبك، لذلك تم استرداد مبلغ ${amount} ريال بالكامل. ` +
-        "يصل المبلغ المسترد عادةً إلى حسابك خلال ٥–١٤ يوم عمل حسب البنك.",
-    ],
-  });
-}
-
-/**
- * A small chair purchase that could not be delivered, kept as credit rather
- * than refunded to her card (lib/payments/purchase.ts refundOrCredit). Until the
- * wallet ships the desk gives it, so she is told to ask. Never throws.
- */
-export async function emailCreditOwed(row: RefundedRow, halalas: number): Promise<void> {
-  const amount = formatSAR(halalas);
-  await tellCustomer(row, "credit-owed", {
-    en: [
-      "Credit for your next visit — Red or Nude",
-      `We could not complete your order at the chair. The ${amount} SAR you paid is kept as credit ` +
-        "for your next visit: the front desk will take it off your bill.",
-    ],
-    ar: [
-      "رصيد لزيارتك القادمة — Red or Nude",
-      `لم نتمكن من إتمام طلبك عند المقعد. المبلغ المدفوع (${amount} ريال) محفوظ رصيدًا لزيارتك القادمة، ` +
-        "ويخصمه الاستقبال من فاتورتك.",
-    ],
-  });
-}
-
-async function tellCustomer(row: RefundedRow, tag: string, text: Record<"ar" | "en", [string, string]>): Promise<void> {
+async function emailRefund(row: RefundedRow, halalas: number, reason: string): Promise<void> {
   try {
     const to = await refundRecipient(row);
     if (!to) return;
-    const [subject, body] = text[to.lang];
-    const dir = to.lang === "en" ? "ltr" : "rtl";
+    const amount = formatSAR(halalas);
+    const days = {
+      en: "Card refunds usually reach your account within 5–14 working days, depending on your bank.",
+      ar: "يصل المبلغ المسترد عادةً إلى حسابك خلال ٥–١٤ يوم عمل حسب البنك.",
+    };
+    const texts: Record<"ar" | "en", [string, string]> =
+      reason === "duplicate-payment"
+        ? {
+            en: [
+              "Your extra payment has been refunded — Red or Nude",
+              `You paid twice for the same booking. Your booking is confirmed, and the extra payment of ${amount} SAR has been refunded. ${days.en}`,
+            ],
+            ar: [
+              "تم استرداد الدفعة الإضافية — Red or Nude",
+              `تم الدفع مرتين لنفس الحجز. حجزك مؤكد، وتم استرداد الدفعة الإضافية بمبلغ ${amount} ريال. ${days.ar}`,
+            ],
+          }
+        : {
+            en: [
+              "Your payment has been refunded — Red or Nude",
+              `We could not complete your order, so your payment of ${amount} SAR has been refunded in full. ${days.en}`,
+            ],
+            ar: [
+              "تم استرداد مبلغك — Red or Nude",
+              `لم نتمكن من إتمام طلبك، لذلك تم استرداد مبلغ ${amount} ريال بالكامل. ${days.ar}`,
+            ],
+          };
+    const [subject, text] = texts[to.lang];
     await sendMail({
       to: to.email,
       subject,
-      text: body,
-      html: `<p dir="${dir}">${esc(body)}</p>`,
+      text,
+      html: `<p dir="${to.lang === "en" ? "ltr" : "rtl"}">${esc(text)}</p>`,
       replyTo: process.env.MAIL_REPLY_TO?.trim() || null,
-      tags: [tag],
+      tags: ["refund"],
     });
   } catch (err) {
-    console.error(`[payments] ${tag} email failed`, err);
+    console.error("[payments] refund email failed", err);
   }
 }
 
@@ -233,14 +243,16 @@ export async function refundedOutside(ref: string): Promise<void> {
     const rows = await db
       .select()
       .from(payments)
-      .where(and(eq(payments.providerRef, ref), eq(payments.status, "paid")));
+      .where(and(eq(payments.providerRef, ref), holdsMoney));
     // Refunded already (ours, recorded), or never paid.
     if (rows.length === 0) return;
+    const duplicate = rows.every((r) => (r.raw as { paidOnOldAttempt?: number } | null)?.paidOnOldAttempt);
     // Our own refund, still being recorded.
     const refundingAt = (rows[0].raw as { refundingAt?: string } | null)?.refundingAt;
     if (refundingAt && Date.now() - Date.parse(refundingAt) < 10 * 60_000) return;
 
-    const total = rows.reduce((sum, r) => sum + r.amountHalalas, 0);
+    // What she paid, which is what a whole refund sends back.
+    const total = paidOn(rows);
     const back = await getDriver().refundedHalalas(rows[0].raw);
     if (back <= 0) return;
     const full = back >= total;
@@ -250,12 +262,10 @@ export async function refundedOutside(ref: string): Promise<void> {
         const claimed = await tx
           .update(payments)
           .set({ status: "refunded", updatedAt: new Date() })
-          .where(and(inArray(payments.id, rows.map((r) => r.id)), eq(payments.status, "paid")))
+          .where(and(inArray(payments.id, rows.map((r) => r.id)), inArray(payments.status, ["paid", "failed"])))
           .returning({ id: payments.id });
         if (claimed.length === 0) return;
-        await tx.insert(refunds).values(
-          rows.map((r) => ({ paymentId: r.id, amountHalalas: r.amountHalalas, reason: "outside-app", actorId: null })),
-        );
+        await tx.insert(refunds).values(refundRows(rows, "outside-app"));
         const cards = rows.map((r) => r.giftCardId).filter((id): id is string => Boolean(id));
         if (cards.length > 0) {
           await tx.update(giftCards).set({ status: "cancelled", updatedAt: new Date() }).where(inArray(giftCards.id, cards));
@@ -263,14 +273,31 @@ export async function refundedOutside(ref: string): Promise<void> {
       });
     }
 
-    const ids = rows.map((r) => r.bookingId ?? r.treatBookingId).filter((id): id is string => Boolean(id));
-    const codes = ids.length
-      ? (await db.select({ code: bookings.code }).from(bookings).where(inArray(bookings.id, ids))).map((b) => b.code)
-      : [];
+    const codesOf = async (ids: (string | null)[]) => {
+      const some = ids.filter((id): id is string => Boolean(id));
+      return some.length
+        ? (await db.select({ code: bookings.code }).from(bookings).where(inArray(bookings.id, some))).map((b) => b.code)
+        : [];
+    };
+    const codes = await codesOf(rows.map((r) => r.bookingId));
+    const served = await codesOf(rows.map((r) => r.treatBookingId));
+    const unserved = rows.some((r) => (r.raw as { intent?: Intent } | null)?.intent?.kind === "treat" && !r.treatBookingId);
+    if (duplicate && full) {
+      await alertOwner(
+        `refunded:${ref}`,
+        "A duplicate payment was refunded",
+        `Payment ${ref}: ${formatSAR(back)} SAR went back. It was a second payment for bookings ${codes.join(", ")}, ` +
+          "which stand on the other payment. Recorded; nothing more to do.",
+      );
+      return;
+    }
+    // A membership has no undo in the admin yet, so the owner is told it stands.
     const what = [
-      codes.length ? `bookings ${codes.join(", ")} (still confirmed: cancel them if they should not stand)` : null,
+      codes.length ? `bookings ${codes.join(", ")} (still booked: cancel them in the admin if they should not stand)` : null,
+      served.length ? `a chair purchase on booking ${served.join(", ")} (already served: nothing to undo)` : null,
+      unserved ? "a chair purchase that was never served (nothing to undo)" : null,
       rows.some((r) => r.giftCardId) ? (full ? "a gift card, now frozen" : "a gift card, still active") : null,
-      rows.some((r) => r.customerPackId) ? "a membership (still active: remove it if it should not stand)" : null,
+      rows.some((r) => r.customerPackId) ? "a membership (still active: she keeps it unless you arrange otherwise with her)" : null,
     ].filter(Boolean);
     await alertOwner(
       `refunded:${ref}`,

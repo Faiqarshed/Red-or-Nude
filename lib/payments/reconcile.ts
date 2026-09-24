@@ -13,16 +13,15 @@ import "server-only";
 // racing a late webhook is harmless, and a hold swept meanwhile is refunded by
 // the late-payment path that already exists.
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { payments } from "@/lib/db/schema";
 import { sendMail } from "@/lib/email";
 import { esc } from "@/lib/email/html";
 import { formatSAR } from "@/lib/money";
-import { mergeRaw, PAY_WINDOW_MIN } from "./index";
+import { getDriver, mergeRaw, PAY_WINDOW_MIN } from "./index";
 import { redeliver, refundOrCredit, type Intent } from "./purchase";
 import { refundedOutside, refundRef } from "./refund";
-import { getDriver } from "./index";
 import { revivePayment, settlePayment } from "./settle";
 
 /**
@@ -63,6 +62,16 @@ const WRITTEN_OFF = sql`status = 'failed' and raw ->> 'linkId' is not null
 /** Paid for a booking that could not be confirmed, and the refund has not gone through. */
 const OWED_BOOKING = sql`p.status = 'paid' and not p.raw ? 'amountMismatch' and not p.raw ? 'paidOnOldAttempt'
   and (b.status = 'pending' or (b.status = 'cancelled' and b.cancel_reason = 'payment-timeout'))`;
+
+/** Paid an amount that was not the bill, and not refunded yet. Never confirmed or delivered. */
+const WRONG_AMOUNT = sql`p.status = 'paid' and p.raw ? 'amountMismatch'`;
+
+/**
+ * How long automatic handling (a refund, a delivery, a duplicate payment's
+ * refund) keeps failing before the report asks a person: a day of settle runs.
+ * Anything sooner is still being handled, and not the owner's to act on.
+ */
+const GAVE_UP = sql`interval '1 day'`;
 
 /** Paid for a gift card / pack / treat that was never handed over. */
 const UNDELIVERED = sql`status = 'paid' and booking_id is null and raw ? 'intent' and not raw ? 'owedCredit'
@@ -138,20 +147,29 @@ export async function reconcilePayments(): Promise<ReconcileResult> {
     console.error(`[reconcile] ${ref} paid, never delivered: ${back ? "refunded or owed as credit" : "REFUND OWED"}`);
   }
 
-  // Paid for a booking that could not be confirmed, whose refund failed. The
-  // refund asks StreamPay first, so one that went through is recorded, not sent twice.
-  const owed = await db.execute<{ ref: string }>(sql`
-    select distinct p.provider_ref as ref from payments p join bookings b on b.id = p.booking_id
-    where ${OWED_BOOKING}
-      and p.updated_at < now() - interval '15 minutes'
-      and p.updated_at > now() - make_interval(mins => ${UNDELIVERED_STOP_MIN})
-    limit 10
-  `);
-  for (const { ref } of owed) {
-    if (Date.now() - started > BUDGET_MS) break;
-    const back = await refundRef(ref, "late-payment");
-    if (back.ok) out.refunded++;
-    console.error(`[reconcile] ${ref} paid for a booking it could not confirm: ${back.ok ? "refunded" : "REFUND OWED"}`);
+  // Paid, and a refund that has not gone through yet: for a booking that could
+  // not be confirmed, or for an amount that was not the bill. The refund asks
+  // StreamPay first, so one that went through is recorded, not sent twice.
+  const retries: [SQL, string][] = [
+    [
+      sql`select distinct p.provider_ref as ref, p.updated_at from payments p join bookings b on b.id = p.booking_id where ${OWED_BOOKING}`,
+      "late-payment",
+    ],
+    [sql`select distinct provider_ref as ref, updated_at from payments p where ${WRONG_AMOUNT}`, "wrong-amount"],
+  ];
+  for (const [rows, reason] of retries) {
+    const owed = await db.execute<{ ref: string }>(sql`
+      select distinct ref from (${rows}) owed
+      where updated_at < now() - make_interval(mins => ${UNDELIVERED_AFTER_MIN})
+        and updated_at > now() - make_interval(mins => ${UNDELIVERED_STOP_MIN})
+      limit 10
+    `);
+    for (const { ref } of owed) {
+      if (Date.now() - started > BUDGET_MS) break;
+      const back = await refundRef(ref, reason);
+      if (back.ok) out.refunded++;
+      console.error(`[reconcile] ${ref} (${reason}): ${back.ok ? "refunded" : "REFUND OWED"}`);
+    }
   }
 
   return out;
@@ -164,19 +182,20 @@ type Problem = { ref: string; amount_halalas: number; created_at: string };
  * the reconciler could not get an answer for. Empty on a good day.
  */
 export async function paymentProblems() {
-  const [owedBookings, undelivered, stuck, oldAttempts, owedCredit] = await Promise.all([
-    // Paid for a hold we gave away (or a bill that did not match) and not refunded.
+  const [owedBookings, undelivered, stuck, oldAttempts] = await Promise.all([
+    // Paid for a hold we gave away (or a bill that did not match), and the
+    // automatic refund has kept failing.
     db.execute<Problem>(sql`
       select p.provider_ref as ref, sum(p.amount_halalas)::int as amount_halalas, min(p.created_at)::text as created_at
       from payments p join bookings b on b.id = p.booking_id
       where p.status = 'paid'
         and (b.status = 'pending' or (b.status = 'cancelled' and b.cancel_reason = 'payment-timeout'))
-        and p.updated_at < now() - interval '15 minutes'
+        and p.updated_at < now() - ${GAVE_UP}
       group by p.provider_ref
     `),
     db.execute<Problem>(sql`
       select provider_ref as ref, amount_halalas, created_at::text as created_at
-      from payments where ${UNDELIVERED}
+      from payments where ${UNDELIVERED} and updated_at < now() - ${GAVE_UP}
     `),
     // StreamPay has not given an answer for an hour — listed however old, so a
     // payment stuck longer than the settle job looks back never drops off.
@@ -185,31 +204,26 @@ export async function paymentProblems() {
       from payments where ${STUCK} and created_at < now() - interval '1 hour'
       group by provider_ref
     `),
-    // Paid on an old attempt after a newer one had paid for the same booking.
+    // Paid twice, and the extra payment is still not refunded a day on: its
+    // refund keeps failing, or the newer payment never got an answer.
     db.execute<Problem>(sql`
       select provider_ref as ref, sum(amount_halalas)::int as amount_halalas, min(created_at)::text as created_at
-      from payments where status = 'failed' and raw ? 'paidOnOldAttempt'
+      from payments where status = 'failed' and raw ? 'paidOnOldAttempt' and created_at < now() - ${GAVE_UP}
       group by provider_ref
     `),
-    // A small chair purchase we could not deliver: owed as credit, for the desk
-    // until the wallet ships. Listed until then, however old: nothing records
-    // that the desk gave it, so dropping it would forget money she is owed.
-    db.execute<Problem>(sql`
-      select provider_ref as ref, amount_halalas, created_at::text as created_at
-      from payments where raw ? 'owedCredit'
-    `),
   ]);
+  // Chair purchases owed as credit are not listed: the wallet turns them into
+  // real credit, so there is nothing for a person to do.
   return {
     owedBookings: [...owedBookings],
     undelivered: [...undelivered],
     stuck: [...stuck],
     oldAttempts: [...oldAttempts],
-    owedCredit: [...owedCredit],
   };
 }
 
 /**
- * The last 30 days of StreamPay's payments, set against ours. The daily net
+ * The last COMPARE_DAYS of StreamPay's payments, set against ours. The daily net
  * under the webhooks, which StreamPay stops retrying after about 20 hours:
  *
  *   - refunded there, still paid here: a refund from their dashboard, or a
@@ -220,11 +234,17 @@ export async function paymentProblems() {
  *
  * Never throws: it is one section of the report, not a reason to skip it.
  */
+/**
+ * How far back the daily comparison looks: long enough for a chargeback, which
+ * a bank can raise months after the payment and which has no webhook.
+ */
+const COMPARE_DAYS = 120;
+
 export async function compareWithGateway(now = new Date()): Promise<{ unknown: Problem[]; different: Problem[] }> {
   const unknown: Problem[] = [];
   const different: Problem[] = [];
   try {
-    const theirs = await getDriver().listPayments(new Date(now.getTime() - 30 * 86_400_000), now);
+    const theirs = await getDriver().listPayments(new Date(now.getTime() - COMPARE_DAYS * 86_400_000), now);
     if (theirs.length === 0) return { unknown, different };
     const ours = await db.execute<{ id: string; ref: string; status: string; amount: number }>(sql`
       select raw ->> 'paymentId' as id, provider_ref as ref, status, sum(amount_halalas)::int as amount
@@ -240,7 +260,9 @@ export async function compareWithGateway(now = new Date()): Promise<{ unknown: P
       }
       // Full refunds only. A partial one from their dashboard is not ours to act
       // on: its webhook already told the owner, once, rather than every run.
-      if (p.state === "refunded" && mine.status === "paid") {
+      // refundedOutside records it only where our row still holds her money:
+      // paid, or a duplicate payment the owner was asked to refund.
+      if (p.state === "refunded" && mine.status !== "refunded") {
         await refundedOutside(mine.ref);
       } else if (p.state === "paid" && mine.amount !== p.amountHalalas) {
         different.push({ ref: mine.ref, amount_halalas: p.amountHalalas, created_at: `ours ${formatSAR(mine.amount)} SAR` });
@@ -257,11 +279,10 @@ export async function reportPaymentProblems(): Promise<number> {
   const gateway = await compareWithGateway();
   const p = await paymentProblems();
   const sections: [string, Problem[]][] = [
-    ["Paid, booking not confirmed, not refunded — refund in StreamPay", p.owedBookings],
-    ["Paid, nothing delivered, not refunded — refund in StreamPay", p.undelivered],
+    ["Paid, booking not confirmed, automatic refund failing for a day — refund in StreamPay", p.owedBookings],
+    ["Paid, nothing delivered, automatic refund failing for a day — refund in StreamPay", p.undelivered],
     ["No answer from StreamPay for over an hour — check in StreamPay", p.stuck],
-    ["Paid twice for one booking (this is the older payment) — refund it in StreamPay", p.oldAttempts],
-    ["Chair purchase not delivered, owed as credit (she was emailed) — take it off her next bill", p.owedCredit],
+    ["Paid twice for one booking, the extra payment not refunded after a day — refund it in StreamPay", p.oldAttempts],
     ["Paid at StreamPay, not recorded by us — check it in StreamPay", gateway.unknown],
     ["StreamPay has a different amount than we recorded", gateway.different],
   ];

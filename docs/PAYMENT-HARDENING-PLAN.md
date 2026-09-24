@@ -28,7 +28,7 @@ Fixed decisions:
 - H4 needs no code: it's a query in PAYMENTS-STATUS.md §4.
 - H5 is dropped: H1 frees the slot without a sweep.
 
-**#5 + #22:** the daily report run compares the last 30 days of StreamPay's payments with ours, one payment at a time (`compareWithGateway`), instead of comparing totals. It catches missed refunds and payments we never recorded. It needs checking against the sandbox: the response shape comes from their OpenAPI spec.
+**#5 + #22:** the daily report run compares the last 120 days of StreamPay's payments with ours, one payment at a time (`compareWithGateway`), instead of comparing totals. It catches missed refunds and payments we never recorded. It needs checking against the sandbox: the response shape comes from their OpenAPI spec.
 
 **Fixed after the audit** (tests under "after the audit"):
 - H1 let the chair's screen offer time a lapsed hold was keeping, and delivery then refused it and refunded her. A reschedule into such a slot was refused the same way. Both now let lapsed holds go first (`withLapsedHoldsReleased`, `lib/bookings.ts`).
@@ -36,7 +36,10 @@ Fixed decisions:
 - A late payment on an old attempt, with a newer checkout still open, left that checkout payable. Its link is now switched off, and the late payment confirms her; if the newer one may be paid too, both go to the owner.
 - **No partial refunds.** A refund is always the whole bill. Anything less is refused and the owner is told, and a payment already partly refunded in StreamPay's dashboard is never topped up.
 - StreamPay ids are scoped by the API key alone, so rotating the secret doesn't orphan them.
-- A small chair purchase owed as credit emails her once, and stays in the report until the wallet ships (no 7-day cutoff).
+- A small chair purchase owed as credit is only marked (`owedCredit`); the wallet turns it into credit and tells her. No email, no report line before then.
+- Paid twice: the extra payment is refunded to her card automatically once the newer one is paid (reason `duplicate-payment`); while the newer one is in progress, the recheck waits for its outcome.
+- Paid the wrong amount: what she paid is refunded to her card automatically (reason `wrong-amount`), retried by the settle job.
+- The report lists only what automation gave up on after a day of retries. The daily comparison looks back 120 days, for chargebacks.
 - #18b built: when StreamPay refuses a new link (4xx), each id the checkout used is looked up there (`GET /products|coupons|consumers/{id}`). One that is gone (404) or switched off (`is_active: false`) is forgotten and made again, and the link is tried once more. Their error body has no "not found" code for this (their OpenAPI spec only documents a generic 422), so we ask rather than parse.
 - One StreamPay product per version of an item (name, price, VAT). A price change or switching an item off leaves the old product payable for an hour, for checkouts already open, then archives it. Each tax invoice keeps the name and price she paid.
 - Receipts go out after her tickets are on screen, on a long-lived server (`lib/after-response.ts`). On a serverless host they're still awaited.
@@ -86,7 +89,7 @@ These are covered by the code as it is today. They need no change and no configu
 
 **Trust and security**
 - **A fake "paid" in the URL or webhook body:** never believed. We always ask StreamPay directly.
-- **Forged webhook:** HMAC signature check, accepted only within 5 minutes. A missing secret rejects every webhook.
+- **Forged webhook:** HMAC signature check, accepted up to 24 hours old so StreamPay's retries (about 20.5 hours of them) still pass; a replay can only make us ask StreamPay again. A missing secret rejects every webhook.
 - **Card numbers:** typed only into StreamPay's box and never reach our server.
 - **Production running the fake payment driver by mistake:** payments are refused.
 
@@ -177,7 +180,7 @@ Numbers match the 26-item list. H items are new ones from the senior's review.
   - `intent.kind === "treat"` and amount ≤ **10 SAR** (`CHAIR_CREDIT_MAX_HALALAS = 1000`, one constant) → wallet credit + email;
   - otherwise → `refundRef` as today.
   - Gift cards and memberships always get a card refund.
-- **Until the wallet exists:** a small chair refund is marked `owedCredit` on the payment, she is emailed that it is kept as credit for her next visit, and it is listed in the daily report until the wallet ships. No card refund.
+- **Until the wallet exists:** a small chair refund is marked `owedCredit` on the payment. No card refund, and no email: the wallet converts it.
 
 **13. Refund retry, checking first** (moved up: senior, must-fix 2)
 - `refundPaid` (`lib/payments/refund.ts`): before calling `driver.refund`, call `driver.verify(raw)`. If StreamPay already shows it refunded, just record it. Needs a `refunded` verdict (`Verdict` in `lib/payments/index.ts` + `streampay.ts`).
@@ -286,7 +289,8 @@ The refund rule above needs a wallet. It's built as a separate PR (not in this h
 - the customer cancel route credits the wallet instead of `refundBookings`;
 - the admin cancel refuses inside 3 h and credits the wallet otherwise;
 - no-show keeps spent points (`isDead` in `lib/rewards.ts`);
-- turn `owedCredit` chair refunds into real credit;
+- turn `owedCredit` chair refunds into real credit, **only where the payment is still `paid`** (one refunded in StreamPay's dashboard meanwhile is already settled), and email her;
+- the salon cancelling a paid booking in the admin credits the wallet: today no money moves and nothing flags it;
 - cancel and checkout copy;
 - remove `refundBookings` and the unused `payments.refund` permission.
 

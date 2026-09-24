@@ -159,7 +159,7 @@ Framework preset: Next.js. Build command `npm run build`. Node 20 or 22.
 Ordered by how much damage skipping them causes.
 
 - **Payment gateway.** StreamPay is built. Live keys, the webhook registered in
-  their dashboard, `npm run streampay:sync`, and Apple Pay registration with
+  their dashboard, and Apple Pay registration with
   their support — `docs/PAYMENTS-STREAMPAY.md` §Going live.
 - **Rate limiting on `/api/bookings` and `/api/gift-cards`.** They are public,
   unauthenticated and write to the database. Nothing currently stops a script

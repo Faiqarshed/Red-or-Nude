@@ -9,11 +9,11 @@
 import "server-only";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { customerPacks, customers, payments, type Localized } from "@/lib/db/schema";
+import { customerPacks, customers, type Localized } from "@/lib/db/schema";
 import { esc } from "@/lib/email/html";
 import { brandedEmail, CREAM, INK, RED, sendReceipt, textTail } from "@/lib/email/shell";
 import { formatSAR } from "@/lib/money";
-import { taxInvoicePdf } from "@/lib/payments/invoice-pdf";
+import { taxInvoiceOf } from "@/lib/payments/invoice-pdf";
 import { membershipsLeft, type MembershipLeft } from "@/lib/packs";
 import { formatDate } from "@/lib/time";
 
@@ -138,10 +138,7 @@ export async function sendMembershipEmail(customerPackId: string, paymentId: str
     const [customer] = await db.select().from(customers).where(eq(customers.id, cp.customerId)).limit(1);
     const to = customer?.email?.trim();
     if (!to) return;
-    const [payment] = await db.select({ raw: payments.raw }).from(payments).where(eq(payments.id, paymentId)).limit(1);
-    const url = (payment?.raw as { invoiceUrl?: unknown } | null)?.invoiceUrl;
-    const invoiceUrl = typeof url === "string" ? url : null;
-    const pdf = await taxInvoicePdf(invoiceUrl);
+    const { url: invoiceUrl, pdf } = await taxInvoiceOf(paymentId);
     const [membership] = await membershipsLeft(cp.customerId, [cp.id]);
     if (!membership) return;
 

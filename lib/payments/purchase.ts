@@ -25,7 +25,7 @@ import { sendMembershipEmail } from "@/lib/membership-email";
 import { sendVisitEmail } from "@/lib/visit-email";
 import { siteOrigin } from "@/lib/site";
 import { afterResponse } from "@/lib/after-response";
-import { emailCreditOwed, refundRef } from "./refund";
+import { refundRef } from "./refund";
 import { checkoutOf, getDriver, mergeRaw, PAY_WINDOW_MIN, type Checkout, type Line, type Payer, type Verdict } from "./index";
 
 export type GiftIntent = {
@@ -228,14 +228,16 @@ export async function settlePurchase(ref: string, known?: Verdict): Promise<Purc
   // A process dying between the claim above and the delivery below leaves a
   // paid row with nothing delivered; lib/payments/reconcile.ts refunds it.
   if (verdict.amountHalalas !== row.amountHalalas) {
-    // Not the price we asked for, so "refund it" has no right number. A person's
-    // job: marked so the reconciler leaves it alone and the daily report names it.
+    // Not the price we asked for: nothing is delivered, and what she paid goes
+    // back to her card (the refund rule: paid, got nothing). Marked first, so
+    // the refund sends her amount and the settle job retries it if it fails.
     await db
       .update(payments)
       .set({ raw: mergeRaw(payments.raw, { amountMismatch: verdict.amountHalalas }) })
       .where(eq(payments.id, row.id));
+    const back = await refundRef(ref, "wrong-amount");
     console.error(
-      `[purchase] ${ref} paid ${verdict.amountHalalas} for ${row.amountHalalas}; not delivered. REFUND OWED — settle by hand`,
+      `[purchase] ${ref} paid ${verdict.amountHalalas} for ${row.amountHalalas}; not delivered, ${back.ok ? "refunded" : "refund to retry"}`,
     );
     return { ok: false, error: "not-delivered" };
   }
@@ -263,15 +265,12 @@ export const CHAIR_CREDIT_MAX_HALALAS = 1000;
  */
 export async function refundOrCredit(ref: string, amountHalalas: number, intent: Intent): Promise<boolean> {
   if (intent.kind === "treat" && amountHalalas <= CHAIR_CREDIT_MAX_HALALAS) {
-    // ponytail: the wallet is its own PR. Until it ships, the credit is marked
-    // here, she is told to ask the desk, and the daily report lists it until
-    // the wallet turns it into real credit. Marked once, so she is told once.
-    const [marked] = await db
+    // ponytail: marked only. The wallet (its own PR) turns every `owedCredit`
+    // whose payment is still paid into real credit, and tells her then.
+    await db
       .update(payments)
       .set({ raw: mergeRaw(payments.raw, { owedCredit: amountHalalas }) })
-      .where(and(eq(payments.providerRef, ref), sql`not (${payments.raw} ? 'owedCredit')`))
-      .returning({ raw: payments.raw, bookingId: payments.bookingId, treatBookingId: payments.treatBookingId });
-    if (marked) await emailCreditOwed(marked, amountHalalas);
+      .where(eq(payments.providerRef, ref));
     return true;
   }
   return (await refundRef(ref, "not-delivered")).ok;

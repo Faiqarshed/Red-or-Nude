@@ -7,11 +7,22 @@
 // owner is told once an hour so a changed endpoint gets noticed.
 
 import "server-only";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { payments } from "@/lib/db/schema";
 import { activeTransport } from "@/lib/email";
 import { alertOwner } from "./alert";
 import { base } from "./streampay";
 
 export type PdfAttachment = { filename: string; content: Buffer };
+
+/** The tax invoice a paid payment carries (verify() saved its link): the link, and the PDF when it could be fetched. */
+export async function taxInvoiceOf(paymentId: string): Promise<{ url: string | null; pdf: PdfAttachment | null }> {
+  const [payment] = await db.select({ raw: payments.raw }).from(payments).where(eq(payments.id, paymentId)).limit(1);
+  const url = (payment?.raw as { invoiceUrl?: unknown } | null)?.invoiceUrl;
+  const link = typeof url === "string" ? url : null;
+  return { url: link, pdf: await taxInvoicePdf(link) };
+}
 
 /** Their page polls for up to 60 s; ours runs inside a payment request. */
 const WAIT_MS = 20_000;

@@ -439,23 +439,19 @@ export async function settleBookingPayment(ref: string, known?: Verdict): Promis
       .where(and(eq(payments.providerRef, ref), eq(payments.status, "pending")))
       .returning({ id: payments.id });
     const why = (err as Error).message;
-    if (claimed.length > 0 && why === "amount-mismatch") {
-      // Paid a sum that is not the bill. Refunding "the bill" would be the wrong
-      // number, so this one is a person's job — loud, with both figures, and
-      // marked so the settle job's refund retry leaves it alone.
+    // Paid, and nothing to give for it: her card gets back what she paid (the
+    // refund rule), and the settle job retries a refund that fails. A sum that
+    // is not the bill is marked first, so the refund sends her amount.
+    const wrongAmount = why === "amount-mismatch";
+    if (claimed.length > 0 && wrongAmount) {
       await db
         .update(payments)
         .set({ raw: mergeRaw(payments.raw, { amountMismatch: verdict.amountHalalas }) })
         .where(eq(payments.providerRef, ref));
-      console.error(
-        `[payments] ${ref} paid ${verdict.amountHalalas} for a bill of ${billTotal}; not confirmed. REFUND OWED — settle by hand`,
-      );
-    } else if (claimed.length > 0 && verdict.amountHalalas > 0) {
-      const back = await refundRef(ref, "late-payment");
-      console.error(
-        `[payments] ${ref} paid but could not confirm (${why}); ` +
-          (back.ok ? "auto-refunded" : "REFUND OWED — settle by hand"),
-      );
+    }
+    if (claimed.length > 0 && verdict.amountHalalas > 0) {
+      const back = await refundRef(ref, wrongAmount ? "wrong-amount" : "late-payment");
+      console.error(`[payments] ${ref} paid ${verdict.amountHalalas} but not confirmed (${why}); ${back.ok ? "refunded" : "refund to retry"}`);
     }
     return { ok: false, error: "expired" };
   }
