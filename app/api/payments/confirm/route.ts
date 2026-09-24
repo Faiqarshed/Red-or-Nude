@@ -1,19 +1,25 @@
-// Charge for a held booking and confirm it.
+// Pay for a held booking.
 //
 // Split from POST /api/bookings on purpose: that one reserves the chair, this one
 // takes the money. A decline leaves the hold in place so the customer can retry
 // the payment without losing their slot.
+//
+// Answers with the tickets when it is settled on the spot (the fake driver, a
+// bill of zero), or with a checkout to embed. After that checkout, the page asks
+// GET /api/payments/status — this route is never the one that learns it was paid.
 
 import { NextResponse } from "next/server";
+import { clientIp, throttled } from "@/lib/throttle";
 import { z } from "zod";
 import { confirmBookingPayment } from "@/lib/payments/confirm";
 
 export const dynamic = "force-dynamic";
+// The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
+export const maxDuration = 60;
 
 const body = z.object({
   code: z.string().trim().min(4).max(20),
-  method: z.enum(["card", "mada", "stc", "apple"]),
-  // Only honoured outside production — the way to exercise a declined card
+  // Honoured by the fake driver outside production only — the way to exercise a declined card
   // without teaching the driver about test amounts.
   simulate: z.literal("decline").optional(),
 });
@@ -28,9 +34,15 @@ const STATUS = {
   "in-progress": 409,
   "payment-declined": 402,
   failed: 500,
+  // StreamPay did not answer: she may well have paid. The page says "don't pay again".
+  unverified: 503,
 } as const;
 
 export async function POST(request: Request) {
+  // Each call can open a StreamPay checkout; a person needs a handful an hour.
+  if (throttled(`confirm:${clientIp(request)}`, { windowMs: 3_600_000, max: 30 })) {
+    return NextResponse.json({ error: "too-many" }, { status: 429 });
+  }
   let payload: unknown;
   try {
     payload = await request.json();
@@ -45,13 +57,12 @@ export async function POST(request: Request) {
 
   const result = await confirmBookingPayment({
     code: parsed.data.code,
-    method: parsed.data.method,
-    simulate: process.env.NODE_ENV === "production" ? undefined : parsed.data.simulate,
+    simulate: parsed.data.simulate,
   });
 
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: STATUS[result.error] });
   }
-
+  if ("checkout" in result) return NextResponse.json({ checkout: result.checkout });
   return NextResponse.json({ tickets: result.tickets, totalHalalas: result.totalHalalas });
 }

@@ -169,7 +169,7 @@ describe("a web booking, numbered when the card clears", () => {
       { serviceId: f.svcB.id, addonIds: [], branchId: f.branchB },
     ]);
 
-    const paid = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code });
     expect(paid.ok, paid.ok ? "" : paid.error).toBe(true);
 
     // Exactly one number out of each queue. Before the fix branchA moved by two
@@ -194,7 +194,7 @@ describe("a web booking, numbered when the card clears", () => {
       { serviceId: f.svcA.id, addonIds: [] },
       { serviceId: f.svcB.id, addonIds: [] },
     ]);
-    const paid = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code });
     expect(paid.ok).toBe(true);
 
     const after = await counters([f.branchA], day);
@@ -214,7 +214,7 @@ describe("a web booking, numbered when the card clears", () => {
     const before = await counters([f.branchA, f.branchB], day);
 
     const held = await hold([{ serviceId: f.svcA.id, addonIds: [] }]);
-    const paid = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code });
     expect(paid.ok).toBe(true);
 
     const after = await counters([f.branchA, f.branchB], day);
@@ -233,7 +233,6 @@ describe("a web booking, numbered when the card clears", () => {
     // The guest at the *other* branch quotes her reference.
     const paid = await confirmBookingPayment({
       code: held.bookings[held.bookings.length - 1].code,
-      method: "card",
     });
     expect(paid.ok, paid.ok ? "" : paid.error).toBe(true);
 
@@ -252,7 +251,6 @@ describe("a web booking, numbered when the card clears", () => {
 
     const declined = await confirmBookingPayment({
       code: held.bookings[0].code,
-      method: "card",
       simulate: "decline",
     });
     expect(declined.ok).toBe(false);
@@ -273,13 +271,15 @@ describe("a web booking, numbered when the card clears", () => {
       { serviceId: f.svcB.id, addonIds: [], branchId: f.branchB },
     ]);
 
-    const first = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    const first = await confirmBookingPayment({ code: held.bookings[0].code });
     expect(first.ok).toBe(true);
 
     const before = await counters([f.branchA, f.branchB], day);
-    const again = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
-    expect(again.ok).toBe(false);
-    expect(again.ok ? "" : again.error).toBe("expired");
+    const again = await confirmBookingPayment({ code: held.bookings[0].code });
+    // Her tickets again, not "pick a slot again": she is booked.
+    expect(again.ok && "tickets" in again ? again.tickets.map((t) => t.ticketNo) : null).toEqual(
+      first.ok && "tickets" in first ? first.tickets.map((t) => t.ticketNo) : [],
+    );
 
     // A second attempt must not mint a second pair of numbers.
     const after = await counters([f.branchA, f.branchB], day);
@@ -298,7 +298,7 @@ describe("a web booking, numbered when the card clears", () => {
       { serviceId: f.svcB.id, addonIds: [], startsAt: later },
     ]);
 
-    const paid = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code });
     expect(paid.ok, paid.ok ? "" : paid.error).toBe(true);
 
     // Two guests at each branch on the one day: two numbers out of each queue.
@@ -318,7 +318,7 @@ describe("a web booking, numbered when the card clears", () => {
       { serviceId: f.svcA.id, addonIds: [] },
       { serviceId: f.svcB.id, addonIds: [], branchId: f.branchB },
     ]);
-    await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    await confirmBookingPayment({ code: held.bookings[0].code });
 
     const rows = await groupRows(held.groupId!);
     expect(rows.map((r) => r.branchId).sort()).toEqual([f.branchA, f.branchB].sort());

@@ -21,7 +21,8 @@ import {
   payments,
   stations,
 } from "@/lib/db/schema";
-import { buyStationTreat } from "@/lib/station-treat";
+import { buyStationItems } from "@/lib/station-treat";
+import { renderVisitEmail } from "@/lib/visit-email";
 import { fixtures, reset, type Fixtures, taggedAddon } from "./helpers";
 
 let f: Fixtures;
@@ -35,8 +36,8 @@ const tagged = like(addons.image, `${TAG}%`);
 const PHONE = "0500000097";
 const PRICE = 1000;
 
-const catalogRow = (label: string, atCheckout: boolean, active = true) =>
-  taggedAddon(TAG, label, atCheckout, { active, priceHalalas: PRICE });
+const catalogRow = (label: string, atCheckout: boolean, active = true, durationMin = 0) =>
+  taggedAddon(TAG, label, atCheckout, { active, priceHalalas: PRICE, durationMin });
 
 /** A booking occupying `chair` across `now`, unless told otherwise. */
 async function seat(opts: {
@@ -76,8 +77,8 @@ async function seat(opts: {
   return { id: b.id, endsAt };
 }
 
-const order = (over: Partial<Parameters<typeof buyStationTreat>[0]> = {}) =>
-  buyStationTreat({ token: chair.token, addonId: hotId, method: "card", ...over });
+const order = (over: Partial<Parameters<typeof buyStationItems>[0]> = {}) =>
+  buyStationItems({ token: chair.token, addonIds: [hotId], ...over });
 
 beforeEach(async () => {
   f = await fixtures();
@@ -94,7 +95,7 @@ beforeEach(async () => {
   [chair, otherChair] = chairs.map((c) => ({ id: c.id, token: c.token as string }));
 
   hotId = await catalogRow("hot", true);
-  serviceAddonId = await catalogRow("gel-removal", false);
+  serviceAddonId = await catalogRow("gel-removal", false, true, 20);
 });
 
 afterAll(async () => {
@@ -110,7 +111,7 @@ describe("ordering a treat from the chair", () => {
 
     const res = await order();
 
-    expect(res).toEqual({ ok: true, name: { ar: "hot", en: "hot" } });
+    expect(res).toEqual({ ok: true, names: [{ ar: "hot", en: "hot" }] });
 
     const lines = await db
       .select({ addonId: bookingAddons.addonId, price: bookingAddons.priceHalalas })
@@ -133,7 +134,7 @@ describe("ordering a treat from the chair", () => {
     ]);
   });
 
-  it("never moves the appointment's finish time", async () => {
+  it("a treat never moves the appointment's finish time", async () => {
     // A treat has duration 0 precisely so it cannot push ends_at out from under
     // a booking that is already running and hand the next customer a late start.
     const booking = await seat();
@@ -149,6 +150,43 @@ describe("ordering a treat from the chair", () => {
       .from(bookings)
       .where(eq(bookings.id, booking.id));
     expect(after[0].endsAt).toEqual(before[0].endsAt);
+  });
+
+  it("sells treats and an add-on as one basket, one payment, and gives the add-on its time", async () => {
+    // The chair is free after her, so a 20-minute add-on fits.
+    const booking = await seat();
+    const cold = await catalogRow("cold", true);
+
+    const res = await order({ addonIds: [hotId, cold, serviceAddonId] });
+    expect(res.ok && "names" in res && res.names.map((n) => n.en).sort()).toEqual(["cold", "gel-removal", "hot"]);
+
+    const lines = await db.select({ addonId: bookingAddons.addonId }).from(bookingAddons).where(eq(bookingAddons.bookingId, booking.id));
+    expect(lines).toHaveLength(3);
+    const paid = await db.select({ amount: payments.amountHalalas }).from(payments).where(eq(payments.treatBookingId, booking.id));
+    expect(paid).toEqual([{ amount: 3 * PRICE }]);
+    // Only the add-on's 20 minutes move her finish; the treats move nothing.
+    const [after] = await db.select({ endsAt: bookings.endsAt }).from(bookings).where(eq(bookings.id, booking.id));
+    expect(after.endsAt.getTime() - booking.endsAt.getTime()).toBe(20 * 60_000);
+  });
+
+  it("emails her what was added, the new finish time and the tax invoice", () => {
+    const { text, html } = renderVisitEmail({
+      customerName: "Sara",
+      lang: "en",
+      items: [
+        { addonId: "a", name: { ar: "قهوة", en: "Hot coffee" }, priceHalalas: 1500, durationMin: 0 },
+        { addonId: "b", name: { ar: "فرنش", en: "French Tip" }, priceHalalas: 5000, durationMin: 15 },
+      ],
+      endsAt: new Date("2026-09-22T15:00:00Z"),
+      taxInvoiceUrl: "https://streampay.sa/s/x",
+      pdfAttached: false,
+    });
+    expect(text).toContain("Hot coffee: 15.00 SAR");
+    expect(text).toContain("French Tip (+15 min): 50.00 SAR");
+    expect(text).toContain("Paid: 65.00 SAR");
+    expect(text).toContain("now finishes at 18:00");
+    expect(html).toContain("https://streampay.sa/s/x");
+    expect(text).toContain("couldn't attach your tax invoice PDF");
   });
 
   it("leaves the appointment's own payment untouched", async () => {
@@ -198,26 +236,26 @@ describe("what the sticker is refused", () => {
     }
   });
 
-  it("will not sell a service add-on dressed up as a treat", async () => {
-    // The one that matters beyond "does this id exist". A service add-on has a
-    // duration and belongs beside a service; selling one here would move ends_at.
-    await seat();
-    expect(await order({ addonId: serviceAddonId })).toEqual({
-      ok: false,
-      reason: "unknown-treat",
-    });
+  it("will not sell an add-on the next booking leaves no time for", async () => {
+    // Her chair is booked 10 minutes after she finishes; the add-on takes 20.
+    // Refused before the card is touched, and her finish time stays put.
+    const booking = await seat();
+    await seat({ startsAt: new Date(booking.endsAt.getTime() + 10 * 60_000), endsAt: new Date(booking.endsAt.getTime() + 70 * 60_000), status: "confirmed" });
+    expect(await order({ addonIds: [serviceAddonId] })).toEqual({ ok: false, reason: "no-time" });
+    const [after] = await db.select({ endsAt: bookings.endsAt }).from(bookings).where(eq(bookings.id, booking.id));
+    expect(after.endsAt).toEqual(booking.endsAt);
   });
 
   it("will not sell a deactivated treat", async () => {
     await seat();
     const retired = await catalogRow("retired", true, false);
-    expect(await order({ addonId: retired })).toEqual({ ok: false, reason: "unknown-treat" });
+    expect(await order({ addonIds: [retired] })).toEqual({ ok: false, reason: "unknown-treat" });
   });
 
   it("will not sell a treat that does not exist", async () => {
     await seat();
     const absent = "00000000-0000-0000-0000-000000000000";
-    expect(await order({ addonId: absent })).toEqual({ ok: false, reason: "unknown-treat" });
+    expect(await order({ addonIds: [absent] })).toEqual({ ok: false, reason: "unknown-treat" });
   });
 
   it("refuses a sticker pointed at somebody else's occupied chair", async () => {
@@ -234,7 +272,7 @@ describe("what the sticker is refused", () => {
   it("charges nothing for any refusal", async () => {
     const booking = await seat({ status: "completed" });
     await order();
-    await order({ addonId: serviceAddonId });
+    await order({ addonIds: [serviceAddonId] });
 
     // Scoped to this booking: the seeded database carries thousands of
     // unrelated payments, and a bare count would assert nothing.
@@ -253,7 +291,7 @@ describe("timing", () => {
     await seat({ startsAt: new Date(now.getTime() - 3_600_000), endsAt });
 
     // `now` is strictly before endsAt: still her chair.
-    expect(await order({ now })).toEqual({ ok: true, name: { ar: "hot", en: "hot" } });
+    expect(await order({ now })).toEqual({ ok: true, names: [{ ar: "hot", en: "hot" }] });
 
     // And on the instant it ends, it is not. The window is [startsAt, endsAt).
     await db.delete(bookingAddons);
@@ -273,7 +311,7 @@ describe("timing", () => {
 describe("two taps", () => {
   it("refuses the second before it reaches the card", async () => {
     const booking = await seat();
-    expect(await order()).toEqual({ ok: true, name: { ar: "hot", en: "hot" } });
+    expect(await order()).toEqual({ ok: true, names: [{ ar: "hot", en: "hot" }] });
 
     // Cheap refusal: the check runs before the charge, so an impatient second
     // tap costs a query rather than a refund.
@@ -313,8 +351,8 @@ describe("two taps", () => {
     const booking = await seat();
     const cold = await catalogRow("cold", true);
 
-    expect(await order()).toEqual({ ok: true, name: { ar: "hot", en: "hot" } });
-    expect(await order({ addonId: cold })).toEqual({ ok: true, name: { ar: "cold", en: "cold" } });
+    expect(await order()).toEqual({ ok: true, names: [{ ar: "hot", en: "hot" }] });
+    expect(await order({ addonIds: [cold] })).toEqual({ ok: true, names: [{ ar: "cold", en: "cold" }] });
 
     const lines = await db
       .select({ addonId: bookingAddons.addonId })
@@ -332,7 +370,7 @@ describe("what the reply gives away", () => {
     // The token proves somebody is standing at a table. That is not a reason to
     // hand back the customer's name, her phone, her bill or her booking id — the
     // same privacy shape /station's own page keeps.
-    expect(Object.keys(res).sort()).toEqual(["name", "ok"]);
+    expect(Object.keys(res).sort()).toEqual(["names", "ok"]);
     const flat = JSON.stringify(res);
     expect(flat).not.toContain(PHONE);
     expect(flat).not.toContain("20000");

@@ -180,6 +180,8 @@ export type LedgerRow = {
   /** Null when the movement belongs to no booking. */
   bookingStatus: string | null;
   bookingCreatedAt: Date | null;
+  /** A checkout for the booking is still payable (lib/payments `checkoutOpen`). */
+  checkoutOpen?: boolean;
 };
 
 /**
@@ -202,12 +204,17 @@ export type LedgerRow = {
  *
  * A retry inside the window keeps its discount and its debit — same booking,
  * same row. That is correct, not a leak.
+ *
+ * Nor is a hold past its window dead while a checkout for it is still open: she
+ * may be on her bank's page, and the booking can still confirm. Releasing the
+ * points then would let her spend them twice.
  */
 function isDead(row: LedgerRow, holdMin: number, now: Date): boolean {
   const { bookingStatus: status, bookingCreatedAt: createdAt } = row;
   if (status === null) return false; // not attached to a booking at all
   if (status === "cancelled" || status === "no_show") return true;
   if (status !== "pending") return false;
+  if (row.checkoutOpen) return false;
   // No created_at shouldn't happen. Treated as dead rather than alive: the
   // failure mode of guessing wrong is a customer who cannot spend points they
   // own, and that is the worse of the two.

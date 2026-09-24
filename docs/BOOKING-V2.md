@@ -131,10 +131,12 @@ Rounding exactly once is what guarantees the two guests' totals add back up to
 what the card was charged. A single guest at 0% is a no-op, so ordinary bookings
 charge exactly what they did before.
 
-**One halala note:** the two guests' VAT figures may sum to one halala different
-from VAT computed on the whole bill in one go. That's correct — an invoice is a
-list of lines and its tax figure is the sum of the lines' tax, which is how ZATCA
-expects a B2C invoice to be built.
+**One halala note:** the two guests' VAT figures, each rounded on its own row,
+may sum to one halala different from VAT computed on the whole bill in one go
+(180.00 + 243.00: 55.18 summed, 55.17 on 423.00). The rows keep their own
+figures for the salon's reports. They are on no customer document: StreamPay's
+invoice is the tax invoice, and it works VAT out once on the whole bill. Our
+confirmation email shows no VAT figures (`lib/invoice/data.ts`).
 
 ### Two guests, different service lengths
 
@@ -162,34 +164,14 @@ tries to book at that branch. Controlled by the `booking_hold_min` setting
 
 ---
 
-## 5. Swapping in a real payment gateway
+## 5. The payment gateway
 
-Moyasar vs Tap is still undecided. When it's picked:
+StreamPay, behind `PAYMENT_DRIVER=streampay`. The flow, the mapping of our
+discounts onto its products and coupons, and the webhook are all in
+[`docs/PAYMENTS-STREAMPAY.md`](PAYMENTS-STREAMPAY.md).
 
-1. Write `lib/payments/moyasar.ts` exporting a `PaymentDriver`:
-   ```ts
-   export const moyasarDriver: PaymentDriver = {
-     name: "moyasar",
-     async charge({ ref, amountHalalas, method }) {
-       // ref doubles as the idempotency key
-       return { status: "paid" | "failed", providerRef, raw };
-     },
-   };
-   ```
-2. Branch on `process.env.PAYMENT_DRIVER` in `getDriver()`
-   (`lib/payments/index.ts`) — it returns `fakeDriver` unconditionally today.
-3. Set `PAYMENT_DRIVER=moyasar` in the environment.
-
-Nothing else changes. The `payments` rows, the pending/confirmed state machine,
-the retry behaviour and the ticket issuing are all already real.
-
-A real gateway will also want a **webhook** endpoint (the customer's browser can
-die mid-redirect). That's the one piece deliberately not built — it belongs with
-the driver that needs it.
-
-> ⚠️ The fake driver approves everything. Deploying with it means customers book
-> for free. `PAYMENT_DRIVER` must point at a real provider before the site takes
-> public traffic.
+> ⚠️ Any other value uses `lib/payments/fake.ts`, which approves everything.
+> Deploying with it means customers book for free.
 
 ---
 

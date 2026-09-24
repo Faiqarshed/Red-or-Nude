@@ -8,15 +8,17 @@
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { buyStationTreat, type TreatRefusal } from "@/lib/station-treat";
+import { buyStationItems, type TreatRefusal } from "@/lib/station-treat";
 
 export const dynamic = "force-dynamic";
+// The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
+export const maxDuration = 60;
 
 const body = z.object({
   /** The sticker. A uuid column, so anything else cannot match a chair. */
   token: z.string().uuid(),
-  addonId: z.string().uuid(),
-  method: z.enum(["card", "mada", "stc", "apple"]),
+  /** A basket: treats and add-ons for the visit in progress, paid once. */
+  addonIds: z.array(z.string().uuid()).min(1).max(20),
   /** Dev-only, to exercise the decline path. Stripped in production below. */
   simulate: z.literal("decline").optional(),
 });
@@ -27,6 +29,7 @@ const STATUS: Record<TreatRefusal, number> = {
   "not-in-service": 409,
   "unknown-treat": 404,
   "already-added": 409,
+  "no-time": 409,
   declined: 402,
   // Charged and not delivered. A 500 so nothing treats it as retryable.
   "paid-not-added": 500,
@@ -44,15 +47,15 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: "invalid" }, { status: 400 });
   const d = parsed.data;
 
-  const result = await buyStationTreat({
+  const result = await buyStationItems({
     token: d.token,
-    addonId: d.addonId,
-    method: d.method,
-    simulate: process.env.NODE_ENV === "production" ? undefined : d.simulate,
+    addonIds: d.addonIds,
+    simulate: d.simulate,
   });
 
   if (!result.ok) {
     return NextResponse.json({ error: result.reason }, { status: STATUS[result.reason] });
   }
-  return NextResponse.json({ ok: true, name: result.name });
+  if ("checkout" in result) return NextResponse.json({ ok: true, checkout: result.checkout });
+  return NextResponse.json({ ok: true, names: result.names });
 }

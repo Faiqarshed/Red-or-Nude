@@ -23,6 +23,18 @@ import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
 import { reorderBySort } from "@/lib/admin/reorder";
 import { DESC_MAX, NAME_MAX } from "@/lib/admin/validate";
+import { retireProduct, syncProductQuietly } from "@/lib/payments/streampay";
+import { productName } from "@/lib/payments/lines";
+
+/** Mirror a saved pack to StreamPay. Never fails the save — see syncProductQuietly. */
+async function syncToStreampay(id: string) {
+  const [row] = await db
+    .select({ name: packs.name, priceHalalas: packs.priceHalalas, active: packs.active })
+    .from(packs)
+    .where(eq(packs.id, id))
+    .limit(1);
+  if (row) await syncProductQuietly(`product:pack:${id}`, { ...row, name: productName(row.name) });
+}
 
 const localizedText = z.object({
   ar: z.string().trim().min(1).max(NAME_MAX),
@@ -121,6 +133,7 @@ export async function savePack(input: PackInput): Promise<ActionResult> {
       entityId: id,
       diff: diffOf(before, { ...values, lines: lines.length }),
     });
+    await syncToStreampay(id);
     revalidateAll();
     return { ok: true, id };
   } catch (err) {
@@ -140,6 +153,7 @@ export async function setPackActive(id: string, active: boolean): Promise<Action
     entityId: id,
     diff: { active: { from: !active, to: active } },
   });
+  await syncToStreampay(id);
   revalidateAll();
   return { ok: true, id };
 }
@@ -163,6 +177,9 @@ export async function deletePack(id: string): Promise<ActionResult> {
 
   const [gone] = await db.delete(packs).where(eq(packs.id, id)).returning({ name: packs.name });
   await recordAudit(actor, { action: "delete", entity: "packs", entityId: id, label: gone?.name });
+  // Archived there after an hour (RETIRE_AFTER_MIN), not deleted: a checkout
+  // already open can still be paid, and past invoices still name it.
+  await retireProduct(`product:pack:${id}`);
   revalidateAll();
   return { ok: true, id };
 }

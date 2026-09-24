@@ -272,10 +272,10 @@ ordinary flows before shipping:
   buys a nuisance cancellation, not money. The guards are the throttle and the
   audit row. `lib/otp.ts` is already built if that judgement changes — wrapping
   these routes is a few lines, exactly as `/api/my-bookings/refill` does it.
-- **No real gateway.** `lib/payments/fake.ts` approves every charge and every
-  refund. `PAYMENT_DRIVER` must point at Moyasar or Tap before this takes public
-  traffic — see `docs/DEPLOYMENT.md` §0. `refund()` is now part of the
-  `PaymentDriver` contract, so a real driver has to implement it.
+- **The gateway is StreamPay** when `PAYMENT_DRIVER=streampay`; anything else
+  is `lib/payments/fake.ts`, which approves every charge and every refund. The
+  StreamPay driver refunds through `POST /payments/{id}/refund` — see
+  `docs/PAYMENTS-STREAMPAY.md`.
 - **No cancellation email in a customer's inbox.** `notify()` is still the
   log-only driver, so `booking-cancelled` and `booking-rescheduled` print to the
   server console. Same standing gap as `booking-confirmed`.

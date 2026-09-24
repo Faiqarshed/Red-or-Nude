@@ -7,9 +7,9 @@
 
 import "server-only";
 import { randomInt } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { giftCards, giftCardTxns } from "@/lib/db/schema";
+import { giftCards, giftCardTxns, payments } from "@/lib/db/schema";
 
 // No I/O/0/1 — codes get typed off a printed card and read over the phone.
 const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -30,11 +30,16 @@ export type IssueGiftCardInput = {
   buyerEmail?: string | null;
   recipientName?: string | null;
   recipientEmail?: string | null;
-  recipientPhone?: string | null;
   message?: string | null;
   /** Months until expiry; null keeps the card open-ended. */
   expiresInMonths?: number | null;
   actorId?: string | null;
+  /**
+   * The online payment that bought it. Linked inside the same transaction, so a
+   * card can never exist without the payment row pointing at it — the refund
+   * path reads that pointer to decide whether anything was delivered.
+   */
+  paymentId?: string | null;
 };
 
 export type IssueResult =
@@ -69,7 +74,6 @@ export async function issueGiftCard(input: IssueGiftCardInput): Promise<IssueRes
             buyerEmail: input.buyerEmail ?? null,
             recipientName: input.recipientName ?? null,
             recipientEmail: input.recipientEmail ?? null,
-            recipientPhone: input.recipientPhone ?? null,
             message: input.message ?? null,
             expiresAt,
           })
@@ -82,6 +86,17 @@ export async function issueGiftCard(input: IssueGiftCardInput): Promise<IssueRes
           reason: "issued",
           actorId: input.actorId ?? null,
         });
+
+        if (input.paymentId) {
+          // One card per payment: a second delivery racing this one (two
+          // settle-job runs) rolls its card back instead of issuing another.
+          const linked = await tx
+            .update(payments)
+            .set({ giftCardId: card.id, updatedAt: new Date() })
+            .where(and(eq(payments.id, input.paymentId), isNull(payments.giftCardId)))
+            .returning({ id: payments.id });
+          if (linked.length === 0) throw new Error(`payment ${input.paymentId} already has its gift card`);
+        }
 
         return card;
       });

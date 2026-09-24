@@ -101,4 +101,9 @@ if (process.env.DATABASE_URL && process.env.DATABASE_URL === url) {
 // the wrong one.
 process.env.DATABASE_URL = url;
 
+// Same idea for money: .env.local may name a real gateway (PAYMENT_DRIVER=
+// streampay), and a test run must never create products, links or charges on
+// it. Every suite and check script runs on the fake driver, whatever the file says.
+process.env.PAYMENT_DRIVER = "fake";
+
 export const TEST_DATABASE_URL = url;

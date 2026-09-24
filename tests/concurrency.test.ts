@@ -189,8 +189,8 @@ describe("paying", () => {
     const before = await counters([f.branchA, f.branchB], day);
 
     const [a, b] = await Promise.all([
-      confirmBookingPayment({ code: held.bookings[0].code, method: "card" }),
-      confirmBookingPayment({ code: held.bookings[0].code, method: "card" }),
+      confirmBookingPayment({ code: held.bookings[0].code }),
+      confirmBookingPayment({ code: held.bookings[0].code }),
     ]);
 
     // Exactly one of the two taps may confirm.
@@ -249,13 +249,12 @@ describe("paying", () => {
 
     const declined = await confirmBookingPayment({
       code: held.bookings[0].code,
-      method: "card",
       simulate: "decline",
     });
     expect(declined.ok).toBe(false);
     expect(declined.ok ? "" : declined.error).toBe("payment-declined");
 
-    const second = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    const second = await confirmBookingPayment({ code: held.bookings[0].code });
     expect(second.ok, second.ok ? "" : second.error).toBe(true);
   });
 });

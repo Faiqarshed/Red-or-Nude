@@ -24,16 +24,15 @@ import { db } from "@/lib/db";
 import { bookings } from "@/lib/db/schema";
 import { notifyTechnician } from "@/lib/assign";
 import { getSettings } from "@/lib/settings";
+import { cronDenied } from "@/lib/cron";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   // A cron endpoint is a public URL; without this anyone could mail the salon's
   // staff on demand.
-  const secret = process.env.CRON_SECRET;
-  if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const denied = cronDenied(request);
+  if (denied) return denied;
 
   const { assign_notify_min: windowMin } = await getSettings(["assign_notify_min"]);
   const now = new Date();

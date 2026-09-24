@@ -25,16 +25,15 @@ import { db } from "@/lib/db";
 import { branches } from "@/lib/db/schema";
 import { assignDay } from "@/lib/assign";
 import { sweepNoShows } from "@/lib/bookings";
+import { cronDenied } from "@/lib/cron";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   // A cron endpoint is a public URL. Without this, anyone could reshuffle the
   // salon's floor from the outside.
-  const secret = process.env.CRON_SECRET;
-  if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const denied = cronDenied(request);
+  if (denied) return denied;
 
   const rows = await db
     .select({ id: branches.id })

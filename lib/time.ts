@@ -115,6 +115,13 @@ export function riyadhWeekday(date: Date): number {
   return (local.getUTCDay() + 1) % 7;
 }
 
+export function formatDate(date: Date, lang: "ar" | "en"): string {
+  return new Intl.DateTimeFormat(lang === "ar" ? "ar-SA-u-nu-latn" : "en-GB", {
+    dateStyle: "medium",
+    timeZone: TIMEZONE,
+  }).format(date);
+}
+
 export function formatDateTime(date: Date, lang: "ar" | "en"): string {
   return new Intl.DateTimeFormat(lang === "ar" ? "ar-SA-u-nu-latn" : "en-GB", {
     dateStyle: "medium",

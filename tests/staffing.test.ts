@@ -79,7 +79,7 @@ describe("a party confirmed today", () => {
     expect(held.ok, held.ok ? "" : held.error).toBe(true);
     if (!held.ok) return;
 
-    const paid = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code });
     expect(paid.ok, paid.ok ? "" : paid.error).toBe(true);
 
     const rows = await groupRows(held.groupId!);
@@ -120,7 +120,7 @@ describe("a party confirmed today", () => {
     expect(held.ok, held.ok ? "" : held.error).toBe(true);
     if (!held.ok) return;
 
-    const paid = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code });
     expect(paid.ok, paid.ok ? "" : paid.error).toBe(true);
 
     const rows = await groupRows(held.groupId!);
@@ -146,7 +146,7 @@ describe("a party confirmed today", () => {
     expect(held.ok).toBe(true);
     if (!held.ok) return;
 
-    const paid = await confirmBookingPayment({ code: held.bookings[0].code, method: "card" });
+    const paid = await confirmBookingPayment({ code: held.bookings[0].code });
     expect(paid.ok).toBe(true);
 
     const [row] = await db
@@ -176,7 +176,6 @@ describe("a party confirmed today", () => {
 
     const declined = await confirmBookingPayment({
       code: held.bookings[0].code,
-      method: "card",
       simulate: "decline",
     });
     expect(declined.ok).toBe(false);

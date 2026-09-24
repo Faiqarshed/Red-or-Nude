@@ -1,6 +1,16 @@
 # Invoice email
 
-Every paid web booking emails the customer a simplified tax invoice. Sent over
+> **Now a booking confirmation, not a tax invoice (Sept 2026).** StreamPay issues
+> the tax invoice for every payment: numbered in sequence, ZATCA-compliant, with
+> its QR code. One tax document per sale, so this email no longer carries an
+> invoice number, VAT lines or the VAT number. It keeps the appointment, tickets,
+> items, discounts and total paid, says prices include VAT, and links to
+> StreamPay's invoice ("View your tax invoice", `payments.raw.invoiceUrl`, read
+> at settle). StreamPay's PDF is attached when it can be fetched
+> (docs/PAYMENTS-STATUS.md, "The PDF is attached"); otherwise the email says so.
+> Sections below that describe VAT figures or `INV-` numbers are history.
+
+Every paid web booking emails the customer a booking confirmation. Sent over
 SMTP, rendered server-side, in the customer's own language.
 
 This closes the "email/SMS" gap that `docs/BOOKING-V2.md` §1 listed as out of
@@ -63,8 +73,9 @@ customer was charged today.
 KSA prices are VAT-inclusive, so the invoice *reports* the VAT already inside the
 total; it never adds any. Per guest, `subtotal + VAT = total`. A group is **one**
 invoice listing both guests — one card was charged once — and the guests' totals
-add back up to the bill. See `docs/BOOKING-V2.md` "The discount maths" for why
-the two guests' VAT can differ by a halala from VAT on the whole bill.
+add back up to the bill. The bill's VAT is worked out once, on the whole total,
+to match StreamPay's invoice for the same sale; see `docs/BOOKING-V2.md` "The
+discount maths" for the halala that summing each guest's VAT would drift.
 
 Invoice numbers are `INV-YYYYMM-XXXXX`, derived from the issue month and the
 anchor booking's code. Deterministic, so a reprint is byte-identical, and unique
@@ -241,15 +252,9 @@ through `notify()` would mean a real notify driver sends the card twice — the
 same collision described in §7. `lib/giftcard/email.ts` owns email delivery for
 gift cards; `notify()` owns WhatsApp, and is still log-only.
 
-Two gaps worth knowing:
-
-- **`buyerEmail` is never collected.** The gift card builder asks for the
-  recipient's email and phone, not the buyer's, so the buyer receipt is wired but
-  dormant — `sendGiftCardEmails` reports `buyer: "skipped"`. Add a buyer email
-  field to `GiftSelection` and the builder form to switch it on.
-- **A phone-only purchase delivers nothing.** `recipientEmail` and
-  `recipientPhone` are individually optional (one is required). With only a
-  phone, delivery falls to `notify()` on WhatsApp, which still just prints.
+Both addresses are optional on the builder. With neither, nothing is emailed:
+the buyer shares the card herself from the success screen (WhatsApp or the
+copied link), and the code is on that screen.
 
 ### The card image
 

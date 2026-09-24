@@ -149,7 +149,7 @@ export default function ChatWidget() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed bottom-5 end-5 z-40 rounded-full bg-red-grad px-6 py-3.5 text-sm font-bold text-white shadow-[0_18px_40px_rgba(0,0,0,0.22)] transition-opacity hover:opacity-90"
+        className="fixed bottom-5 end-5 z-40 [body:has([data-pay-bar])_&]:bottom-[calc(6.5rem+env(safe-area-inset-bottom,0px))] rounded-full bg-red-grad px-6 py-3.5 text-sm font-bold text-white shadow-[0_18px_40px_rgba(0,0,0,0.22)] transition-opacity hover:opacity-90"
       >
         {t.open}
       </button>
