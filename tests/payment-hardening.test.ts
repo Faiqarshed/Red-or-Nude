@@ -4,22 +4,23 @@
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHmac, randomUUID } from "node:crypto";
-import { eq, inArray, sql } from "drizzle-orm";
+import { eq, inArray, like, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, customers, giftCardValues, giftCards, loyaltyTxns, payments, refunds, stations } from "@/lib/db/schema";
+import { addons, bookings, customers, giftCardValues, giftCards, loyaltyTxns, payments, refunds, stations, streampayIds } from "@/lib/db/schema";
 import { createBookings, heldState, releaseWebHold } from "@/lib/bookings";
-import { getDayAvailability, utcToLocalDate, utcToLocalTime } from "@/lib/availability";
+import { getDayAvailability, stationFreeWindow, utcToLocalDate, utcToLocalTime } from "@/lib/availability";
 import { settleBookingPayment } from "@/lib/payments/confirm";
-import { CHAIR_CREDIT_MAX_HALALAS, settlePurchase, startPurchase, type GiftIntent, type TreatIntent } from "@/lib/payments/purchase";
+import { CHAIR_CREDIT_MAX_HALALAS, redeliver, settlePurchase, startPurchase, type GiftIntent, type TreatIntent } from "@/lib/payments/purchase";
 import { compareWithGateway, reconcilePayments } from "@/lib/payments/reconcile";
-import { settlePayment } from "@/lib/payments/settle";
+import { revivePayment, settlePayment } from "@/lib/payments/settle";
+import { refundBookings } from "@/lib/payments/refund";
 import { fakeDriver } from "@/lib/payments/fake";
-import { streampayDriver } from "@/lib/payments/streampay";
+import { archiveRetiredProducts, RETIRE_AFTER_MIN, retireProduct, streampayDriver, syncProduct, syncProductQuietly } from "@/lib/payments/streampay";
 import { giftCardLine } from "@/lib/payments/lines";
 import { POST as webhook } from "@/app/api/payments/streampay/webhook/route";
 import { POST as giftCards_ } from "@/app/api/gift-cards/route";
 import type { Verdict } from "@/lib/payments";
-import { FUTURE, TEST_PHONE, fixtures, reset, type Fixtures } from "./helpers";
+import { FUTURE, TEST_PHONE, fixtures, reset, taggedAddon, type Fixtures } from "./helpers";
 
 const TAG = "hardening-test";
 let f: Fixtures;
@@ -174,6 +175,133 @@ describe("streampay verify and refund", () => {
       .mockResolvedValueOnce(reply({ id: "r", amount_refunded: "75.00", refunded_at: new Date().toISOString() }));
     const out = await streampayDriver.refund({ raw: { paymentId: "p" }, amountHalalas: 7500 });
     expect(out.status).toBe("refunded");
+  });
+
+  it("#18b: makes a product deleted in their dashboard again, and the checkout still opens", async () => {
+    const key = `svc-under-test:${randomUUID()}`;
+    const line = { key, name: "Gel", priceHalalas: 5000, qty: 1 };
+    const input = {
+      ref: randomUUID(), amountHalalas: 5000, lines: [line], discounts: [], title: "t", payer: {},
+      expiresAt: new Date(Date.now() + 600_000), returnUrl: "https://example.test/r",
+    };
+    let product = "prod-old";
+    const deleted = new Set<string>();
+    const calls: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const path = String(url).split("/api/v2")[1];
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${path}`);
+      if (method === "POST" && path === "/products") return reply({ id: product, prices: [{ id: "price", is_active: true }] });
+      if (method === "GET" && path.startsWith("/products/")) {
+        return deleted.has(path.slice(10)) ? new Response("{}", { status: 404 }) : reply({ is_active: true });
+      }
+      if (method === "POST" && path === "/payment_links") {
+        const used = JSON.parse(String(init?.body)).items[0].product_id;
+        return deleted.has(used)
+          ? new Response(JSON.stringify({ error: { code: "INVALID_PARAMETERS" } }), { status: 422 })
+          : reply({ id: "link", url: "https://pay.test/l", status: "ACTIVE", amount_in_smallest_unit: 5000 });
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    expect((await streampayDriver.charge(input)).status).toBe("pending");
+    // Deleted in their dashboard; our table still has it.
+    deleted.add("prod-old");
+    product = "prod-new";
+    calls.length = 0;
+
+    expect((await streampayDriver.charge({ ...input, ref: randomUUID() })).status).toBe("pending");
+    expect(calls).toEqual([
+      "POST /payment_links",
+      "GET /products/prod-old",
+      "POST /products",
+      "POST /payment_links",
+    ]);
+    await db.delete(streampayIds).where(like(streampayIds.key, `%:${key}@%`));
+  });
+
+  /** StreamPay's products endpoints, answering with a fresh id per product made. */
+  function productsApi() {
+    const made: string[] = [];
+    const archived: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const path = String(url).split("/api/v2")[1];
+      if (init?.method === "POST" && path === "/products") {
+        made.push(randomUUID());
+        return reply({ id: made.at(-1), prices: [] });
+      }
+      if (init?.method === "PUT" && JSON.parse(String(init.body)).is_active === false) {
+        archived.push(path.slice("/products/".length));
+        return reply({});
+      }
+      throw new Error(`unexpected ${init?.method} ${path}`);
+    });
+    return { made, archived };
+  }
+
+  async function asStreampay(key: string, run: () => Promise<void>) {
+    const was = env.PAYMENT_DRIVER;
+    env.PAYMENT_DRIVER = "streampay";
+    try {
+      await run();
+    } finally {
+      env.PAYMENT_DRIVER = was;
+      await db.delete(streampayIds).where(like(streampayIds.key, `%:${key}@%`));
+    }
+  }
+
+  /** Every retire scheduled so far, as if the hour had passed. */
+  const anHourLater = () =>
+    db.update(streampayIds).set({ createdAt: ago(RETIRE_AFTER_MIN + 1) }).where(like(streampayIds.key, "%:retire:%"));
+
+  it("a new price is a new product: open checkouts keep the old one for an hour, then it is archived", async () => {
+    const key = `svc-under-test:${randomUUID()}`;
+    await asStreampay(key, async () => {
+      const { made, archived } = productsApi();
+      await syncProduct(key, { name: "Gel", priceHalalas: 5000 });
+      // The salon changes the price.
+      await syncProductQuietly(key, { name: "Gel", priceHalalas: 6000, active: true });
+      expect(made).toHaveLength(2);
+
+      // A checkout at the old price still gets the old product; new ones the new.
+      expect(await syncProduct(key, { name: "Gel", priceHalalas: 5000 })).toBe(made[0]);
+      expect(await syncProduct(key, { name: "Gel", priceHalalas: 6000 })).toBe(made[1]);
+      await archiveRetiredProducts();
+      expect(archived).not.toContain(made[0]);
+
+      await anHourLater();
+      await archiveRetiredProducts();
+      expect(archived).toContain(made[0]);
+      expect(archived).not.toContain(made[1]);
+      expect(await syncProduct(key, { name: "Gel", priceHalalas: 6000 })).toBe(made[1]);
+    });
+  });
+
+  it("an item switched off is archived after the hour, unless it is switched on again first", async () => {
+    const key = `svc-under-test:${randomUUID()}`;
+    await asStreampay(key, async () => {
+      const { made, archived } = productsApi();
+      const gel = { name: "Gel", priceHalalas: 5000 };
+      await syncProduct(key, gel);
+
+      await retireProduct(key);
+      await syncProductQuietly(key, { ...gel, active: true });
+      await anHourLater();
+      await archiveRetiredProducts();
+      expect(archived).not.toContain(made[0]);
+
+      await retireProduct(key);
+      await anHourLater();
+      await archiveRetiredProducts();
+      expect(archived).toContain(made[0]);
+    });
+  });
+
+  it("never sends 'the rest' of a payment partly refunded in their dashboard", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(reply({ amount_refunded: "20.00" }));
+    const out = await streampayDriver.refund({ raw: { paymentId: "p" }, amountHalalas: 7500 });
+    expect(out.status).toBe("failed");
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -425,5 +553,129 @@ describe("#5 + #22 the daily comparison with StreamPay", () => {
 
     expect((await rowsOf(ref))[0].status).toBe("refunded");
     expect(out.unknown.map((u) => u.amount_halalas)).toEqual([12000]);
+  });
+});
+
+describe("after the audit", () => {
+  afterAll(async () => {
+    const g = await fixtures();
+    await reset(g.branchA, g.branchB);
+    await db.delete(addons).where(like(addons.image, `${TAG}%`));
+  });
+
+  it("H1: delivers a chair add-on into time a lapsed hold was keeping, instead of refunding it", async () => {
+    // Her visit, then someone's abandoned hold straight after it on the same chair.
+    const { booking } = await heldWithCheckout();
+    await db.update(bookings).set({ status: "confirmed" }).where(eq(bookings.id, booking.id));
+    await db.update(payments).set({ status: "paid" }).where(eq(payments.bookingId, booking.id));
+    const next = await createBookings({
+      branchId: f.branchA,
+      startsAt: booking.endsAt.toISOString(),
+      customer: { phone: "0500000999" },
+      source: "web",
+      status: "pending",
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+    });
+    if (!next.ok) throw new Error(next.error);
+    await db.update(bookings).set({ stationId: booking.stationId, createdAt: ago(20) }).where(eq(bookings.id, next.bookings[0].id));
+
+    // The chair's screen offers the time...
+    expect(await stationFreeWindow(f.branchA, booking.stationId!, booking.endsAt)).toBeGreaterThanOrEqual(15);
+    // ...so paying for it must get it.
+    const addonId = await taggedAddon(TAG, "extension", true, { priceHalalas: 5000, durationMin: 15 });
+    const intent: TreatIntent = {
+      kind: "treat",
+      bookingId: booking.id,
+      items: [{ addonId, name: { ar: "x", en: "x" }, priceHalalas: 5000, durationMin: 15 }],
+    };
+    const ref = randomUUID();
+    await db.insert(payments).values({ provider: "fake", providerRef: ref, method: "card", amountHalalas: 5000, status: "pending", raw: { intent } });
+
+    const out = await settlePurchase(ref, paid(5000));
+    expect(out.ok && "delivered" in out).toBe(true);
+    expect((await rowsOf(ref))[0].status).toBe("paid");
+    expect((await bookingOf(next.bookings[0].id)).status).toBe("cancelled");
+  });
+
+  it("issues one gift card when two settle runs deliver the same payment at once", async () => {
+    const intent: GiftIntent = {
+      kind: "gift_card", amountSar: 75, designId: null, buyerName: TAG, buyerEmail: null,
+      recipientName: randomUUID(), recipientEmail: null, message: null, lang: "en",
+    };
+    const ref = randomUUID();
+    await db.insert(payments).values({
+      provider: "fake", providerRef: ref, method: "card", amountHalalas: 7500, status: "paid",
+      raw: { intent, paymentId: "pay-under-test" }, updatedAt: ago(20),
+    });
+
+    expect(await Promise.all([redeliver(ref), redeliver(ref)])).toEqual([true, true]);
+    const cards = await db.select().from(giftCards).where(eq(giftCards.recipientName, intent.recipientName!));
+    expect(cards).toHaveLength(1);
+    expect((await rowsOf(ref))[0].giftCardId).toBe(cards[0].id);
+  });
+
+  /** A written-off attempt StreamPay now says is paid, and a newer attempt still open. */
+  async function oldPaidNewerOpen(newer: Verdict) {
+    const { booking, ref: old } = await heldWithCheckout();
+    await db.update(payments).set({ status: "failed", createdAt: ago(12) }).where(eq(payments.providerRef, old));
+    const next = randomUUID();
+    await db.insert(payments).values({
+      bookingId: booking.id, provider: "fake", providerRef: next, method: "card", amountHalalas: booking.totalHalalas,
+      status: "pending", raw: { linkId: "link-newer", url: "https://example.test/pay2" },
+    });
+    vi.spyOn(fakeDriver, "verify").mockImplementation(async (raw) =>
+      (raw as { linkId?: string }).linkId === "link-newer" ? newer : paid(booking.totalHalalas),
+    );
+    const cancel = vi.spyOn(fakeDriver, "cancel");
+    expect(await revivePayment(old)).toBe(true);
+    return { booking, old, next, cancel };
+  }
+
+  it("#3: a late payment takes the place of a newer checkout nobody paid on", async () => {
+    const { booking, old, next, cancel } = await oldPaidNewerOpen({ status: "failed" });
+    // The newer link is switched off, so she cannot pay twice...
+    expect(cancel).toHaveBeenCalledWith(expect.objectContaining({ linkId: "link-newer" }));
+    expect((await rowsOf(next))[0].status).toBe("failed");
+    // ...and the money she did pay confirms her.
+    expect((await rowsOf(old))[0].status).toBe("paid");
+    expect((await bookingOf(booking.id)).status).toBe("confirmed");
+    // Her page, still polling the newer checkout, shows her tickets, not a decline.
+    expect((await settlePayment(next)).status).toBe("paid");
+  });
+
+  it("#3: leaves both to a person when the newer checkout may be paid too", async () => {
+    const { booking, old, next } = await oldPaidNewerOpen({ status: "pending" });
+    expect((await rowsOf(next))[0].status).toBe("pending");
+    const [row] = await rowsOf(old);
+    expect(row.status).toBe("failed");
+    expect((row.raw as { paidOnOldAttempt?: number }).paidOnOldAttempt).toBe(booking.totalHalalas);
+  });
+
+  it("never refunds part of a bill", async () => {
+    const held = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE).toISOString(),
+      customer: { phone: TEST_PHONE },
+      source: "web",
+      status: "pending",
+      members: [{ serviceId: f.svcA.id, addonIds: [] }, { serviceId: f.svcA.id, addonIds: [] }],
+    });
+    if (!held.ok) throw new Error(held.error);
+    const guests = await db.select().from(bookings).where(inArray(bookings.id, held.bookings.map((b) => b.id)));
+    const ref = randomUUID();
+    await db.insert(payments).values(
+      guests.map((g) => ({
+        bookingId: g.id, provider: "fake", providerRef: ref, method: "card" as const,
+        amountHalalas: g.totalHalalas, status: "paid" as const, raw: { paymentId: "pay-under-test" },
+      })),
+    );
+    const refund = vi.spyOn(fakeDriver, "refund");
+
+    expect(await refundBookings([guests[0].id], "customer-cancelled")).toEqual({ ok: false });
+    expect(refund).not.toHaveBeenCalled();
+    expect((await rowsOf(ref)).map((r) => r.status)).toEqual(["paid", "paid"]);
+
+    expect((await refundBookings(guests.map((g) => g.id), "customer-cancelled")).ok).toBe(true);
+    expect((await rowsOf(ref)).map((r) => r.status)).toEqual(["refunded", "refunded"]);
   });
 });

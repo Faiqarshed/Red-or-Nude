@@ -108,7 +108,11 @@ export async function reconcilePayments(): Promise<ReconcileResult> {
   `);
   for (const { ref } of writtenOff) {
     if (Date.now() - started > BUDGET_MS) break;
-    if (await revivePayment(ref)) out.paid++;
+    try {
+      if (await revivePayment(ref)) out.paid++;
+    } catch (err) {
+      console.error(`[reconcile] could not re-check written-off ${ref}`, err);
+    }
     await db
       .update(payments)
       .set({ raw: mergeRaw(payments.raw, { checkedAt: new Date().toISOString() }) })
@@ -188,10 +192,11 @@ export async function paymentProblems() {
       group by provider_ref
     `),
     // A small chair purchase we could not deliver: owed as credit, for the desk
-    // until the wallet ships. A week in the report is enough to act on it.
+    // until the wallet ships. Listed until then, however old: nothing records
+    // that the desk gave it, so dropping it would forget money she is owed.
     db.execute<Problem>(sql`
       select provider_ref as ref, amount_halalas, created_at::text as created_at
-      from payments where raw ? 'owedCredit' and updated_at > now() - interval '7 days'
+      from payments where raw ? 'owedCredit'
     `),
   ]);
   return {
@@ -233,7 +238,9 @@ export async function compareWithGateway(now = new Date()): Promise<{ unknown: P
         if (p.state !== "other") unknown.push({ ref: `StreamPay ${p.id}`, amount_halalas: p.amountHalalas, created_at: "" });
         continue;
       }
-      if ((p.state === "refunded" || p.state === "partly-refunded") && mine.status === "paid") {
+      // Full refunds only. A partial one from their dashboard is not ours to act
+      // on: its webhook already told the owner, once, rather than every run.
+      if (p.state === "refunded" && mine.status === "paid") {
         await refundedOutside(mine.ref);
       } else if (p.state === "paid" && mine.amount !== p.amountHalalas) {
         different.push({ ref: mine.ref, amount_halalas: p.amountHalalas, created_at: `ours ${formatSAR(mine.amount)} SAR` });
@@ -254,7 +261,7 @@ export async function reportPaymentProblems(): Promise<number> {
     ["Paid, nothing delivered, not refunded — refund in StreamPay", p.undelivered],
     ["No answer from StreamPay for over an hour — check in StreamPay", p.stuck],
     ["Paid twice for one booking (this is the older payment) — refund it in StreamPay", p.oldAttempts],
-    ["Chair purchase not delivered, owed as credit — give it at her next visit", p.owedCredit],
+    ["Chair purchase not delivered, owed as credit (she was emailed) — take it off her next bill", p.owedCredit],
     ["Paid at StreamPay, not recorded by us — check it in StreamPay", gateway.unknown],
     ["StreamPay has a different amount than we recorded", gateway.different],
   ];

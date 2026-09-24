@@ -679,6 +679,25 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
 }
 
 /**
+ * A transaction that claims a chair outside createBookings — a reschedule, a
+ * paid add-on that lengthens her visit — with lapsed holds at the branch let go
+ * first, the same way createBookings does it.
+ *
+ * The availability screens already show a lapsed hold as free
+ * (lib/availability.ts), but reserveStations and bookings_station_no_overlap
+ * count it until it is swept. Without the sweep, a slot shown free was refused,
+ * and at the chair that meant after she had paid for it.
+ */
+export async function withLapsedHoldsReleased<T>(branchId: string, work: (tx: Tx) => Promise<T>): Promise<T> {
+  const { booking_hold_min: holdMin } = await getSettings(["booking_hold_min"]);
+  await settleLapsedCheckouts([branchId], holdMin);
+  return db.transaction(async (tx) => {
+    await sweepExpiredHolds(tx, branchId, holdMin);
+    return work(tx);
+  });
+}
+
+/**
  * Ask StreamPay about the lapsed holds sweepExpiredHolds is about to release
  * that have a checkout past its pay window. Paid: settle confirms her, and the
  * chair stays hers. Not paid: settle marks it failed, and the sweep lets it go.
@@ -1403,7 +1422,7 @@ export async function rescheduleBooking(input: {
   const endsAt = new Date(input.startsAt.getTime() + duration);
 
   try {
-    const moved = await db.transaction(async (tx) => {
+    const moved = await withLapsedHoldsReleased(booking.branchId, async (tx) => {
       // Claim and move in one transaction, so nobody can take the target chair
       // between the check and the update. Its own chair is fair game — hence the
       // ignore id, or a booking would see itself as the conflict.

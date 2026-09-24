@@ -29,6 +29,7 @@ import { allocateTickets } from "@/lib/bookings";
 import { utcToLocalDate } from "@/lib/availability";
 import { notify } from "@/lib/notify";
 import { sendBookingInvoice } from "@/lib/invoice/send";
+import { afterResponse } from "@/lib/after-response";
 import { countPromoUse } from "@/lib/promo";
 import { awardPoints, loyaltyRules } from "@/lib/loyalty";
 import { pointsEarned } from "@/lib/rewards";
@@ -332,6 +333,11 @@ export async function settleBookingPayment(ref: string, known?: Verdict): Promis
       : { ok: false, error: "expired" };
   }
   if (rows.some((r) => r.status !== "pending")) {
+    // Confirmed by another payment for the same booking (a late one, revived,
+    // that switched this checkout off): her tickets, not a decline.
+    if (members.every((m) => m.ticketNo && m.status !== "cancelled" && m.status !== "no_show")) {
+      return { ok: true, tickets: await ticketsOf(members), totalHalalas: sum(members) };
+    }
     return { ok: false, error: rows.some((r) => r.status === "failed") ? "payment-declined" : "expired" };
   }
 
@@ -491,10 +497,12 @@ export async function settleBookingPayment(ref: string, known?: Verdict): Promis
     // log-only. sendBookingInvoice is the booking confirmation email, linking
     // StreamPay's tax invoice, and delivers for real over SMTP.
     //
-    // Both awaited: on a serverless host the function is frozen the moment the
-    // response is returned. Neither can fail the payment.
-    await sendConfirmations(members, tickets);
-    await sendBookingInvoice(members.map((m) => m.id));
+    // After her tickets are on screen, not before: the invoice waits up to 20 s
+    // for StreamPay's PDF (lib/after-response.ts). Neither can fail the payment.
+    await afterResponse(`receipts for ${ref}`, async () => {
+      await sendConfirmations(members, tickets);
+      await sendBookingInvoice(members.map((m) => m.id));
+    });
   } catch (err) {
     // She is booked. What failed is a chair label or a receipt, so it is logged
     // and the confirmation still goes back — rebuilt if it had not been yet.

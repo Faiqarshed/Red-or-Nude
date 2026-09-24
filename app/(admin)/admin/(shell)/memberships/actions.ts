@@ -23,7 +23,7 @@ import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
 import { reorderBySort } from "@/lib/admin/reorder";
 import { DESC_MAX, NAME_MAX } from "@/lib/admin/validate";
-import { setProductActive, syncProductQuietly } from "@/lib/payments/streampay";
+import { retireProduct, syncProductQuietly } from "@/lib/payments/streampay";
 import { productName } from "@/lib/payments/lines";
 
 /** Mirror a saved pack to StreamPay. Never fails the save — see syncProductQuietly. */
@@ -177,8 +177,9 @@ export async function deletePack(id: string): Promise<ActionResult> {
 
   const [gone] = await db.delete(packs).where(eq(packs.id, id)).returning({ name: packs.name });
   await recordAudit(actor, { action: "delete", entity: "packs", entityId: id, label: gone?.name });
-  // Archived there rather than deleted: past invoices still name it.
-  await setProductActive(`product:pack:${id}`, false);
+  // Archived there after an hour (RETIRE_AFTER_MIN), not deleted: a checkout
+  // already open can still be paid, and past invoices still name it.
+  await retireProduct(`product:pack:${id}`);
   revalidateAll();
   return { ok: true, id };
 }

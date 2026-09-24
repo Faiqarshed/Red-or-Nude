@@ -76,15 +76,15 @@ export async function POST(request: Request) {
         .where(sql`${payments.providerRef} = ${ref} and ${payments.raw} ->> 'linkId' is null`);
     }
 
+    // Already marked failed, and StreamPay says it succeeded: the money came in
+    // after we wrote it off. Revived now rather than at the next job run. Asked
+    // first: settle would answer a failed row with the tickets of the attempt
+    // that did confirm her, and this money would go unnoticed.
+    if (await revivePayment(ref)) return NextResponse.json({ ok: true, status: "revived" });
+
     const settled = await settlePayment(ref);
     if (settled.status === "pending" && settled.unverified) {
       return NextResponse.json({ error: "unverified" }, { status: 503 });
-    }
-    // Already marked failed, and StreamPay says it succeeded: the money came in
-    // after we wrote it off. Revive it now rather than at the next job run.
-    if (settled.status === "failed" && settled.error === "payment-declined") {
-      const paid = await revivePayment(ref);
-      return NextResponse.json({ ok: true, status: paid ? "revived" : settled.status });
     }
     return NextResponse.json({ ok: true, status: settled.status });
   } catch (err) {

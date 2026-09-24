@@ -8,7 +8,7 @@
 // back.
 
 import "server-only";
-import { and, eq, inArray, type SQL } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers, giftCards, payments, refunds } from "@/lib/db/schema";
 import { sendMail } from "@/lib/email";
@@ -65,6 +65,24 @@ async function refundPaid(which: SQL, reason: string, label: string): Promise<Re
     // A free booking was "paid" at zero and never reached a gateway.
     if (total === 0) return { ok: false };
 
+    // No partial refunds: a refund is always the whole bill, every guest on it.
+    // Asked to refund part of one (a guest whose friend is not being refunded),
+    // nothing is sent and the owner decides.
+    const refs = [...new Set(rows.map((r) => r.providerRef))];
+    const [{ onBill }] = await db
+      .select({ onBill: sql<number>`count(*)::int` })
+      .from(payments)
+      .where(and(inArray(payments.providerRef, refs as string[]), eq(payments.status, "paid")));
+    if (refs.length !== 1 || onBill !== rows.length) {
+      await alertOwner(
+        `partial-refund:${label}`,
+        "A refund was not sent: it would have been partial",
+        `Refunding ${label} (${reason}) would send back only part of payment ${refs.join(", ")}. ` +
+          "Refunds are always whole. Nothing was sent; settle it in StreamPay if money is owed.",
+      );
+      return { ok: false };
+    }
+
     // Marked first, so the PAYMENT_REFUNDED webhook this refund sets off is not
     // taken for a refund made outside the app (refundedOutside, below).
     await db
@@ -118,37 +136,62 @@ async function refundPaid(which: SQL, reason: string, label: string): Promise<Re
 /** Refunds the system made on its own — the customer did not press anything. */
 const AUTOMATIC = new Set(["late-payment", "not-delivered"]);
 
-type RefundedRow = { raw: unknown; bookingId: string | null; treatBookingId: string | null };
+export type RefundedRow = { raw: unknown; bookingId: string | null; treatBookingId: string | null };
 
 /** Never throws: the money has already gone back; this only says so. */
 async function emailRefund(row: RefundedRow, halalas: number): Promise<void> {
+  const amount = formatSAR(halalas);
+  await tellCustomer(row, "refund", {
+    en: [
+      "Your payment has been refunded — Red or Nude",
+      `We could not complete your order, so your payment of ${amount} SAR has been refunded in full. ` +
+        "Card refunds usually reach your account within 5–14 working days, depending on your bank.",
+    ],
+    ar: [
+      "تم استرداد مبلغك — Red or Nude",
+      `لم نتمكن من إتمام طلبك، لذلك تم استرداد مبلغ ${amount} ريال بالكامل. ` +
+        "يصل المبلغ المسترد عادةً إلى حسابك خلال ٥–١٤ يوم عمل حسب البنك.",
+    ],
+  });
+}
+
+/**
+ * A small chair purchase that could not be delivered, kept as credit rather
+ * than refunded to her card (lib/payments/purchase.ts refundOrCredit). Until the
+ * wallet ships the desk gives it, so she is told to ask. Never throws.
+ */
+export async function emailCreditOwed(row: RefundedRow, halalas: number): Promise<void> {
+  const amount = formatSAR(halalas);
+  await tellCustomer(row, "credit-owed", {
+    en: [
+      "Credit for your next visit — Red or Nude",
+      `We could not complete your order at the chair. The ${amount} SAR you paid is kept as credit ` +
+        "for your next visit: the front desk will take it off your bill.",
+    ],
+    ar: [
+      "رصيد لزيارتك القادمة — Red or Nude",
+      `لم نتمكن من إتمام طلبك عند المقعد. المبلغ المدفوع (${amount} ريال) محفوظ رصيدًا لزيارتك القادمة، ` +
+        "ويخصمه الاستقبال من فاتورتك.",
+    ],
+  });
+}
+
+async function tellCustomer(row: RefundedRow, tag: string, text: Record<"ar" | "en", [string, string]>): Promise<void> {
   try {
     const to = await refundRecipient(row);
     if (!to) return;
-    const amount = formatSAR(halalas);
-    const [subject, text] =
-      to.lang === "en"
-        ? [
-            "Your payment has been refunded — Red or Nude",
-            `We could not complete your order, so your payment of ${amount} SAR has been refunded in full. ` +
-              "Card refunds usually reach your account within 5–14 working days, depending on your bank.",
-          ]
-        : [
-            "تم استرداد مبلغك — Red or Nude",
-            `لم نتمكن من إتمام طلبك، لذلك تم استرداد مبلغ ${amount} ريال بالكامل. ` +
-              "يصل المبلغ المسترد عادةً إلى حسابك خلال ٥–١٤ يوم عمل حسب البنك.",
-          ];
+    const [subject, body] = text[to.lang];
     const dir = to.lang === "en" ? "ltr" : "rtl";
     await sendMail({
       to: to.email,
       subject,
-      text,
-      html: `<p dir="${dir}">${esc(text)}</p>`,
+      text: body,
+      html: `<p dir="${dir}">${esc(body)}</p>`,
       replyTo: process.env.MAIL_REPLY_TO?.trim() || null,
-      tags: ["refund"],
+      tags: [tag],
     });
   } catch (err) {
-    console.error("[payments] refund email failed", err);
+    console.error(`[payments] ${tag} email failed`, err);
   }
 }
 

@@ -5,7 +5,7 @@ import "server-only";
 // the settle functions behind it are idempotent, so arriving three times for
 // the same payment is fine.
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { payments } from "@/lib/db/schema";
 import { formatSAR } from "@/lib/money";
@@ -88,27 +88,73 @@ export async function revivePayment(ref: string): Promise<boolean> {
     `Payment ${ref}: ${formatSAR(verdict.amountHalalas)} SAR arrived after it was marked failed. ` +
       "It is being confirmed now, or refunded automatically if that is no longer possible.",
   );
-  try {
-    await db
-      .update(payments)
-      .set({ status: "pending", updatedAt: new Date() })
-      .where(and(eq(payments.providerRef, ref), eq(payments.status, "failed")));
-  } catch (err) {
-    if (!isLiveAttemptConflict(err)) throw err;
-    // She paid for this booking again since, on a newer attempt. Two payments
-    // for one booking: refunding the right one is a person's job.
+  // A newer attempt for the same booking holds payments_booking_live_unique.
+  // Still only a checkout, it is switched off and this payment takes its place:
+  // leaving it open was a second way to pay for one booking.
+  const bookingIds = rows.map((r) => r.bookingId).filter((id): id is string => Boolean(id));
+  const reopened = (await reopen(ref)) || (bookingIds.length > 0 && (await retireOpenAttempt(ref, bookingIds)) && (await reopen(ref)));
+  if (!reopened) {
+    // The newer attempt is paid, or may still be: two payments for one
+    // booking, and refunding the right one is a person's job.
     await db
       .update(payments)
       .set({ raw: mergeRaw(payments.raw, { paidOnOldAttempt: verdict.amountHalalas }) })
       .where(eq(payments.providerRef, ref));
     await alertOwner(
       `old-attempt:${ref}`,
-      "A booking was paid twice",
-      `Payment ${ref} (${formatSAR(verdict.amountHalalas)} SAR) came through after a newer payment for the same booking. Refund this one in StreamPay.`,
+      "A booking may have been paid twice",
+      `Payment ${ref} (${formatSAR(verdict.amountHalalas)} SAR) came through while a newer payment for the same booking was paid or still in progress. Check both in StreamPay and refund one.`,
     );
     return true;
   }
   if (rows[0].bookingId) await settleBookingPayment(ref, verdict);
   else await settlePurchase(ref, verdict);
+  return true;
+}
+
+/** failed → pending. False when another live attempt for the booking is in the way. */
+async function reopen(ref: string): Promise<boolean> {
+  try {
+    await db
+      .update(payments)
+      .set({ status: "pending", updatedAt: new Date() })
+      .where(and(eq(payments.providerRef, ref), eq(payments.status, "failed")));
+    return true;
+  } catch (err) {
+    if (!isLiveAttemptConflict(err)) throw err;
+    return false;
+  }
+}
+
+/**
+ * Take the booking's other live attempt out of the way, if it is only a
+ * checkout nobody paid on. Its link is switched off first, so she cannot pay
+ * on it between the question and the answer; it is marked failed only when
+ * StreamPay then says nothing is paid or waiting on it. True when it is gone.
+ */
+async function retireOpenAttempt(ref: string, bookingIds: string[]): Promise<boolean> {
+  const live = await db
+    .select()
+    .from(payments)
+    .where(
+      and(
+        inArray(payments.bookingId, bookingIds),
+        inArray(payments.status, ["pending", "paid"]),
+        ne(payments.providerRef, ref),
+      ),
+    );
+  if (live.some((r) => r.status === "paid")) return false;
+
+  const driver = getDriver();
+  for (const other of new Set(live.map((r) => r.providerRef))) {
+    const raw = live.find((r) => r.providerRef === other)!.raw;
+    await driver.cancel(raw);
+    const verdict = await driver.verify(raw).catch(() => null);
+    if (verdict?.status !== "failed") return false;
+    await db
+      .update(payments)
+      .set({ status: "failed", updatedAt: new Date() })
+      .where(and(eq(payments.providerRef, other!), eq(payments.status, "pending")));
+  }
   return true;
 }

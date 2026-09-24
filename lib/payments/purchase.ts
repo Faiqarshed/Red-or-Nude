@@ -14,16 +14,18 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
-import { db } from "@/lib/db";
+import { db, type Tx } from "@/lib/db";
 import { bookingAddons, bookings, giftCards, payments } from "@/lib/db/schema";
 import { reserveStations } from "@/lib/availability";
+import { withLapsedHoldsReleased } from "@/lib/bookings";
 import { issueGiftCard } from "@/lib/giftcards";
 import { sendGiftCardEmails } from "@/lib/giftcard/email";
 import { buyPack } from "@/lib/packs";
 import { sendMembershipEmail } from "@/lib/membership-email";
 import { sendVisitEmail } from "@/lib/visit-email";
 import { siteOrigin } from "@/lib/site";
-import { refundRef } from "./refund";
+import { afterResponse } from "@/lib/after-response";
+import { emailCreditOwed, refundRef } from "./refund";
 import { checkoutOf, getDriver, mergeRaw, PAY_WINDOW_MIN, type Checkout, type Line, type Payer, type Verdict } from "./index";
 
 export type GiftIntent = {
@@ -238,16 +240,7 @@ export async function settlePurchase(ref: string, known?: Verdict): Promise<Purc
     return { ok: false, error: "not-delivered" };
   }
 
-  let delivered: Delivered | null = null;
-  try {
-    delivered = await deliver(row.id, intent, row.amountHalalas, paidLate(row));
-  } catch (err) {
-    console.error(`[purchase] ${ref} (${intent.kind}) paid but not delivered`, err);
-    // The grant and its link to this row commit together, so the row is the
-    // truth: a step after them (an email, a notify) may be what threw.
-    const [fresh] = await db.select().from(payments).where(eq(payments.id, row.id)).limit(1);
-    if (fresh) delivered = await deliveredOf(fresh, intent);
-  }
+  const delivered = await deliverOnce(row.id, intent, row.amountHalalas, paidLate(row));
 
   if (!delivered) {
     const back = row.amountHalalas > 0 ? await refundOrCredit(ref, row.amountHalalas, intent) : true;
@@ -271,11 +264,14 @@ export const CHAIR_CREDIT_MAX_HALALAS = 1000;
 export async function refundOrCredit(ref: string, amountHalalas: number, intent: Intent): Promise<boolean> {
   if (intent.kind === "treat" && amountHalalas <= CHAIR_CREDIT_MAX_HALALAS) {
     // ponytail: the wallet is its own PR. Until it ships, the credit is marked
-    // here and listed in the daily report for the desk to settle.
-    await db
+    // here, she is told to ask the desk, and the daily report lists it until
+    // the wallet turns it into real credit. Marked once, so she is told once.
+    const [marked] = await db
       .update(payments)
       .set({ raw: mergeRaw(payments.raw, { owedCredit: amountHalalas }) })
-      .where(eq(payments.providerRef, ref));
+      .where(and(eq(payments.providerRef, ref), sql`not (${payments.raw} ? 'owedCredit')`))
+      .returning({ raw: payments.raw, bookingId: payments.bookingId, treatBookingId: payments.treatBookingId });
+    if (marked) await emailCreditOwed(marked, amountHalalas);
     return true;
   }
   return (await refundRef(ref, "not-delivered")).ok;
@@ -290,13 +286,24 @@ export async function redeliver(ref: string): Promise<boolean> {
   const [row] = await db.select().from(payments).where(eq(payments.providerRef, ref)).limit(1);
   const intent = (row?.raw as { intent?: Intent } | null)?.intent;
   if (!row || row.status !== "paid" || !intent) return false;
+  return (await deliverOnce(row.id, intent, row.amountHalalas, true)) !== null;
+}
+
+/**
+ * deliver, with the row as the final word. The grant and its link to the
+ * payment commit together, so the row says whether it was handed over: a step
+ * after them (an email) may be what threw, or a second delivery racing this one
+ * won and this one was rolled back. Either way she has it, and nothing is refunded.
+ */
+async function deliverOnce(paymentId: string, intent: Intent, amountHalalas: number, late: boolean): Promise<Delivered | null> {
   try {
-    return (await deliver(row.id, intent, row.amountHalalas, true)) !== null;
+    const delivered = await deliver(paymentId, intent, amountHalalas, late);
+    if (delivered) return delivered;
   } catch (err) {
-    console.error(`[purchase] ${ref} could not be delivered again`, err);
-    const [fresh] = await db.select().from(payments).where(eq(payments.id, row.id)).limit(1);
-    return Boolean(fresh && (await deliveredOf(fresh, intent)));
+    console.error(`[purchase] payment ${paymentId} (${intent.kind}) paid but not delivered`, err);
   }
+  const [fresh] = await db.select().from(payments).where(eq(payments.id, paymentId)).limit(1);
+  return fresh ? deliveredOf(fresh, intent) : null;
 }
 
 /** Settled after its pay window: StreamPay was down, the bank held it, or the job found it. */
@@ -320,7 +327,7 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number,
     // The emails: the card to the recipient's address, if she gave one, and
     // the buyer's receipt. The WhatsApp share is the buyer's own, on the
     // success screen. Neither can fail the sale.
-    await sendGiftCardEmails({
+    await afterResponse(`gift card emails for ${paymentId}`, () => sendGiftCardEmails({
       code: card.code,
       amountSar: intent.amountSar,
       senderName: intent.buyerName,
@@ -330,7 +337,7 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number,
       message: intent.message,
       expiresAt: card.expiresAt,
       lang: intent.lang,
-    });
+    }));
     return { kind: "gift_card", code: card.code };
   }
 
@@ -339,7 +346,7 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number,
     if (!bought.ok) return null;
     // What she bought, what each service holds, until when, and the tax invoice.
     // Never throws: the membership is hers whether or not the mail lands.
-    await sendMembershipEmail(bought.customerPackId, paymentId);
+    await afterResponse(`membership email for ${paymentId}`, () => sendMembershipEmail(bought.customerPackId, paymentId));
     return { kind: "pack", customerPackId: bought.customerPackId };
   }
 
@@ -356,19 +363,18 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number,
   // StreamPay down): nothing can be brought to a chair she has left. Not
   // delivered, so refundOrCredit gives the money back. A payment on time was
   // checked against her visit a moment ago, before she was charged.
-  if (late) {
-    const [visit] = await db
-      .select({ status: bookings.status, endsAt: bookings.endsAt })
-      .from(bookings)
-      .where(eq(bookings.id, intent.bookingId))
-      .limit(1);
-    if (!visit || ["completed", "cancelled", "no_show"].includes(visit.status) || visit.endsAt.getTime() < Date.now()) {
-      return null;
-    }
+  const [visit] = await db
+    .select({ branchId: bookings.branchId, status: bookings.status, endsAt: bookings.endsAt })
+    .from(bookings)
+    .where(eq(bookings.id, intent.bookingId))
+    .limit(1);
+  if (!visit) return null;
+  if (late && (["completed", "cancelled", "no_show"].includes(visit.status) || visit.endsAt.getTime() < Date.now())) {
+    return null;
   }
 
   const extraMin = intent.items.reduce((s, i) => s + i.durationMin, 0);
-  await db.transaction(async (tx) => {
+  const write = async (tx: Tx) => {
     if (extraMin > 0) {
       const [b] = await tx
         .select({ branchId: bookings.branchId, stationId: bookings.stationId, startsAt: bookings.startsAt, endsAt: bookings.endsAt })
@@ -398,9 +404,13 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number,
       .update(payments)
       .set({ treatBookingId: intent.bookingId, updatedAt: new Date() })
       .where(eq(payments.id, paymentId));
-  });
+  };
+  // Time added after her: a lapsed hold there reads as free on the chair's
+  // screen, so it is let go before the chair is claimed, not refused after she paid.
+  if (extraMin > 0) await withLapsedHoldsReleased(visit.branchId, write);
+  else await db.transaction(write);
   // Her receipt: what was added, the new finish time, the tax invoice. Never throws.
-  await sendVisitEmail(intent.bookingId, paymentId, intent.items);
+  await afterResponse(`visit email for ${paymentId}`, () => sendVisitEmail(intent.bookingId, paymentId, intent.items));
   return { kind: "treat", names: intent.items.map((i) => i.name) };
 }
 

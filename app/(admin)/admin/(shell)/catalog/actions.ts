@@ -18,7 +18,7 @@ import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
 import { reorderBySort } from "@/lib/admin/reorder";
 import { DESC_MAX, NAME_MAX } from "@/lib/admin/validate";
-import { setProductActive, syncProductQuietly } from "@/lib/payments/streampay";
+import { retireProduct, syncProductQuietly } from "@/lib/payments/streampay";
 import { productName } from "@/lib/payments/lines";
 
 /** The StreamPay product key for a catalogue row. Add-ons and upsells share a table. */
@@ -280,8 +280,9 @@ export async function deleteCatalogItem(kind: CatalogKind, id: string): Promise<
   }
 
   await recordAudit(actor, { action: "delete", entity: ENTITY[kind], entityId: id, label: gone?.name });
-  // Archived there rather than deleted: past invoices still name it.
-  await setProductActive(productKey(kind, id), false);
+  // Archived there after an hour (RETIRE_AFTER_MIN), not deleted: a checkout
+  // already open can still be paid, and past invoices still name it.
+  await retireProduct(productKey(kind, id));
   revalidateAll();
   return { ok: true, id };
 }

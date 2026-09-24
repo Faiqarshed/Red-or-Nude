@@ -10,7 +10,7 @@ import "server-only";
 // showed. charge() checks that before handing the link back, and refuses if not.
 
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, like, lt, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { streampayIds } from "@/lib/db/schema";
 import { toNationalDigits } from "@/lib/phone";
@@ -60,8 +60,18 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
     console.log(`[streampay:debug] ${method} ${path}`, body === undefined ? "" : JSON.stringify(body, null, 2));
     console.log(`[streampay:debug] ← ${res.status}`, text.slice(0, 4000));
   }
-  if (!res.ok) throw new Error(`[streampay] ${method} ${path} → ${res.status}: ${text.slice(0, 600)}`);
+  if (!res.ok) throw new StreamPayError(`[streampay] ${method} ${path} → ${res.status}: ${text.slice(0, 600)}`, res.status);
   return (text ? JSON.parse(text) : {}) as T;
+}
+
+/** StreamPay answered, with an error. `status` says whose: 4xx ours, 5xx theirs. */
+class StreamPayError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
 }
 
 /**
@@ -102,8 +112,15 @@ const sar = (halalas: number) => (halalas / 100).toFixed(2);
  * Ids belong to one StreamPay account. Keyed by it, a database moved from
  * sandbox to live keys (or to another account) recreates its products instead
  * of sending checkouts to ids the new account has never seen.
+ *
+ * The key alone, not the secret: rotating the secret is the same account, and
+ * must not orphan every product and customer we already made there.
  */
-const scoped = (key: string) => `${createHash("sha256").update(apiKey()).digest("hex").slice(0, 8)}:${key}`;
+const scoped = (key: string) => {
+  const account = process.env.STREAMPAY_API_KEY?.trim();
+  if (!account) throw new Error("[streampay] STREAMPAY_API_KEY is not set");
+  return `${createHash("sha256").update(account).digest("hex").slice(0, 8)}:${key}`;
+};
 
 async function lookup(key: string) {
   const [row] = await db.select().from(streampayIds).where(eq(streampayIds.key, scoped(key))).limit(1);
@@ -120,87 +137,121 @@ async function remember(key: string, streampayId: string, priceId: string | null
   return (await lookup(key))!.streampayId;
 }
 
+/**
+ * After StreamPay refused a checkout: which of the ids it used no longer work
+ * there? A product, coupon or customer deleted in their dashboard (404), or a
+ * product or coupon switched off (`is_active: false`). Those are forgotten, so
+ * the next use makes them again, and true is returned. Asked of StreamPay
+ * rather than read from the refusal, whose wording their docs do not give.
+ * An id it cannot answer about is left alone.
+ */
+async function forgetBroken(used: { key: string; path: string }[]): Promise<boolean> {
+  let forgot = false;
+  for (const { key, path } of used) {
+    const have = await lookup(key);
+    if (!have) continue;
+    let gone: boolean;
+    try {
+      gone = (await api<{ is_active?: boolean }>("GET", `/${path}/${have.streampayId}`)).is_active === false;
+    } catch (err) {
+      if (!(err instanceof StreamPayError && err.status === 404)) continue;
+      gone = true;
+    }
+    if (!gone) continue;
+    console.error(`[streampay] ${key} (${have.streampayId}) no longer works at StreamPay; making it again`);
+    await db.delete(streampayIds).where(eq(streampayIds.key, scoped(key)));
+    forgot = true;
+  }
+  return forgot;
+}
+
 // ------------------------------------------------------------------ products --
 
 type ProductDto = { id: string; prices?: { id: string; is_active: boolean }[] };
 
+type ProductVersion = { name: string; priceHalalas: number; vatExempt?: boolean };
+
 /**
- * Make StreamPay's copy of one of our catalogue items match, and return its id.
- *
- * Called when the admin saves an item (best effort) and again for every line at
- * checkout, so a product that is missing — never synced, or StreamPay was down
- * during the save — is created on first use. Only calls out when the name,
- * price or VAT flag differ from what was last pushed.
- *
- * A price edit archives the old StreamPay price and makes a new one; links
- * already created keep the price they were made with.
+ * How long a replaced or switched-off product stays payable before it is
+ * archived: longer than any checkout already open on it (a hold, then its pay
+ * window). Archiving never touches an invoice already issued for it.
  */
-export async function syncProduct(
-  key: string,
-  p: { name: string; priceHalalas: number; vatExempt?: boolean },
-): Promise<string> {
-  const name = p.name.slice(0, 160);
-  const exempt = Boolean(p.vatExempt);
-  const signature = JSON.stringify([name, p.priceHalalas, exempt]);
-  const have = await lookup(key);
-  if (have?.signature === signature) return have.streampayId;
+export const RETIRE_AFTER_MIN = 60;
+
+const signatureOf = (p: ProductVersion) => JSON.stringify([p.name.slice(0, 160), p.priceHalalas, Boolean(p.vatExempt)]);
+
+/**
+ * One StreamPay product per version of an item — its name, price and VAT flag.
+ *
+ * A payment link names a product, not a price, so changing a product under a
+ * link that is still open changes what she is charged, and StreamPay refuses
+ * to change a product already on an issued invoice anyway. So a product is never
+ * edited: a new version is a new product, and the old one is archived after
+ * RETIRE_AFTER_MIN. Each tax invoice keeps the name and price she paid.
+ */
+const versionKey = (key: string, p: ProductVersion) =>
+  `${key}@${createHash("sha256").update(signatureOf(p)).digest("hex").slice(0, 12)}`;
+
+/**
+ * StreamPay's product for this version of one of our catalogue items, made the
+ * first time it is needed. Called for every line at checkout, and when the
+ * admin saves an item (best effort), so nothing has to be synced by hand.
+ */
+export async function syncProduct(key: string, p: ProductVersion): Promise<string> {
+  const vkey = versionKey(key, p);
+  const have = await lookup(vkey);
+  if (have) return have.streampayId;
 
   // is_price_inclusive_of_vat is deprecated but still defaults to true, and
   // StreamPay refuses an exempt price that is also "inclusive" (422).
-  const vat = { is_price_exempt_from_vat: exempt, is_price_inclusive_of_vat: !exempt };
-  const price = { currency: "SAR", amount: sar(p.priceHalalas), ...vat };
+  const exempt = Boolean(p.vatExempt);
+  const made = await api<ProductDto>("POST", "/products", {
+    name: p.name.slice(0, 160),
+    type: "ONE_OFF",
+    prices: [{ currency: "SAR", amount: sar(p.priceHalalas), is_price_exempt_from_vat: exempt, is_price_inclusive_of_vat: !exempt }],
+    is_price_exempt_from_vat: exempt,
+  });
+  const priceId = made.prices?.find((x) => x.is_active)?.id ?? made.prices?.[0]?.id ?? null;
+  const id = await remember(vkey, made.id, priceId, signatureOf(p));
+  // Two checkouts made the same version at once and the other was recorded:
+  // this one is unused, and archived like any replaced product.
+  if (id !== made.id) await retireLater(made.id);
+  return id;
+}
 
-  if (!have) {
-    const made = await api<ProductDto>("POST", "/products", {
-      name,
-      type: "ONE_OFF",
-      prices: [price],
-      is_price_exempt_from_vat: exempt,
-    });
-    const priceId = made.prices?.find((x) => x.is_active)?.id ?? made.prices?.[0]?.id ?? null;
-    return remember(key, made.id, priceId, signature);
-  }
+/** Archive this product once RETIRE_AFTER_MIN has passed (archiveRetiredProducts). */
+async function retireLater(productId: string): Promise<void> {
+  await db.insert(streampayIds).values({ key: scoped(`retire:${productId}`), streampayId: productId }).onConflictDoNothing();
+}
 
-  const [oldName, oldPrice, oldExempt] = have.signature ? JSON.parse(have.signature) : [];
-  // Always set when we created the product (the create below stores it).
-  let priceId = have.priceId!;
-
-  if (oldName !== name || oldExempt !== exempt) {
-    await api("PUT", `/products/${have.streampayId}`, { name, is_price_exempt_from_vat: exempt });
-  }
-  if (oldPrice !== p.priceHalalas || oldExempt !== exempt) {
-    const next = await api<{ id: string }>("PUT", `/products/${have.streampayId}/prices/${priceId}`, {
-      amount: price.amount,
-      ...vat,
-    });
-    priceId = next.id;
-  }
-
-  await db
-    .update(streampayIds)
-    .set({ priceId, signature, updatedAt: new Date() })
-    .where(eq(streampayIds.key, scoped(key)));
-  return have.streampayId;
+/** Every version of an item we hold a product for, but `keep`. Old keys (no version) included. */
+async function versionsOf(key: string, keep: string | null) {
+  const rows = await db
+    .select()
+    .from(streampayIds)
+    .where(or(eq(streampayIds.key, scoped(key)), like(streampayIds.key, `${scoped(key)}@%`)));
+  return rows.filter((r) => !keep || r.key !== scoped(keep));
 }
 
 /**
- * Archive or restore a product when the admin does the same to the item.
- * No-op if never synced, or not on StreamPay; never throws — an admin action
- * must not fail because StreamPay is down.
+ * The item was switched off or deleted: new checkouts already refuse it, and
+ * its products are archived after RETIRE_AFTER_MIN, so a checkout already open
+ * can still be paid. Never throws: an admin action must not fail over this.
  */
-export async function setProductActive(key: string, active: boolean): Promise<void> {
+export async function retireProduct(key: string): Promise<void> {
   if (process.env.PAYMENT_DRIVER !== "streampay") return;
   try {
-    const have = await lookup(key);
-    if (have) await api("PUT", `/products/${have.streampayId}`, { is_active: active });
+    for (const r of await versionsOf(key, null)) await retireLater(r.streampayId);
   } catch (err) {
-    console.error(`[streampay] could not set ${key} active=${active}`, err);
+    console.error(`[streampay] could not schedule ${key} for archiving`, err);
   }
 }
 
 /**
- * The admin-side hook: sync, and never let StreamPay being down fail a save.
- * Checkout syncs again anyway, so a miss here heals itself on first use.
+ * The admin-side hook, on every save. Versions other than the one just saved
+ * are retired, the saved one is made (or kept, if it was about to be archived
+ * after being switched off), and StreamPay being down never fails a save:
+ * checkout makes a missing product on first use.
  */
 export async function syncProductQuietly(
   key: string,
@@ -209,11 +260,51 @@ export async function syncProductQuietly(
   if (process.env.PAYMENT_DRIVER !== "streampay") return;
   try {
     // A zero-priced item never reaches a payment link (products must be ≥ 1 SAR).
-    if (p.priceHalalas > 0) await syncProduct(key, p);
+    const keep = p.active && p.priceHalalas > 0 ? versionKey(key, p) : null;
+    for (const r of await versionsOf(key, keep)) await retireLater(r.streampayId);
+    if (!keep) return;
+    const current = await lookup(keep);
+    if (current) await db.delete(streampayIds).where(eq(streampayIds.key, scoped(`retire:${current.streampayId}`)));
+    await syncProduct(key, p);
   } catch (err) {
     console.error(`[streampay] could not sync ${key}; checkout will retry`, err);
   }
-  await setProductActive(key, p.active);
+}
+
+/**
+ * Archive the products retired over RETIRE_AFTER_MIN ago, from the settle job.
+ * Archived, not deleted: past invoices still name them. Its rows go too, so the
+ * item switched on again later gets a fresh product. StreamPay not answering
+ * leaves it for the next run; a product it refuses to archive is left active
+ * and unused, which costs nothing.
+ */
+export async function archiveRetiredProducts(): Promise<number> {
+  if (process.env.PAYMENT_DRIVER !== "streampay") return 0;
+  const due = await db
+    .select()
+    .from(streampayIds)
+    .where(
+      and(
+        like(streampayIds.key, `${scoped("retire:")}%`),
+        lt(streampayIds.createdAt, new Date(Date.now() - RETIRE_AFTER_MIN * 60_000)),
+      ),
+    )
+    .limit(50);
+  let archived = 0;
+  for (const r of due) {
+    try {
+      await api("PUT", `/products/${r.streampayId}`, { is_active: false });
+      archived++;
+    } catch (err) {
+      if (!(err instanceof StreamPayError) || err.status >= 500) {
+        console.error(`[streampay] could not archive product ${r.streampayId}; next run`, err);
+        continue;
+      }
+      if (err.status !== 404) console.error(`[streampay] StreamPay refused to archive product ${r.streampayId}; left as it is`, err);
+    }
+    await db.delete(streampayIds).where(eq(streampayIds.streampayId, r.streampayId));
+  }
+  return archived;
 }
 
 // ------------------------------------------------------------------- coupons --
@@ -223,8 +314,10 @@ export async function syncProductQuietly(
  * this exact label and amount is seen, then reused forever — so after the
  * first few weeks most checkouts create nothing new.
  */
+const couponKey = (d: Discount) => `coupon:${d.label}:${d.halalas}`;
+
 async function ensureCoupon(d: Discount): Promise<string> {
-  const key = `coupon:${d.label}:${d.halalas}`;
+  const key = couponKey(d);
   const have = await lookup(key);
   if (have) return have.streampayId;
   const made = await api<{ id: string }>("POST", "/coupons", {
@@ -247,11 +340,17 @@ async function ensureCoupon(d: Discount): Promise<string> {
  * already a customer they hold under another record) — the link then collects
  * her details itself, which is a worse form and not a failed payment.
  */
-async function ensureConsumer(payer: Payer): Promise<string | null> {
+function consumerKey(payer: Payer): string | null {
   const phone = payer.phone ? `+966${toNationalDigits(payer.phone)}` : null;
   const email = payer.email?.trim().toLowerCase() || null;
-  const key = phone ? `consumer:${phone}` : email ? `consumer:${email}` : null;
+  return phone ? `consumer:${phone}` : email ? `consumer:${email}` : null;
+}
+
+async function ensureConsumer(payer: Payer): Promise<string | null> {
+  const key = consumerKey(payer);
   if (!key) return null;
+  const phone = payer.phone ? `+966${toNationalDigits(payer.phone)}` : null;
+  const email = payer.email?.trim().toLowerCase() || null;
 
   const have = await lookup(key);
   if (have) return have.streampayId;
@@ -340,26 +439,43 @@ export const streampayDriver: PaymentDriver = {
       );
     }
 
-    // Sequential, not Promise.all: small counts, and it keeps the StreamPay
-    // rate limit and the lookup table's first-insert-wins out of each other's way.
-    const linkItems: { product_id: string; quantity: number }[] = [];
-    for (const l of items) linkItems.push({ product_id: await syncProduct(l.key, l), quantity: l.qty });
-    const coupons: string[] = [];
-    for (const d of discounts) coupons.push(await ensureCoupon(d));
-    const consumer = await ensureConsumer(input.payer);
+    const createLink = async () => {
+      // Sequential, not Promise.all: small counts, and it keeps the StreamPay
+      // rate limit and the lookup table's first-insert-wins out of each other's way.
+      const linkItems: { product_id: string; quantity: number }[] = [];
+      for (const l of items) linkItems.push({ product_id: await syncProduct(l.key, l), quantity: l.qty });
+      const coupons: string[] = [];
+      for (const d of discounts) coupons.push(await ensureCoupon(d));
+      const consumer = await ensureConsumer(input.payer);
 
-    const link = await api<PaymentLink>("POST", "/payment_links", {
-      name: input.title.slice(0, 512),
-      currency: "SAR",
-      items: linkItems,
-      coupons,
-      max_number_of_payments: 1,
-      valid_until: input.expiresAt.toISOString(),
-      success_redirect_url: input.returnUrl,
-      failure_redirect_url: input.returnUrl,
-      ...(consumer ? { organization_consumer_id: consumer } : { contact_information_type: "PHONE" }),
-      custom_metadata: { ref: input.ref },
-    });
+      return api<PaymentLink>("POST", "/payment_links", {
+        name: input.title.slice(0, 512),
+        currency: "SAR",
+        items: linkItems,
+        coupons,
+        max_number_of_payments: 1,
+        valid_until: input.expiresAt.toISOString(),
+        success_redirect_url: input.returnUrl,
+        failure_redirect_url: input.returnUrl,
+        ...(consumer ? { organization_consumer_id: consumer } : { contact_information_type: "PHONE" }),
+        custom_metadata: { ref: input.ref },
+      });
+    };
+
+    let link: PaymentLink;
+    try {
+      link = await createLink();
+    } catch (err) {
+      // Refused (4xx): maybe for an id of ours that no longer works there. Once,
+      // with those forgotten and made again; anything else is a real refusal.
+      const used = [
+        ...items.map((l) => ({ key: versionKey(l.key, l), path: "products" })),
+        ...discounts.map((d) => ({ key: couponKey(d), path: "coupons" })),
+        ...[consumerKey(input.payer)].filter((k): k is string => k !== null).map((key) => ({ key, path: "consumers" })),
+      ];
+      if (!(err instanceof StreamPayError) || err.status >= 500 || !(await forgetBroken(used))) throw err;
+      link = await createLink();
+    }
 
     // The safety check the whole design is built around: StreamPay's total must
     // be ours to the halala, or nobody pays on this link.
@@ -485,8 +601,15 @@ export const streampayDriver: PaymentDriver = {
       console.error("[streampay] refund: no StreamPay payment id on the row");
       return { status: "failed" };
     }
-    if ((await refundedSoFar(paymentId)) >= input.amountHalalas) {
+    const before = await refundedSoFar(paymentId);
+    if (before >= input.amountHalalas) {
       return { status: "refunded", raw: { alreadyRefunded: true } };
+    }
+    // Part of it already went back from their dashboard. Our refunds are whole,
+    // never "the rest": what she is still owed is a person's call.
+    if (before > 0) {
+      console.error(`[streampay] refund of ${paymentId}: ${before} of ${input.amountHalalas} already refunded outside the app; not sending`);
+      return { status: "failed" };
     }
     try {
       // The reply is the refund row itself, with no status: a 2xx means it went.
