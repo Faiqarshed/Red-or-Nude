@@ -279,20 +279,7 @@ Numbers match the 26-item list. H items are new ones from the senior's review.
 - Expression index on `payments ((raw->>'linkId'))` once volume grows.
 
 ### Wallet: its own PR, shipped with go-live
-The refund rule above needs a wallet. It's built as a separate PR (not in this hardening work) and ships at go-live. What it needs:
-- a `wallet_txns` ledger (customer, booking, amount, reason), with no admin editing;
-- balance on /account;
-- "Use my credit" at **every** checkout (bookings, gift cards, memberships, chair purchases), sent to StreamPay as a coupon like points. A bill fully covered by credit never reaches StreamPay, the same as a zero bill today.
-  - Purchases: `startPurchase` (`lib/payments/purchase.ts`) takes the wallet discount (today it always sends `discounts: []`), and the debit is tied to the payment so an abandoned checkout releases it.
-  - **Signed-in only.** The credit belongs to her account. At the chair, the QR token only proves someone is at the table, not who they are, so spending credit there needs her to sign in.
-  - Ask the accountant: spending credit on a VAT-exempt gift card.
-- the customer cancel route credits the wallet instead of `refundBookings`;
-- the admin cancel refuses inside 3 h and credits the wallet otherwise;
-- no-show keeps spent points (`isDead` in `lib/rewards.ts`);
-- turn `owedCredit` chair refunds into real credit, **only where the payment is still `paid`** (one refunded in StreamPay's dashboard meanwhile is already settled), and email her;
-- the salon cancelling a paid booking in the admin credits the wallet: today no money moves and nothing flags it;
-- cancel and checkout copy;
-- remove `refundBookings` and the unused `payments.refund` permission.
+The refund rule above needs a wallet. It's built as a separate PR (not in this hardening work) and ships at go-live. Planned in full, with gift cards spent through it, in `docs/WALLET-PLAN.md`.
 
 ### Not building
 - **17.** Price change during checkout: left as is.
