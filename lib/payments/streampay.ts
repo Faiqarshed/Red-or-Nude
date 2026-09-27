@@ -507,6 +507,7 @@ type PaymentLink = {
   status: "INACTIVE" | "ACTIVE" | "COMPLETED";
   valid_until?: string | null;
   amount_in_smallest_unit: number;
+  amount_collected_in_smallest_unit?: number;
 };
 
 type StreamPayment = {
@@ -683,12 +684,16 @@ export const streampayDriver: PaymentDriver = {
     if (all.some((p) => p.current_status === "REFUNDED")) return { status: "failed" };
 
     const link = await api<PaymentLink>("GET", `/payment_links/${linkId}`);
-    // COMPLETED means the link took its one payment, even if the invoice does
-    // not show it yet. Never written off: the next check will find it.
-    if (link.status === "COMPLETED") return { status: "pending" };
-    const open =
-      link.status === "ACTIVE" && (!link.valid_until || new Date(link.valid_until).getTime() > Date.now());
-    return open ? { status: "pending" } : { status: "failed" };
+    const over = Boolean(link.valid_until) && new Date(link.valid_until!).getTime() <= Date.now();
+    // COMPLETED can mean the link took its one payment before the invoice shows
+    // it: never written off while money is on it or its window is still open.
+    // But StreamPay also marks a link COMPLETED when it simply expires unpaid
+    // (sandbox, 2026-09-25), and waiting on that kept an expired checkout open
+    // for ever. A payment that lands after this is revived by the webhook.
+    if (link.status === "COMPLETED") {
+      return !over || (link.amount_collected_in_smallest_unit ?? 0) > 0 ? { status: "pending" } : { status: "failed" };
+    }
+    return link.status === "ACTIVE" && !over ? { status: "pending" } : { status: "failed" };
   },
 
   async cancel(raw) {

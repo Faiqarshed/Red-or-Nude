@@ -4,10 +4,10 @@
 // payment column (StreamPay's checkout and the reason the last attempt failed)
 // and the two modals — checking on return from the bank, and a failed payment.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PayLogos } from "./PaymentMethods";
 import StreamPayCheckout, { type PaymentOutcome } from "./StreamPayCheckout";
-import { Lock } from "./icons";
+import { ClockIcon, Lock } from "./icons";
 import { useI18n } from "@/lib/i18n";
 
 /** Step 2's main column: what to do, why the last try failed, and the checkout. */
@@ -15,21 +15,31 @@ export function PayStep({
   checkout,
   onDone,
   notice,
+  info = null,
   sub,
 }: {
   checkout: { ref: string; url: string; expiresAt?: string };
   onDone: (outcome: PaymentOutcome) => void;
   notice: string | null;
+  /** Not a failure: said calmly, and only while there is no failure to say. */
+  info?: string | null;
   sub: string;
 }) {
   const { c } = useI18n();
   const p = c.payment;
+  // The timer is the deadline, so reaching it ends this checkout here: StreamPay
+  // does not (it took a card after its link's valid_until, sandbox 2026-09-25).
+  // Ended as a failure with its own reason, so each page closes the form and
+  // offers Pay again the way it does after a decline.
+  const done = useRef(onDone);
+  done.current = onDone;
+  const timeUp = () => done.current({ status: "failed", error: "payment-declined", reason: "timedOut" });
   return (
     <section className="min-w-0 space-y-4">
       <div className="text-start">
         <h1 className="font-display text-2xl font-extrabold text-ink sm:text-3xl">{p.payTitle}</h1>
         <p className="mt-1.5 max-w-[560px] text-[13px] leading-relaxed text-ink/55 sm:text-sm">{sub}</p>
-        {checkout.expiresAt && <TimeLeft until={checkout.expiresAt} />}
+        {checkout.expiresAt && <TimeLeft until={checkout.expiresAt} onEnd={timeUp} />}
       </div>
 
       {notice && (
@@ -38,6 +48,15 @@ export function PayStep({
             !
           </span>
           <span>{notice}</span>
+        </p>
+      )}
+
+      {!notice && info && (
+        <p role="status" className="flex gap-2.5 rounded-[16px] bg-ink/[0.04] px-4 py-3 text-start text-[13px] leading-relaxed text-ink/70 ring-1 ring-black/[0.06]">
+          <span aria-hidden className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-ink/60 text-[11px] font-extrabold text-white">
+            i
+          </span>
+          <span>{info}</span>
         </p>
       )}
 
@@ -56,20 +75,35 @@ export function PayStep({
   );
 }
 
-/** How long this checkout stays payable. Hidden once it has run out: the next status check says so. */
-function TimeLeft({ until }: { until: string }) {
+/** How long this checkout stays payable. At 0:00 `onEnd` closes it. */
+function TimeLeft({ until, onEnd }: { until: string; onEnd: () => void }) {
   const { c } = useI18n();
   const [left, setLeft] = useState(() => Date.parse(until) - Date.now());
   useEffect(() => {
     const tick = setInterval(() => setLeft(Date.parse(until) - Date.now()), 1000);
     return () => clearInterval(tick);
   }, [until]);
-  if (!(left > 0)) return null;
+  const over = !(left > 0);
+  const end = useRef(onEnd);
+  end.current = onEnd;
+  useEffect(() => {
+    if (over) end.current();
+  }, [over]);
+  if (over) return null;
   const s = Math.floor(left / 1000);
+  // The last minute in red: that is when it is worth hurrying.
+  const last = s < 60;
   return (
-    <p className="mt-2 text-[12px] font-semibold text-ink/55" aria-live="off">
-      {c.payment.timeLeft.replace("{t}", `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`)}
-    </p>
+    <div className="mt-3 inline-flex items-center gap-3 rounded-[16px] bg-white px-4 py-2.5 text-start shadow-[0_8px_24px_rgba(184,0,7,0.06)] ring-1 ring-black/[0.04]" aria-live="off">
+      <ClockIcon className={`h-6 w-6 shrink-0 ${last ? "text-red" : "text-ink/50"}`} />
+      <div>
+        <p className="text-[12px] font-semibold text-ink/55">{c.payment.timeLeft}</p>
+        <p className={`font-display text-2xl font-extrabold tabular-nums leading-tight ${last ? "text-red" : "text-ink"}`} dir="ltr">
+          {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}
+        </p>
+      </div>
+      <p className="max-w-[200px] border-s border-black/[0.08] ps-3 text-[11px] leading-snug text-ink/50">{c.payment.timeLeftHint}</p>
+    </div>
   );
 }
 

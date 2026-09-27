@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
@@ -22,7 +22,9 @@ import {
 import { validationMessages } from "@/lib/validation-messages";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
-import { saveGiftSelection } from "@/lib/giftcard-selection";
+import { saveGiftSelection, type GiftSelection } from "@/lib/giftcard-selection";
+import { takePaid } from "@/lib/paid-handoff";
+import GiftCardSuccessModal from "@/components/gift/GiftCardSuccessModal";
 import type { PublicGiftOptions } from "@/lib/catalog";
 
 // Figma: Desktop-2 node 317:7234 — Gift Card builder. Values and designs are
@@ -40,6 +42,9 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 const MESSAGE_MAX = 500;
 
 export default function GiftCardView({ options }: { options: PublicGiftOptions }) {
+  // Just paid: the payment page sent her back here with the card.
+  const [issued, setIssued] = useState<{ code: string; selection: GiftSelection | null } | null>(null);
+  useEffect(() => setIssued(takePaid("gift_card")), []);
   const router = useRouter();
   const { c, lang } = useI18n();
   const g = c.gift;
@@ -248,6 +253,9 @@ export default function GiftCardView({ options }: { options: PublicGiftOptions }
       </div>
 
       <SiteFooter />
+      {issued && (
+        <GiftCardSuccessModal code={issued.code} selection={issued.selection} onClose={() => setIssued(null)} />
+      )}
     </main>
   );
 }

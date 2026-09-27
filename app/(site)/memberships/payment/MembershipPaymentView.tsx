@@ -12,7 +12,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import PaymentMethods from "@/components/PaymentMethods";
@@ -21,7 +20,7 @@ import { CheckingModal } from "@/components/PayFlow";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
-import { formatDateLabel } from "@/lib/booking";
+import { showPaidOn } from "@/lib/paid-handoff";
 import type { PublicPack } from "@/lib/catalog";
 import PackLines from "../PackLines";
 
@@ -38,7 +37,6 @@ export default function MembershipPaymentView({
   const { c, lang } = useI18n();
   const p = c.payment;
   const k = c.packs;
-  const router = useRouter();
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,14 +46,9 @@ export default function MembershipPaymentView({
    * good: the only thing pressing it again can do is charge her twice.
    */
   const [paidNotGranted, setPaidNotGranted] = useState(false);
-  /** When she bought it — the expiry on the success panel counts from here. */
-  const [boughtAt, setBoughtAt] = useState<number | null>(null);
-
-  const bought = () => {
-    setBoughtAt(Date.now());
-    // Her account and the shelf both say something different now.
-    router.refresh();
-  };
+  // Paid: back to the shelf, which shows what she bought over itself. The
+  // expiry there counts from now.
+  const bought = () => showPaidOn("/memberships", "pack", { pack, boughtAt: Date.now() });
 
   const showError = (code: string | undefined) => {
     // Nothing was charged on a decline, so retrying is safe and cheap.
@@ -170,42 +163,7 @@ export default function MembershipPaymentView({
 
         {/* -- and how she is paying ---------------------------------------- */}
         <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)]">
-          {boughtAt ? (
-            // What she has, until when, and how to spend it — "Bought" alone
-            // left her to guess all three. No receipt step: the credits are
-            // already on her account by the time this renders.
-            <div className="rounded-[14px] bg-[#fbeaea] p-5 text-start">
-              <p className="font-display text-lg font-extrabold text-red">{k.bought}</p>
-              <div className="mt-3">
-                <PackLines lines={pack.lines} />
-              </div>
-              {/* Counted the way buyPack counts it, and sliced to a UTC date the
-                  way the account page slices expiresAt, so the two screens name
-                  the same day. */}
-              <p className="mt-2 text-[12px] text-ink/55">
-                {k.expiresOn.replace(
-                  "{date}",
-                  formatDateLabel(
-                    new Date(boughtAt + pack.validDays * 86_400_000).toISOString().slice(0, 10),
-                    lang,
-                  ),
-                )}
-              </p>
-              <p className="mt-3 text-[13px] leading-relaxed text-ink/65">{k.boughtNote}</p>
-              <Link
-                href="/booking"
-                className="mt-4 block rounded-[12px] bg-red-grad py-3 text-center text-sm font-bold text-white"
-              >
-                {k.bookNow}
-              </Link>
-              <Link
-                href="/account"
-                className="mt-3 block text-center text-[12px] font-semibold text-red underline underline-offset-4"
-              >
-                {k.seeAccount}
-              </Link>
-            </div>
-          ) : !signedIn ? (
+          {!signedIn ? (
             // The wall, said plainly and before anything is filled in.
             <div className="rounded-[14px] bg-[#fbeaea] p-5 text-center">
               <p className="text-sm text-ink/70">{k.signInFirst}</p>

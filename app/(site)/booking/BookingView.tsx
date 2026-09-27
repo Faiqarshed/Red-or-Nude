@@ -7,6 +7,8 @@ import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import { useI18n } from "@/lib/i18n";
 import ScheduleModal from "@/components/booking/ScheduleModal";
+import BookingSuccessModal, { type Ticket } from "@/components/booking/BookingSuccessModal";
+import { takePaid } from "@/lib/paid-handoff";
 import RedoDialog, { branchRedo, guestRedo, restoredLine, type Redo } from "@/components/booking/RedoDialog";
 import BranchPicker from "@/components/booking/BranchPicker";
 import Summary from "@/components/booking/Summary";
@@ -63,6 +65,9 @@ export default function BookingView({
   /** Set when the customer arrived from the refill button in their history. */
   refill?: RefillOffer | null;
 }) {
+  // Just paid: the payment page sent her back here with her tickets.
+  const [booked, setBooked] = useState<Ticket[] | null>(null);
+  useEffect(() => setBooked(takePaid<Ticket[]>("booking")), []);
   const router = useRouter();
   const { c, lang } = useI18n();
   const b = c.booking;
@@ -475,6 +480,7 @@ export default function BookingView({
       )}
 
       {redo && <RedoDialog redo={redo} b={b} onClose={() => setRedo(null)} />}
+      {booked && <BookingSuccessModal tickets={booked} onClose={() => setBooked(null)} />}
     </main>
   );
 }

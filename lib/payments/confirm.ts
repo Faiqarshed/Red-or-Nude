@@ -35,7 +35,7 @@ import { awardPoints, loyaltyRules } from "@/lib/loyalty";
 import { pointsEarned } from "@/lib/rewards";
 import { getSettings } from "@/lib/settings";
 import { assignIfToday } from "@/lib/assign";
-import { siteOrigin } from "@/lib/site";
+import { returnOrigin } from "@/lib/site";
 import { bookingLines } from "./lines";
 import { refundRef } from "./refund";
 import { errorText, logPaymentEvent } from "./events";
@@ -258,7 +258,7 @@ export async function confirmBookingPayment(input: ConfirmInput): Promise<Confir
         customerId: customer?.id ?? null,
       },
       expiresAt: new Date(Date.now() + PAY_WINDOW_MIN * 60_000),
-      returnUrl: `${siteOrigin()}/api/payments/return?ref=${ref}&back=${encodeURIComponent("/booking/payment")}`,
+      returnUrl: `${returnOrigin()}/api/payments/return?ref=${ref}&back=${encodeURIComponent("/booking/payment")}`,
       simulate: input.simulate,
     });
   } catch (err) {
