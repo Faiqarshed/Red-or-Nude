@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Coffee } from "lucide-react";
-import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import PaymentMethods from "@/components/PaymentMethods";
@@ -22,6 +21,7 @@ import {
   type BookingSelection,
 } from "@/lib/booking";
 import { isValidSaudiMobile, toNationalDigits, toStoredPhone } from "@/lib/phone";
+import { showPaidOn } from "@/lib/paid-handoff";
 import { pick } from "@/lib/localized";
 import {
   pointsEarned,
@@ -44,22 +44,10 @@ import {
 // hold in place so the customer can retry without losing their slot, which is why
 // the created code is kept in state between attempts.
 
-type Ticket = {
-  code: string;
-  ticketNo: string;
-  stationLabel: string | null;
-  /** Null for a booking further out than today — nobody is assigned yet. */
-  technicianName: string | null;
-  serviceName: { ar: string; en: string } | null;
-  startsAt: string;
-  totalHalalas: number;
-};
-
 export default function PaymentPage({ searchParams }: { searchParams: { paid?: string } }) {
   const { c, lang } = useI18n();
   const p = c.payment;
   const a = c.account;
-  const router = useRouter();
 
   const [booking, setBooking] = useState<BookingSelection>(emptySelection);
   const [loaded, setLoaded] = useState(false);
@@ -75,11 +63,12 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
    */
   const [payNotice, setPayNotice] = useState<string | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
+  /** Back on a checkout she had open (a reload): said calmly above it, never as a failure. */
+  const [resumed, setResumed] = useState(false);
   const notifyPay = (message: string) => {
     setPayNotice(message);
     setNoticeOpen(true);
   };
-  const [tickets, setTickets] = useState<Ticket[] | null>(null);
   /** Set once the hold exists, so a retry after a decline doesn't re-book. */
   const [heldCode, setHeldCode] = useState<string | null>(null);
   /** Asking what became of a hold she came back to (see resumeHeld). */
@@ -146,8 +135,12 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       // Back here any other way — Back from the bank's page, a dropped
       // connection, a reload. A hold the server kept is one she is paying for
       // or has paid: show her that, never a Pay button that books her twice.
+      // Checking from the first frame when there is a hold to ask about, so a
+      // reload does not show the form for the seconds that takes.
+      if (loadCheckout()?.held) setResuming(true);
       released.current = releaseHold().then((kept) => {
         if (kept) void resumeHeld(kept.held);
+        else setResuming(false);
       });
     }
     const saved = loadBooking();
@@ -466,6 +459,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
     }
     setError(null);
     setPayNotice(null);
+    setResumed(false);
     setSubmitting(true);
 
     try {
@@ -575,7 +569,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
    * Step 2 — the checkout. Only a verified payment confirms anything. A hold
    * already paid comes back as its tickets; one being paid, as the same checkout.
    */
-  const payHeld = async (code: string, resumed = false) => {
+  const payHeld = async (code: string) => {
     const pay = await fetch("/api/payments/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -585,12 +579,11 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
     const data = await pay.json().catch(() => ({}));
     if (pay.ok && data.checkout) {
       setCheckout(data.checkout);
-      if (resumed) notifyPay(p.resumedPayment);
       return;
     }
     if (pay.ok) {
-      setTickets(data.tickets);
       clearBooking();
+      showPaidOn("/booking", "booking", data.tickets);
       return;
     }
     showPayError(data.error);
@@ -601,8 +594,9 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
     setHeldCode(held.code);
     setEmail(held.email);
     setResuming(true);
+    setResumed(true);
     try {
-      await payHeld(held.code, true);
+      await payHeld(held.code);
     } catch {
       setError(p.bookingFailed);
     } finally {
@@ -625,8 +619,8 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
     // A decline with the checkout still open re-opens it right here.
     setCheckout(outcome.status === "failed" ? (outcome.checkout ?? null) : null);
     if (outcome.status === "paid" && outcome.result.kind === "booking") {
-      setTickets(outcome.result.tickets as Ticket[]);
       clearBooking();
+      showPaidOn("/booking", "booking", outcome.result.tickets);
       return;
     }
     const why = declineMessage(c.payDecline, outcome);
@@ -661,7 +655,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
           sitting beside a checkout they no longer affect. */}
       {paying && checkout ? (
         <div className="mx-auto grid max-w-page gap-6 px-4 pb-24 pt-6 sm:px-6 md:px-12 lg:grid-cols-[1fr_400px] lg:gap-8 lg:px-16">
-          <PayStep checkout={checkout} onDone={onPaid} notice={payNotice} sub={p.paySub} />
+          <PayStep checkout={checkout} onDone={onPaid} notice={payNotice} info={resumed ? p.resumedPayment : null} sub={p.paySub} />
 
           {/* Her booking, beside the card form on a desktop and above it on a
               phone — what she is paying for never scrolls out of reach. */}
@@ -1287,10 +1281,6 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       {noticeOpen && payNotice && !checkingPayment && (
         <PayNoticeModal message={payNotice} retry={paying} onClose={() => setNoticeOpen(false)} />
       )}
-
-      {tickets && (
-        <SuccessModal tickets={tickets} booking={booking} onClose={() => router.replace("/")} />
-      )}
     </main>
   );
 }
@@ -1300,132 +1290,6 @@ function Field({ label, value }: { label: string; value: string }) {
     <div className="rounded-[14px] border border-black/[0.05] p-4">
       <p className="mb-1 text-[11px] text-ink/45">{label}</p>
       <p className="text-sm font-semibold text-ink">{value}</p>
-    </div>
-  );
-}
-
-function SuccessModal({
-  tickets,
-  booking,
-  onClose,
-}: {
-  tickets: Ticket[];
-  booking: BookingSelection;
-  onClose: () => void;
-}) {
-  const { c, lang } = useI18n();
-  const p = c.payment;
-
-  // Nothing to hunt for. The booking is paid and this screen has no decision
-  // left on it, so anywhere outside the card leaves, and so does Escape — both
-  // land on the home page rather than on the checkout she has just finished.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      role="presentation"
-      onClick={onClose}
-      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm"
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-[460px] rounded-[24px] bg-white p-8 text-center shadow-[0_40px_100px_rgba(0,0,0,0.25)]"
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/pay/success-check.webp" alt="" className="mx-auto mb-5 h-20 w-20" />
-        <h3 className="font-display text-2xl font-extrabold text-ink">{p.successTitle}</h3>
-        <p className="mx-auto mt-2 max-w-[320px] text-sm text-ink/55">{p.successSub}</p>
-
-        {/* The number the salon calls out, and the chair it belongs to. One block
-            per guest — a pair gets consecutive numbers on different chairs. */}
-        <div className="mt-6 space-y-3">
-          {tickets.map((t) => (
-            <div key={t.code} className="rounded-[18px] bg-[#fbeaea] p-5">
-              <p className="text-[11px] uppercase tracking-wider text-red/60">{p.ticketLabel}</p>
-              <p className="font-display text-4xl font-extrabold tracking-wider text-red" dir="ltr">
-                {t.ticketNo}
-              </p>
-              <div className="mt-3 flex items-center justify-center gap-4 text-[13px]">
-                <span className="text-ink/55">
-                  {p.stationLabel}{" "}
-                  <span className="font-bold text-ink" dir="ltr">
-                    {t.stationLabel ?? "—"}
-                  </span>
-                </span>
-                {t.serviceName && (
-                  <span className="font-semibold text-ink">{t.serviceName[lang]}</span>
-                )}
-                {/* Only when there is one. A booking further out has no
-                    technician yet — the morning run assigns on the day — and
-                    an empty label would read as one nobody turned up for. */}
-                {t.technicianName && (
-                  <span className="text-ink/55">
-                    {p.technicianLabel}{" "}
-                    <span className="font-bold text-ink">{t.technicianName}</span>
-                  </span>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-6 rounded-[16px] bg-[#f6f6f6] p-5 text-start">
-          <p className="mb-3 font-display text-base font-extrabold text-red">{p.detailsTitle}</p>
-          <div className="divide-y divide-black/[0.06]">
-            {[
-              { label: p.rowDate, value: booking.dateLabel ?? "—" },
-              { label: p.rowTime, value: booking.timeLabel ?? "—" },
-            ].map((r) => (
-              <div key={r.label} className="flex items-center justify-between py-2.5">
-                <span className="text-[13px] text-ink/50">{r.label}</span>
-                <span className="text-[13px] font-semibold text-ink">{r.value}</span>
-              </div>
-            ))}
-            <div className="flex items-center justify-between py-2.5">
-              <span className="text-[13px] text-ink/50">{p.rowTotal}</span>
-              <span className="flex items-center gap-1 font-display text-base font-extrabold text-red">
-                <Riyal className="h-4 w-4" />
-                {/* Summed from the tickets, not from the selection: this is what
-                    the card was actually charged, discounts and all. */}
-                {tickets.reduce((sum, t) => sum + t.totalHalalas, 0) / 100}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-6 flex gap-3">
-          <Link
-            href="/booking"
-            replace
-            className="flex-1 rounded-[12px] bg-black/[0.05] py-3.5 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
-          >
-            {p.newBooking}
-          </Link>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-1 rounded-[12px] bg-red-grad py-3.5 text-center text-sm font-bold text-white transition-opacity hover:opacity-90"
-          >
-            {p.close}
-          </button>
-        </div>
-
-        {/* The reference goes out by email only — nothing here to memorise. */}
-        <Link
-          href="/my-bookings"
-          className="mt-4 inline-block text-[12px] font-semibold text-red underline underline-offset-4"
-        >
-          {p.myBookings}
-        </Link>
-      </div>
     </div>
   );
 }

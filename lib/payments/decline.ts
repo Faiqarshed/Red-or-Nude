@@ -21,7 +21,9 @@ export type DeclineReason =
   | "unavailable"
   | "rejected"
   | "authFailed"
-  | "declined";
+  | "declined"
+  /** Not from the bank: the checkout's own timer ran out (components/PayFlow.tsx). */
+  | "timedOut";
 
 /** Order matters: the first match wins, most specific first. */
 const RULES: [RegExp, DeclineReason][] = [

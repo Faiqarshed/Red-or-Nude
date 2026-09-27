@@ -23,7 +23,7 @@ import { sendGiftCardEmails } from "@/lib/giftcard/email";
 import { buyPack } from "@/lib/packs";
 import { sendMembershipEmail } from "@/lib/membership-email";
 import { sendVisitEmail } from "@/lib/visit-email";
-import { siteOrigin } from "@/lib/site";
+import { returnOrigin } from "@/lib/site";
 import { afterResponse } from "@/lib/after-response";
 import { refundRef } from "./refund";
 import { errorText, logPaymentEvent } from "./events";
@@ -144,7 +144,7 @@ export async function startPurchase(input: {
       title: input.title,
       payer: input.payer,
       expiresAt: new Date(Date.now() + PAY_WINDOW_MIN * 60_000),
-      returnUrl: `${siteOrigin()}/api/payments/return?ref=${ref}&back=${encodeURIComponent(input.back)}`,
+      returnUrl: `${returnOrigin()}/api/payments/return?ref=${ref}&back=${encodeURIComponent(input.back)}`,
       simulate: input.simulate,
     });
   } catch (err) {

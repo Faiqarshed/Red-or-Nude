@@ -152,6 +152,24 @@ describe("streampay verify and refund", () => {
     expect(await streampayDriver.verify({ linkId: "l" })).toEqual({ status: "failed" });
   });
 
+  it("closes a link StreamPay marked COMPLETED only because it expired unpaid", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const link = (valid_until: string, collected: number) =>
+      reply({ id: "l", status: "COMPLETED", valid_until, amount_collected_in_smallest_unit: collected });
+
+    // Expired, nothing collected, no payment: over.
+    fetch.mockResolvedValueOnce(reply({ data: [] })).mockResolvedValueOnce(link(past, 0));
+    expect(await streampayDriver.verify({ linkId: "l" })).toEqual({ status: "failed" });
+
+    // Still inside its window, or money on it: wait for the invoice.
+    fetch.mockResolvedValueOnce(reply({ data: [] })).mockResolvedValueOnce(link(future, 0));
+    expect(await streampayDriver.verify({ linkId: "l" })).toEqual({ status: "pending" });
+    fetch.mockResolvedValueOnce(reply({ data: [] })).mockResolvedValueOnce(link(past, 28000));
+    expect(await streampayDriver.verify({ linkId: "l" })).toEqual({ status: "pending" });
+  });
+
   it("does not refund again what has already gone back", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(reply({ amount_refunded: "75.00" }));
     const out = await streampayDriver.refund({ raw: { paymentId: "p" }, amountHalalas: 7500 });
