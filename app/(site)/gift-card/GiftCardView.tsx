@@ -44,7 +44,12 @@ const MESSAGE_MAX = 500;
 export default function GiftCardView({ options }: { options: PublicGiftOptions }) {
   // Just paid: the payment page sent her back here with the card.
   const [issued, setIssued] = useState<{ code: string; selection: GiftSelection | null } | null>(null);
-  useEffect(() => setIssued(takePaid("gift_card")), []);
+  useEffect(() => {
+    // Only ever set: in development React runs this twice, and the second run,
+    // finding nothing left, was closing the popup the first had opened.
+    const paid = takePaid<{ code: string; selection: GiftSelection | null }>("gift_card");
+    if (paid) setIssued(paid);
+  }, []);
   const router = useRouter();
   const { c, lang } = useI18n();
   const g = c.gift;

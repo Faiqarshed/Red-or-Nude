@@ -34,6 +34,19 @@ export function PayStep({
   const done = useRef(onDone);
   done.current = onDone;
   const timeUp = () => done.current({ status: "failed", error: "payment-declined", reason: "timedOut" });
+  // Paid inside the embed and being confirmed: the loader covers the spent form.
+  // Kept up on success, while the page leaves for the success popup.
+  const [confirming, setConfirming] = useState(false);
+  // Until StreamPay's form has drawn, the loader, not an empty white box — on
+  // Pay, on a reload, and when a failed attempt reopens a new checkout.
+  // Keyed by the link it is for, not reset in an effect: an effect runs after the
+  // paint, so a new checkout showed its empty box for one frame first.
+  const [readyUrl, setReadyUrl] = useState<string | null>(null);
+  const ready = readyUrl === checkout.url;
+  const finish = (outcome: PaymentOutcome) => {
+    if (outcome.status !== "paid") setConfirming(false);
+    onDone(outcome);
+  };
   return (
     <section className="min-w-0 space-y-4">
       <div className="text-start">
@@ -61,7 +74,14 @@ export function PayStep({
       )}
 
       <div className="overflow-hidden rounded-[24px] bg-white p-2 shadow-[0_20px_50px_rgba(184,0,7,0.06)] ring-1 ring-black/[0.04] sm:p-4">
-        <StreamPayCheckout url={checkout.url} paymentRef={checkout.ref} onDone={onDone} autoScroll={false} />
+        <StreamPayCheckout
+          url={checkout.url}
+          paymentRef={checkout.ref}
+          onDone={finish}
+          onConfirming={() => setConfirming(true)}
+          onReady={() => setReadyUrl(checkout.url)}
+          autoScroll={false}
+        />
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">
@@ -71,6 +91,7 @@ export function PayStep({
         </p>
         <PayLogos small />
       </div>
+      {(confirming || !ready) && <CheckingModal loading={!confirming} />}
     </section>
   );
 }
@@ -132,17 +153,24 @@ export function Steps({ current, labels }: { current: 1 | 2; labels: [string, st
   );
 }
 
-/** Coming back from the bank: said in front, so the page behind never looks idle. */
-export function CheckingModal() {
+/**
+ * The whole screen while a payment is being confirmed: solid, over the header
+ * too, so nothing of the spent checkout shows behind it. The page it hands over
+ * to (the success popup's page) replaces it, not the checkout.
+ */
+export function CheckingModal({ loading = false }: { loading?: boolean }) {
   const { c } = useI18n();
   const p = c.payment;
+  // `loading`: the page is still putting itself together, nothing is being paid.
+  const title = loading ? p.loadingTitle : p.checkingPayment;
+  const sub = loading ? p.loadingSub : p.checkingSub;
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 px-4 backdrop-blur-sm">
-      <div role="status" className="w-full max-w-[360px] rounded-[24px] bg-white p-8 text-center shadow-[0_40px_100px_rgba(0,0,0,0.25)]">
-        <span aria-hidden className="mx-auto block h-12 w-12 animate-spin rounded-full border-[3px] border-red/15 border-t-red" />
-        <p className="mt-5 font-display text-lg font-extrabold text-ink">{p.checkingPayment}</p>
-        <p className="mt-1 text-[13px] text-ink/55">{p.checkingSub}</p>
-      </div>
+    <div role="status" aria-live="polite" className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-cream px-6 text-center">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/logo-red.svg" alt="Red Or Nude" className="h-10 w-auto md:h-12" />
+      <span aria-hidden className="mt-12 block h-14 w-14 animate-spin rounded-full border-[3px] border-red/15 border-t-red" />
+      <p className="mt-6 font-display text-xl font-extrabold text-ink">{title}</p>
+      <p className="mt-2 max-w-[320px] text-sm text-ink/55">{sub}</p>
     </div>
   );
 }

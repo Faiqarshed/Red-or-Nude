@@ -70,6 +70,8 @@ async function pollPayment(
   alive: () => boolean,
   maxTries = Infinity,
   declined: string | null = null,
+  /** Set here while waiting between asks: calling it asks again now. */
+  wake: { now: () => void } = { now: () => {} },
 ): Promise<PaymentOutcome | null> {
   for (let i = 0; i < maxTries && alive(); i++) {
     try {
@@ -87,7 +89,13 @@ async function pollPayment(
     } catch {
       /* a blip; ask again */
     }
-    await new Promise((r) => setTimeout(r, i < 20 ? 3000 : 10_000));
+    await new Promise<void>((r) => {
+      const t = setTimeout(r, i < 20 ? 3000 : 10_000);
+      wake.now = () => {
+        clearTimeout(t);
+        r();
+      };
+    });
   }
   return alive() ? { status: "failed", error: "unconfirmed" } : null;
 }
@@ -96,17 +104,27 @@ export default function StreamPayCheckout({
   url,
   paymentRef,
   onDone,
+  onConfirming,
+  onReady,
   autoScroll = true,
 }: {
   url: string;
   paymentRef: string;
   onDone: (outcome: PaymentOutcome) => void;
+  /** StreamPay said paid inside the embed: the page shows its loader until onDone. */
+  onConfirming?: () => void;
+  /** StreamPay's form has loaded in the embed (or it gave up waiting): stop hiding it. */
+  onReady?: () => void;
   /** Off where the page scrolls itself, to keep what sits above the checkout in view. */
   autoScroll?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const done = useRef(onDone);
   done.current = onDone;
+  const confirming = useRef(onConfirming);
+  confirming.current = onConfirming;
+  const readyCb = useRef(onReady);
+  readyCb.current = onReady;
   // StreamPay's checkout picks its language from `?language=` (ar | en); left
   // out, it opens in Arabic whatever the site is showing.
   const { lang } = useI18n();
@@ -118,6 +136,22 @@ export default function StreamPayCheckout({
     // It appears below the fold once Pay is pressed; bring it into view.
     if (autoScroll) box.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     let alive = true;
+    // Ready once the SDK's iframe has loaded. Ten seconds at most: a slow
+    // form shown late beats a loader that never lifts.
+    let readied = false;
+    const ready = () => {
+      if (readied || !alive) return;
+      readied = true;
+      readyCb.current?.();
+    };
+    const giveUp = setTimeout(ready, 10_000);
+    const watch = new MutationObserver(() => {
+      const frame = box.current?.querySelector("iframe");
+      if (!frame) return;
+      watch.disconnect();
+      frame.addEventListener("load", ready, { once: true });
+    });
+    if (box.current) watch.observe(box.current, { childList: true, subtree: true });
     loadSdk()
       .then(() => {
         if (!alive || !box.current || !window.Stream) return;
@@ -128,9 +162,21 @@ export default function StreamPayCheckout({
       .catch(() => {
         if (alive) window.location.href = src;
       });
-    void pollPayment(paymentRef, () => alive).then((o) => o && alive && done.current(o));
+    // Our return page, loaded inside the embed once she has paid, says so
+    // (app/api/payments/return): ask now instead of at the next poll.
+    const wake = { now: () => {} };
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin || e.data?.streampayReturn !== paymentRef) return;
+      if (e.data.paid) confirming.current?.();
+      wake.now();
+    };
+    window.addEventListener("message", onMessage);
+    void pollPayment(paymentRef, () => alive, Infinity, null, wake).then((o) => o && alive && done.current(o));
     return () => {
       alive = false;
+      clearTimeout(giveUp);
+      watch.disconnect();
+      window.removeEventListener("message", onMessage);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- autoScroll is read once, on mount
   }, [src, paymentRef]);
@@ -155,7 +201,12 @@ export function usePaymentReturn(onDone: (outcome: PaymentOutcome) => void, retu
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const ref = params.get("paid");
-    if (!ref) return setChecking(false);
+    // Nothing to leave alone, not "not returning": in development React runs
+    // this twice, and the second run, finding `?paid=` already dropped below,
+    // took the loader down while the first run's check was still out — step 1
+    // showed for seconds before step 2. `checking` starts from the server's
+    // view of the URL, so it is only ever turned off by an answer.
+    if (!ref) return;
     const declined = params.get("declined") === "1" ? (params.get("why") ?? "") : null;
     for (const k of ["paid", "declined", "why"]) params.delete(k);
     const qs = params.toString();
@@ -165,7 +216,9 @@ export function usePaymentReturn(onDone: (outcome: PaymentOutcome) => void, retu
     // hold is gone. Giving up after one minute told her "unconfirmed" for what
     // was usually a payment StreamPay had not written down yet.
     void pollPayment(ref, () => true, 80, declined).then((o) => {
-      setChecking(false);
+      // Paid: the loader stays up while the page leaves for the success popup,
+      // instead of flashing the spent checkout on the way.
+      if (o?.status !== "paid") setChecking(false);
       if (o) done.current(o);
     });
   }, []);
