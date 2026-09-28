@@ -55,7 +55,7 @@ directions:
 | | before (`manager`) | after (`admin`) |
 |---|---|---|
 | Manage the service list | ❌ | ✅ `catalog.manage` |
-| Change a booking's timing | ✅ | ✅ — see the override below |
+| Change a booking's timing | ✅ | ❌ — overridden, then taken back; see below |
 
 "Admin cannot change a booking's timing" is why `bookings.reschedule` is a
 capability of its own rather than part of `bookings.manage` — admin needed
@@ -71,6 +71,10 @@ reverting it one line.
 This is the one place the code knowingly departs from brief §3.3. It is recorded
 here, and in `lib/auth/rbac.ts` beside the grant, so that a later reader comparing
 the two documents finds a decision rather than a bug.
+
+**Taken back on 2026-09-01 at the salon's request.** Admin again holds neither
+`bookings.reschedule` nor `bookings.status`; an admin covering the desk uses the
+desk's own login. `lib/auth/rbac.ts` is the truth, and `check-roles.ts` asserts it.
 
 ## 4. One landing page, three screens
 
