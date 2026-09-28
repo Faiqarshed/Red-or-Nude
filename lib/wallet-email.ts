@@ -13,7 +13,7 @@ import { esc } from "@/lib/email/html";
 import { brandedEmail, INK, RED, sendReceipt, side } from "@/lib/email/shell";
 import { formatSAR } from "@/lib/money";
 import { siteOrigin } from "@/lib/site";
-import { walletBalance } from "@/lib/wallet";
+import { walletBalance, walletLaunched, walletOwner } from "@/lib/wallet";
 
 type Lang = "ar" | "en";
 
@@ -28,6 +28,10 @@ const T = {
     balance: "رصيدك الآن",
     sar: "ر.س",
     use: "يمكنك استخدامه في حجزك القادم، ولا تنتهي صلاحيته.",
+    correctedSubject: "تم تعديل رصيد محفظتك في ريد أور نيود",
+    corrected: "عدّلنا رصيد محفظتك:",
+    correction: "التعديل",
+    why: "السبب",
     signIn: (email: string, url: string) => `سجّلي الدخول بالبريد ${email} في ${url} لاستخدامه.`,
     footer: "ريد أور نيود",
   },
@@ -41,6 +45,10 @@ const T = {
     balance: "Your balance now",
     sar: "SAR",
     use: "Use it on your next booking. It never expires.",
+    correctedSubject: "Your Red or Nude wallet was corrected",
+    corrected: "We corrected your wallet balance:",
+    correction: "Correction",
+    why: "Reason",
     signIn: (email: string, url: string) => `Sign in with ${email} at ${url} to use it.`,
     footer: "Red or Nude",
   },
@@ -141,4 +149,66 @@ export async function sendCancelCreditEmail(bookingIds: string[], salonReason: s
   } catch (err) {
     console.error("[wallet] could not build or send the cancel credit email", err);
   }
+}
+
+/** Tell her the owner corrected her wallet, and why. Only once the wallet is live. Never throws. */
+export async function sendCorrectionEmail(ownerEmail: string, halalas: number, reason: string): Promise<void> {
+  try {
+    if (!(await walletLaunched())) return;
+    const customer = await walletOwner(ownerEmail);
+    if (!customer) return;
+    const { subject, html, text } = renderCorrectionEmail({
+      lang: customer.lang,
+      name: customer.name,
+      halalas,
+      balanceHalalas: (await walletBalance(ownerEmail)).available,
+      reason,
+    });
+    await sendReceipt("wallet-correction", { to: ownerEmail, toName: customer.name, subject, html, text });
+  } catch (err) {
+    console.error("[wallet] could not build or send the correction email", err);
+  }
+}
+
+export function renderCorrectionEmail(input: {
+  lang: Lang;
+  name: string | null;
+  /** Signed: + into her wallet, − out of it. */
+  halalas: number;
+  balanceHalalas: number;
+  reason: string;
+}) {
+  const t = T[input.lang];
+  const { start } = side(input.lang);
+  const sign = input.halalas < 0 ? "−" : "+";
+  const money = (h: number) => `${formatSAR(h, { decimals: true })} ${t.sar}`;
+  const line = (label: string, value: string, strong = false) =>
+    `<p style="margin:6px 0 0;font-size:14px;${strong ? "font-weight:700;" : ""}color:${INK};text-align:${start};">${esc(label)}: <span dir="ltr" style="color:${RED};">${esc(value)}</span></p>`;
+
+  const html = brandedEmail({
+    lang: input.lang,
+    subject: t.correctedSubject,
+    title: t.correctedSubject,
+    taxInvoiceUrl: null,
+    pdfAttached: false,
+    body: `
+        <p style="margin:0 0 6px;font-size:15px;font-weight:600;color:${INK};text-align:${start};">${esc(t.greeting(input.name))}</p>
+        <p style="margin:0 0 14px;font-size:14px;line-height:1.6;color:rgba(26,26,26,0.6);text-align:${start};">${esc(t.corrected)}</p>
+        ${line(t.correction, `${sign}${money(Math.abs(input.halalas))}`, true)}
+        ${line(t.why, input.reason)}
+        ${line(t.balance, money(input.balanceHalalas))}`,
+  });
+
+  const text = [
+    t.greeting(input.name),
+    t.corrected,
+    "",
+    `${t.correction}: ${sign}${money(Math.abs(input.halalas))}`,
+    `${t.why}: ${input.reason}`,
+    `${t.balance}: ${money(input.balanceHalalas)}`,
+    "",
+    t.footer,
+  ].join("\n");
+
+  return { subject: t.correctedSubject, html, text };
 }

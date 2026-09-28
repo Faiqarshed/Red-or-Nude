@@ -2,7 +2,7 @@
 // (docs/WALLET-PLAN.md, gap 2: there was no cancellation email at all).
 
 import { describe, expect, it } from "vitest";
-import { renderCancelCreditEmail } from "@/lib/wallet-email";
+import { renderCancelCreditEmail, renderCorrectionEmail } from "@/lib/wallet-email";
 
 const base = {
   name: "Sara",
@@ -46,5 +46,16 @@ describe("the cancel credit email", () => {
   it("escapes a reason typed at the desk", () => {
     const { html } = renderCancelCreditEmail({ ...base, lang: "en", salonReason: "<b>x</b>" });
     expect(html).not.toContain("<b>x</b>");
+  });
+});
+
+describe("the correction email", () => {
+  it("says which way her balance moved, and the owner's reason", () => {
+    const out = renderCorrectionEmail({ lang: "en", name: "Sara", halalas: -4_000, balanceHalalas: 0, reason: "Chargeback" });
+    expect(out.text).toContain("−40.00 SAR");
+    expect(out.text).toContain("Chargeback");
+
+    const back = renderCorrectionEmail({ lang: "en", name: "Sara", halalas: 4_000, balanceHalalas: 4_000, reason: "Salon error" });
+    expect(back.text).toContain("+40.00 SAR");
   });
 });

@@ -48,7 +48,11 @@ export type Capability =
   | "payments.view"
   | "payments.refund"
   | "settings.manage"
-  | "audit.view";
+  | "audit.view"
+  // The wallet's "Needs your decision" page, and the only way to correct a
+  // balance by hand. The owner's alone (CLAUDE.md): no staff action writes to
+  // a customer's wallet.
+  | "wallet.decide";
 
 const MATRIX: Record<StaffRole, Capability[]> = {
   ceo: [
@@ -78,6 +82,7 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "payments.refund",
     "settings.manage",
     "audit.view",
+    "wallet.decide",
   ],
   admin: [
     // Revenue is branch-scoped for admins — the figure is filtered by branchId

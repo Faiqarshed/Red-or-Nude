@@ -74,6 +74,9 @@ export const NAV: NavGroup[] = [
     key: "system",
     items: [
       { key: "auditLog", href: "/admin/audit", icon: "ScrollText", cap: "audit.view" },
+      // The wallet's cases for the owner (docs/WALLET-PLAN.md). Empty until
+      // the wallet launches: nothing raises a case before then.
+      { key: "walletDecisions", href: "/admin/wallet-decisions", icon: "Scale", cap: "wallet.decide" },
     ],
   },
   {

@@ -311,6 +311,7 @@ bookings list. Persisted per user.
 | Staff | ✅ | ✅ | ❌ | ❌ |
 | Content / Marketing | ✅ | ✅ | ❌ | ❌ |
 | Settings + audit log | ✅ | ❌ | ❌ | ❌ |
+| Wallet: Needs your decision, corrections | ✅ | ❌ | ❌ | ❌ |
 
 Enforced in the Server Action layer, not only in the UI. The sidebar hides what a
 role can't reach, but the check that matters is server-side.

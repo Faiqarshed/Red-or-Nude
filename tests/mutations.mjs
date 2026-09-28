@@ -42,6 +42,8 @@ const PROMO = "app/(admin)/admin/(shell)/promo-codes/actions.ts";
 const STAFFCODE = "lib/staff-codes.ts";
 const WALLET = "lib/wallet.ts";
 const STATUS = "app/(admin)/admin/(shell)/bookings/actions.ts";
+const DECIDE = "app/(admin)/admin/(shell)/wallet-decisions/actions.ts";
+const RBAC = "lib/auth/rbac.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -798,11 +800,38 @@ const mutations = [
         "  const due = Math.min(refundedSoFarHalalas, cardPart);",
       ),
   },
+
+  // ---- the owner settles a wallet case -------------------------------------
+  {
+    name: "decisions: correct a balance without saying why",
+    expect: "tests/wallet-decisions.test.ts",
+    apply: () =>
+      mutate(
+        DECIDE,
+        '  if (checkNote(adminStrings.en.validation, "Reason", note, { max: ADJUST_REASON_MAX })) return { ok: false, error: "note" };',
+        "",
+      ),
+  },
+  {
+    name: "decisions: settle a case that is already settled",
+    expect: "tests/wallet-decisions.test.ts",
+    apply: () =>
+      mutate(
+        DECIDE,
+        "      .where(and(eq(walletDecisions.id, id), isNull(walletDecisions.resolvedAt)))",
+        "      .where(eq(walletDecisions.id, id))",
+      ),
+  },
+  {
+    name: "decisions: let the admin correct a wallet too",
+    expect: "tests/wallet-decisions.test.ts",
+    apply: () => mutate(RBAC, '    "payments.view",\n  ],\n  receptionist: [', '    "payments.view",\n    "wallet.decide",\n  ],\n  receptionist: ['),
+  },
 ];
 
 const touched = [
   CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, LINES, TREAT,
-  DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS,
+  DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS, DECIDE, RBAC,
 ];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));

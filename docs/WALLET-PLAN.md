@@ -202,6 +202,7 @@ Examples:
   - a customer saying her email was mistyped (staff add it with the booking code and phone they checked);
   - a revived payment that could not be confirmed or delivered.
 - Each item has **Correct**: an amount (+ or −), a required reason, written as a `correction` row and to the audit log, and emailed to her. Marking an item done without a correction also needs a reason.
+- **Built (step 8a):** `/admin/wallet-decisions`, the `wallet.decide` capability (CEO only), `decideWallet` (closes the case and writes the correction in one transaction, guarded on the case being open, so a double submit writes one), `correctWallet` and `walletOwner` in `lib/wallet.ts`, and the correction email (sent only after launch). Not yet: the staff form for a mistyped email, and changing a gift card's email (with step 6).
 - **Change a gift card's email:** for a buyer's typo in the recipient email. Owner only, a required reason, audited, and only while the card is unclaimed. The new recipient gets the gift card email.
 - Skipped: a read-only balance in the admin customer screen. Add it when support asks.
 
@@ -215,7 +216,7 @@ One commit per step, docs in the same commit. Nothing reaches customers until st
 5. Purchase checkouts: `startPurchase` wallet in one transaction and zero path, two routes, releases, revive re-spend, UI.
 6. Gift cards: required recipient email, the email lock, delivery claim, `createAccount` claim/merge, inline image, emails.
 7. `owedCredit` conversion, `reverseCredit` in `refundedOutside` (**built** for cancel credit).
-8. "Needs your decision" page, owner correction, and changing a gift card's email.
+8. "Needs your decision" page, owner correction (**built**), and changing a gift card's email.
 9. Launch: set `wallet_launched_at`, remove `refundBookings` and `payments.refund`, PAYMENTS-STATUS.md §2 updated to "built".
 
 ## Verification

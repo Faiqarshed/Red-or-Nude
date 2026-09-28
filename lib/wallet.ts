@@ -10,9 +10,9 @@
 // index on that table rather than by a read before it.
 
 import "server-only";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
-import { bookings, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
+import { bookings, customers, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
 import { getSettings } from "@/lib/settings";
 
 /** Whether the wallet is live (`wallet_launched_at`). */
@@ -256,4 +256,47 @@ export async function reverseCredit(
     });
   }
   return { tookHalalas: due, owedHalalas: Math.max(0, -total) };
+}
+
+/**
+ * The customer row a wallet's email belongs to, when a row has to be named: the
+ * account with that email, else the guest row. Undefined when nobody has it.
+ */
+export async function walletOwner(email: string, executor: Pick<typeof db, "select"> = db) {
+  const [owner] = await executor
+    .select()
+    .from(customers)
+    .where(sql`lower(${customers.email}) = ${email.trim().toLowerCase()}`)
+    .orderBy(desc(sql`${customers.emailVerifiedAt} is not null`))
+    .limit(1);
+  return owner;
+}
+
+/**
+ * The owner's correction: `halalas` in (+) or out (−) of the wallet of
+ * `ownerEmail`, with the reason she gave, on walletOwner's row. Null when no
+ * customer has the email: there is no wallet to correct. Call from the one
+ * owner-only action, which audits it.
+ */
+export async function correctWallet(
+  tx: Tx,
+  c: { ownerEmail: string; halalas: number; note: string; actorId: string | null },
+): Promise<string | null> {
+  const email = c.ownerEmail.trim().toLowerCase();
+  const owner = await walletOwner(email, tx);
+  if (!owner) return null;
+
+  await lockWallet(tx, email);
+  const [row] = await tx
+    .insert(walletTxns)
+    .values({
+      customerId: owner.id,
+      ownerEmail: email,
+      deltaHalalas: c.halalas,
+      reason: "correction",
+      note: c.note,
+      actorId: c.actorId,
+    })
+    .returning({ id: walletTxns.id });
+  return row.id;
 }

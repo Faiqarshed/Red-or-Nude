@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
+  Scale,
   ScrollText,
   Sparkles,
   Star,
@@ -46,6 +47,7 @@ const ICONS: Record<string, LucideIcon> = {
   UserCog,
   UserX,
   UsersRound,
+  Scale,
 };
 
 /**
