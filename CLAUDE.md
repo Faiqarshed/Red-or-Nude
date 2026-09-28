@@ -120,6 +120,8 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
 ## Open questions — ask, don't guess
 - Salon cancel inside 3 h (above).
 - VAT on gift cards and credit notes (waits on the accountant; blocks wallet step 3).
+- A group dropping guests down to 2 (docs/WALLET-PLAN.md open question 0). Our
+  assumption only; until the client agrees, a group cancels as one.
 
 ## Verify before saying done
 - `npx tsc --noEmit` · `npm run lint` · `npm test` (real Postgres, serial)

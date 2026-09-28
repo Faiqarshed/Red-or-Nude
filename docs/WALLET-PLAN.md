@@ -16,7 +16,6 @@ Fixed decisions:
 - **A guest is her email.** Every credit is tagged with the email of the booking or card it came from, and only a sign-in with that email reaches it.
 - **A gift card is locked to its recipient's email.** At checkout the code works only together with that email, and anything left over is tagged to it. Someone who sees the code alone can't use it or lock it. Cards sold before launch stay unlocked: they were sold as "the code is the card".
 - **Only the booker cancels, and nobody refunds from StreamPay's dashboard.** Both are policy. The code still handles a dashboard refund or a chargeback safely (`reverseCredit`), because a rule is not a lock and a bank can reverse a payment whatever we decide.
-- **A group can drop guests, as long as 2 stay.** The 10% group discount holds for any 2 or more, so the guests who stay still pay a fair group price. Leaving 1 is refused: she cancels the whole group or none. Each cancelled guest's credit is what she actually paid, after the discount. No cap on how many are dropped.
 - **Every change is a row.** Spends, releases, reversals and corrections are all written to the ledger, so "why did my balance change?" is answered from the table alone.
 - **She never sees a negative balance.** Shown and spendable: `max(0, sum)`. Only a customer who paid and then got that money back can owe the wallet; the debt is kept in the table and paid off by her next credits first. A gift card's recipient never owes anything for the buyer's payment.
 - **Only the owner corrects, with a reason.** No staff action writes to the ledger. The owner can add a `correction` row from the "Needs your decision" page, with a required reason, recorded in the audit log.
@@ -24,6 +23,9 @@ Fixed decisions:
 - **Gift card email:** the brand card image goes inline (cid attachment), so it shows without "load images".
 
 ## Open questions
+**For the client (to send): our assumption, not decided.**
+0. **A group dropping guests.** Today a group cancels as one (CLAUDE.md, `app/api/my-bookings/cancel/route.ts:75`). Our assumption: a group can drop guests as long as 2 stay. The 10% group discount holds for any 2 or more, so the guests who stay still pay a fair group price. Leaving 1 is refused: she cancels the whole group or none. Each cancelled guest's credit is what she actually paid, after the discount. No cap on how many are dropped. **Nothing that depends on it is built until the client agrees.** Until then the whole-group cancel stays the only one, and every other step goes ahead.
+
 **For the client (sent, waiting):**
 1. **Salon cancel inside 3 h.** The technician is off sick at 11:00 for a 12:00 booking. Offer a reschedule first and credit if she declines? Must the salon enter a reason? Until answered, the build treats a salon cancel as always allowed, with a reason, crediting the wallet. That is what `setBookingStatus` does today ("she should not lose an appointment she paid for over a decision that was not hers"). The alternative is marking a no-show, which gives her nothing.
 2. **VAT** (the accountant): gift cards taxed at sale or at redemption; a credit note for a cancelled booking; credit spent as a StreamPay coupon. **Build step 0**: if credit must be a payment method and not a discount, steps 4 and 5 change, because StreamPay links only take coupons.
@@ -48,7 +50,7 @@ Fixed decisions:
 | No-show (`resolveNoShow`, marked no-show) | Nothing. Spent points are not returned either |
 | Gift card bought for an email that has an account | **+** full card value on delivery. The card becomes `redeemed` |
 | Gift card code + its recipient email entered at checkout | **+** the card's whole balance, tagged to the recipient email, then spent on the bill. Anything left stays in that email's wallet. A card sold before launch needs the code alone, and its leftover goes to the email she books with |
-| The booker drops guests from a group (2 or more stay) | **+** each dropped guest's discounted price |
+| The booker drops guests from a group (2 or more stay). *Assumption, open question 0* | **+** each dropped guest's discounted price |
 | Gift card's email signs up later | **+** every active card sent to that email is claimed at `createAccount` |
 | Chair purchase of 10 SAR or less we couldn't deliver | **+** amount (turns `owedCredit` into credit) |
 | Her own payment behind a cancel or chair credit is refunded outside the app or charged back | **−** what went back to her card, less what was already taken back, never more than the credit that payment gave. May go below 0: shown as 0, owner alerted |
@@ -82,7 +84,7 @@ Examples:
 12. **Purchases take no customer lock.** `startPurchase` (`purchase.ts:88`) has no transaction, so two tabs could spend one balance twice. Closed by `spendWallet` below.
 13. **A chargeback reverses nothing.** Chargebacks reach us only through the daily comparison (`reconcile.ts` `compareWithGateway`, 120 days back), which calls `refundedOutside` like the refund webhook does. `refundedOutside` only freezes gift cards. Closed by `reverseCredit` below.
 14. **A gift card code alone is enough to use it.** The buyer sees the code on the success screen and shares it (WhatsApp); anyone holding it could claim the card into their own wallet, even by starting a checkout and abandoning it. Closed by the recipient-email lock. `recipientEmail` (and `buyerEmail`) are optional today (`app/api/gift-cards/route.ts:35`, `purchase.ts:37-39`): the recipient's becomes required on the form. Cards sold before launch have no lock and work with the code alone, as they were sold.
-15. **A group cancels only as a unit** (`app/api/my-bookings/cancel/route.ts:75`), because the 10% exists only while 2 or more book together. Kept as the rule for a party of 2; a larger party can now drop guests down to 2 (Cancellation below).
+15. **A group cancels only as a unit** (`app/api/my-bookings/cancel/route.ts:75`), because the 10% exists only while 2 or more book together. Kept as the rule. Letting a larger party drop guests down to 2 is our assumption, waiting on the client (open question 0).
 
 ## Design
 
@@ -143,7 +145,7 @@ Examples:
 ### Cancellation
 - **Customer** (`app/api/my-bookings/cancel/route.ts:141`): `creditCancelled(..., "cancel-customer")` replaces `refundBookings`, inside the transaction of the guarded status update. Copy in `lib/dictionary.ts` (`cancelConfirm`, `cancelConfirmGroup`, `cancelled`, `cancelledNoRefund`) changes from "back to your card" to "to your wallet". Until `wallet_launched_at` is set, the card refund and its copy stay.
 - **Only the booker cancels.** Signed in, the party's customer; a guest, the booking email proved by its code, as today.
-- **Dropping guests from a group:** the route takes the guest ids to drop. Allowed only when 2 or more stay and none of the dropped is past `cancelRefusal`. Each dropped guest's credit is her own discounted share (`splitGroupPrice`, as billed), so the guests who stay keep their 10% and nobody gains a discount they didn't have. Leaving 1 → "Cancel the whole group instead." The whole-group cancel stays as it is.
+- **Dropping guests from a group** *(assumption, open question 0; not built until the client agrees)*: the route takes the guest ids to drop. Allowed only when 2 or more stay and none of the dropped is past `cancelRefusal`. Each dropped guest's credit is her own discounted share (`splitGroupPrice`, as billed), so the guests who stay keep their 10% and nobody gains a discount they didn't have. Leaving 1 → "Cancel the whole group instead." The whole-group cancel stays as it is.
 - **Salon** (`setBookingStatus`, `app/(admin)/admin/(shell)/bookings/actions.ts`):
   - the admin form sends the status it showed; the update is `where status = <that status>`, and zero rows back answers "This booking changed. Reload." instead of acting twice;
   - entering `cancelled` requires a reason, and the status change, `creditCancelled(..., "cancel-salon", reason)` and `returnPackCredits` run in **one transaction**, so a crash leaves all or none;
@@ -195,7 +197,7 @@ Examples:
 One commit per step, docs in the same commit. Nothing reaches customers until step 9.
 0. The accountant's VAT answer (open question 2). Steps 4 and 5 don't start without it.
 1. Migration (guest identity, `customer_email`, `wallet_txns`, `wallet_decisions`, `wallet_launched_at`), `lib/wallet.ts`, and its balance and lock tests. Hide the walk-in flow.
-2. Cancellation: customer and salon (one transaction, guarded status, reason, no un-cancel), dropping guests from a group, no-show points, the cancel email. Behind `wallet_launched_at`.
+2. Cancellation: customer and salon (one transaction, guarded status, reason, no un-cancel), no-show points, the cancel email. Behind `wallet_launched_at`. Dropping guests from a group comes after, in its own commit, only once the client agrees (open question 0).
 3. Account screen: the wallet card and its history.
 4. Booking checkout: gift card and wallet, quote route, UI.
 5. Purchase checkouts: `startPurchase` wallet in one transaction and zero path, two routes, releases, revive re-spend, UI.
@@ -221,7 +223,7 @@ One commit per step, docs in the same commit. Nothing reaches customers until st
 - the walk-in button is not shown at the desk;
 - **gift card lock**: the right code with the wrong email → "This card can't be used", card untouched; the right pair → claimed, leftover tagged to the recipient email; the right pair again after an abandoned checkout → "This card's value is in the wallet of this email"; a card sold before launch → the code alone works;
 - owner changes an unclaimed card's email with a reason → audited, the new email works and the old one doesn't; on a claimed card → refused;
-- **group drop**: 5 guests, drop 3 → 2 stay at 10% off, 3 credits of each one's discounted price; 2 guests, drop 1 → refused; someone other than the booker → refused;
+- **group drop** (only if the client agrees, open question 0): 5 guests, drop 3 → 2 stay at 10% off, 3 credits of each one's discounted price; 2 guests, drop 1 → refused; someone other than the booker → refused;
 - **group partial refund**: one 400 payment for 4 guests, all cancelled; running total 100 → one reversal of 100 (not 400);
 - signup claims an active card locked to that email and skips an expired one;
 - gift card purchase with `wallet` → refused;
