@@ -408,7 +408,11 @@ export default function BookingDrawer({
             `${t.frontDesk.tooEarly} ${localTime(new Date(opensAt).toISOString())} · ${formatCountdown(opensAt - Date.now(), lang)}`
           : res.error === "changed"
             ? t.bookings.changed
-            : t.common.error;
+            : res.error === "has-credit"
+              ? t.bookings.hasCredit
+              : res.error === "held"
+                ? t.bookings.held
+                : t.common.error;
       if (asking) setAskError(message);
       else setError(message);
       return false;

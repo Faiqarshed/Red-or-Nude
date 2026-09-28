@@ -4,12 +4,14 @@ import { revalidatePath } from "next/cache";
 import { and, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookings, loyaltyTxns, packTxns, payments, reviews } from "@/lib/db/schema";
+import { bookings, loyaltyTxns, packTxns, payments, reviews, walletTxns } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { inBranchScope } from "@/lib/admin/branch-scope";
 import { can } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
 import { returnPackCredits } from "@/lib/packs";
+import { cancelDeadline } from "@/lib/cancellation";
+import { creditCancelled, walletLaunched, WalletHeld } from "@/lib/wallet";
 import { rescheduleBooking as moveBooking } from "@/lib/bookings";
 import { inviteReview } from "@/lib/reviews/invite";
 import { assignIfToday, notifyTechnician, pickTechnician } from "@/lib/assign";
@@ -94,6 +96,26 @@ export async function setBookingStatus(
   // The salon's word on why, for her and for the owner's books (CLAUDE.md).
   if (entering("cancelled") && !why) return { ok: false, error: "reason-required" };
 
+  // Her credit is spent from the moment it lands, so the booking it came from
+  // can never be live again. The desk makes a new booking instead.
+  if (before.status === "cancelled" && status !== "cancelled") {
+    const [credited] = await db
+      .select({ id: walletTxns.id })
+      .from(walletTxns)
+      .where(and(eq(walletTxns.bookingId, id), inArray(walletTxns.reason, ["cancel-customer", "cancel-salon"])))
+      .limit(1);
+    if (credited) return { ok: false, error: "has-credit" };
+  }
+
+  // After launch a salon cancel credits her wallet in full. Inside her own
+  // cancel window, whether it should is open question 1 (CLAUDE.md): held,
+  // not guessed. Before launch it moves no money, as it always has.
+  const credit = entering("cancelled") && (await walletLaunched());
+  if (credit) {
+    const { cancel_cutoff_hours: cutoff } = await getSettings(["cancel_cutoff_hours"]);
+    if (now >= cancelDeadline(before, cutoff)) return { ok: false, error: "held" };
+  }
+
   // Not before her slot (brief §3.1, and `checkin_early_min` in lib/settings.ts).
   //
   // This lives here, on the shared write path, rather than only at the front
@@ -148,9 +170,11 @@ export async function setBookingStatus(
       // Not resolveNoShow, which also ends at `cancelled`: she did not come, and
       // the credit goes the way the money goes.
       if (entering("cancelled")) await returnPackCredits([id], "salon-cancelled", tx);
+      if (credit) await creditCancelled(tx, [id], "cancel-salon", why);
       return true;
     });
   } catch (err) {
+    if (err instanceof WalletHeld) return { ok: false, error: "held" };
     console.error("[bookings] status change failed", err);
     return { ok: false, error: "failed" };
   }

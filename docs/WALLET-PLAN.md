@@ -42,6 +42,13 @@ Fixed decisions:
 - Credit never expires (the client).
 - StreamPay's payment page has no field for typing a coupon (checked in the sandbox). If one appears, a payment below our amount is already refunded and nothing is given for it (`confirm.ts` "wrong-amount", `purchase.ts` "wrong-amount").
 
+## Launch blockers
+Built around, not decided. Each is a refusal (`WalletHeld`, "held") or an `it.todo` in the tests, and `wallet_launched_at` is not set until every one is answered:
+- **Open question 1:** a salon cancel inside 3 h is refused with "held" after launch (`setBookingStatus`). Before launch it goes through with no money, as it always has.
+- **Open question 6:** a booking with no `customer_email` is refused with "held" when cancelling after launch (`creditCancelled`).
+- **Open question 2 (VAT):** steps 4 and 5 don't start.
+- **Open question 0 (group drop):** not a blocker. Without an answer the wallet launches with the whole-group cancel only.
+
 ## How money enters and leaves
 
 | Event | Wallet |
@@ -146,13 +153,14 @@ Examples:
 - **UI:** `app/(site)/booking/payment/page.tsx` gets "Gift card number" and "Email it was sent to" fields, and a "Use my credit (X SAR)" switch when signed in. `payableTotal` subtracts it, and the `nothingToPay` copy stops saying "your membership covers this". The same switch goes on the membership and chair pay pages, not the gift card page. All of it hidden until `wallet_launched_at` is set.
 
 ### Cancellation
-- **Customer** (`app/api/my-bookings/cancel/route.ts:141`): `creditCancelled(..., "cancel-customer")` replaces `refundBookings`, inside the transaction of the guarded status update. Copy in `lib/dictionary.ts` (`cancelConfirm`, `cancelConfirmGroup`, `cancelled`, `cancelledNoRefund`) changes from "back to your card" to "to your wallet". Until `wallet_launched_at` is set, the card refund and its copy stay.
+- **Customer** (`app/api/my-bookings/cancel/route.ts`), **built (step 2c):** after launch, `creditCancelled(..., "cancel-customer")` replaces `refundBookings`, in one transaction with the guarded status update and the pack credit return. Before launch the old path runs unchanged. Copy in `lib/dictionary.ts` (`cancelConfirm`, `cancelConfirmGroup`, `cancelled`, `cancelledNoRefund`) changes from "back to your card" to "to your wallet". Until `wallet_launched_at` is set, the card refund and its copy stay.
 - **Only the booker cancels.** Signed in, the party's customer; a guest, the booking email proved by its code, as today.
 - **Dropping guests from a group** *(assumption, open question 0; not built until the client agrees)*: the route takes the guest ids to drop. Allowed only when 2 or more stay and none of the dropped is past `cancelRefusal`. Each dropped guest's credit is her own discounted share (`splitGroupPrice`, as billed), so the guests who stay keep their 10% and nobody gains a discount they didn't have. Leaving 1 → "Cancel the whole group instead." The whole-group cancel stays as it is.
 - **Salon** (`setBookingStatus`, `app/(admin)/admin/(shell)/bookings/actions.ts`):
   - **built (step 2a):** the admin form sends the status it showed; the update is `where status = <that status>`, and zero rows back answers "This booking changed. Reload." instead of acting twice;
   - **built (step 2a):** entering `cancelled` requires a reason, and the status change and `returnPackCredits` run in **one transaction**, so a crash leaves all or none. `creditCancelled(..., "cancel-salon", reason)` joins that transaction in step 2c;
-  - leaving `cancelled` is refused while the booking has a cancel credit;
+  - **built (step 2c):** after launch, `creditCancelled(..., "cancel-salon", reason)` runs in that transaction;
+  - **built (step 2c):** leaving `cancelled` is refused while the booking has a cancel credit;
   - inside `cancel_cutoff_hours`: open question 1. The cancel itself stays allowed, as it is today. Whether it credits her is held until the client answers, and launch waits on it.
 - **No-show (built, step 2b):** `isDead` (`lib/rewards.ts`) keeps a spend on a `no_show` or no-show-resolved booking, so spent points stay spent. What a no-show earned still doesn't count: the rule speaks of spent points only.
 - **Remove** `refundBookings` and the `payments.refund` permission (`lib/auth/rbac.ts:42,70`) at launch, once `wallet_launched_at` is set.

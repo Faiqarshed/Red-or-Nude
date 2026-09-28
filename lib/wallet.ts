@@ -8,9 +8,22 @@
 // index on that table rather than by a read before it.
 
 import "server-only";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
-import { walletTxns } from "@/lib/db/schema";
+import { bookings, customers, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
+import { getSettings } from "@/lib/settings";
+
+/** Whether the wallet is live (`wallet_launched_at`). */
+export async function walletLaunched(): Promise<boolean> {
+  return (await getSettings(["wallet_launched_at"])).wallet_launched_at !== "";
+}
+
+/**
+ * A case the salon has not decided yet (docs/WALLET-PLAN.md, open questions).
+ * Thrown rather than guessed at; the caller refuses with "held". Only reachable
+ * after launch, and launch waits for every one to be answered.
+ */
+export class WalletHeld extends Error {}
 
 /**
  * What she holds. `total` can be below zero, when a payment behind her credit
@@ -93,4 +106,71 @@ export async function releaseSpend(tx: Tx, spendId: string): Promise<void> {
       reversesId: spend.id,
     })
     .onConflictDoNothing();
+}
+
+/**
+ * Credit the wallet for cancelled bookings: per booking, what she paid on it by
+ * card plus what her wallet paid, to the email the booking was made under.
+ * Call in the transaction that moved the bookings to `cancelled`.
+ *
+ * One cancel credit per booking (wallet_txns_cancel_unique), so a repeat
+ * writes nothing. An unpaid hold credits nothing. Money on a booking with no
+ * customer goes to the owner (wallet_decisions). A booking made before
+ * bookings kept their email is held: open question 6.
+ */
+export async function creditCancelled(
+  tx: Tx,
+  bookingIds: string[],
+  reason: "cancel-customer" | "cancel-salon",
+  note?: string,
+): Promise<number> {
+  if (bookingIds.length === 0) return 0;
+
+  const paidOn = and(eq(payments.bookingId, bookings.id), eq(payments.status, "paid"));
+  const rows = await tx
+    .select({
+      id: bookings.id,
+      customerId: bookings.customerId,
+      customerEmail: bookings.customerEmail,
+      walletPart: bookings.walletDiscountHalalas,
+      cardPart: sql<number>`(select coalesce(sum(${payments.amountHalalas}), 0)::int from ${payments} where ${paidOn})`,
+      paymentId: sql<string | null>`(select ${payments.id} from ${payments} where ${paidOn} limit 1)`,
+    })
+    .from(bookings)
+    .where(inArray(bookings.id, bookingIds));
+
+  let credited = 0;
+  for (const b of rows) {
+    const amount = b.cardPart + b.walletPart;
+    if (amount <= 0) continue;
+
+    if (!b.customerId) {
+      await tx.insert(walletDecisions).values({
+        kind: "no-customer",
+        bookingId: b.id,
+        paymentId: b.paymentId,
+        amountHalalas: amount,
+        detail: { reason },
+      });
+      continue;
+    }
+    if (!b.customerEmail) throw new WalletHeld(`booking ${b.id} has no email (open question 6)`);
+
+    await tx.execute(sql`select 1 from ${customers} where ${customers.id} = ${b.customerId} for update`);
+    const [row] = await tx
+      .insert(walletTxns)
+      .values({
+        customerId: b.customerId,
+        ownerEmail: b.customerEmail,
+        deltaHalalas: amount,
+        reason,
+        bookingId: b.id,
+        paymentId: b.paymentId,
+        note,
+      })
+      .onConflictDoNothing()
+      .returning({ id: walletTxns.id });
+    if (row) credited += amount;
+  }
+  return credited;
 }

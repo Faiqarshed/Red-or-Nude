@@ -21,6 +21,7 @@ import { cancelDeadline, cancelRefusal } from "@/lib/cancellation";
 import { getSettings } from "@/lib/settings";
 import { clientIp, throttled } from "@/lib/throttle";
 import { refundBookings } from "@/lib/payments/refund";
+import { creditCancelled, walletLaunched, WalletHeld } from "@/lib/wallet";
 import { returnPackCredits } from "@/lib/packs";
 import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
@@ -112,11 +113,10 @@ export async function POST(request: Request) {
     );
   }
 
-  // One statement, so it needs no transaction to be atomic. Guarded on status as
-  // well as id: two taps on a slow connection must not produce two refunds — the
-  // second matches nothing and returns nothing.
-  const cancelled = (
-    await db
+  // Guarded on status as well as id: two taps on a slow connection must not
+  // produce two refunds or two credits — the second matches nothing.
+  const release = (executor: Pick<typeof db, "update">) =>
+    executor
       .update(bookings)
       .set({ status: "cancelled", cancelReason: "customer", updatedAt: new Date() })
       .where(
@@ -129,30 +129,58 @@ export async function POST(request: Request) {
         ),
       )
       .returning({ id: bookings.id })
-  ).map((r) => r.id);
+      .then((rows) => rows.map((r) => r.id));
 
-  if (cancelled.length === 0) {
-    return NextResponse.json({ error: "already-cancelled" }, { status: 409 });
-  }
-
-  // Money comes back after the chair is released, never before: a gateway that
-  // is having a bad day must not be able to keep a customer's appointment alive.
-  // refundBookings never throws — a failure is logged for the admin to settle.
-  const refund = await refundBookings(cancelled, "customer-cancelled");
-
-  // A pack credit comes back exactly where money does, and only where money
-  // does. Inside the window it is returned; cancel later and it is spent, the
-  // same way the fee is kept — the symmetry is the rule, and putting this call
-  // beside the refund is what keeps the two from drifting apart.
-  //
-  // Nothing here can fail the cancellation: the chair is already released, and a
-  // credit that did not come back is a support ticket, not a reason to leave an
-  // appointment standing.
+  let cancelled: string[];
+  let refund: Awaited<ReturnType<typeof refundBookings>> = { ok: false };
+  let creditedHalalas = 0;
   let creditsBack = 0;
-  try {
-    creditsBack = await returnPackCredits(cancelled, "customer-cancelled");
-  } catch (err) {
-    console.error("[cancel] could not return pack credits", err);
+
+  if (await walletLaunched()) {
+    // The wallet (docs/WALLET-PLAN.md): what she paid becomes credit, never a
+    // card refund. The release, the credit and the pack credits are one
+    // transaction, so a crash leaves all of them or none.
+    try {
+      ({ cancelled, creditedHalalas, creditsBack } = await db.transaction(async (tx) => {
+        const ids = await release(tx);
+        return {
+          cancelled: ids,
+          creditedHalalas: await creditCancelled(tx, ids, "cancel-customer"),
+          creditsBack: await returnPackCredits(ids, "customer-cancelled", tx),
+        };
+      }));
+    } catch (err) {
+      if (err instanceof WalletHeld) return NextResponse.json({ error: "held" }, { status: 409 });
+      throw err;
+    }
+    if (cancelled.length === 0) {
+      return NextResponse.json({ error: "already-cancelled" }, { status: 409 });
+    }
+  } else {
+    // Legacy until the wallet launches. Do not copy (CLAUDE.md).
+    cancelled = await release(db);
+    if (cancelled.length === 0) {
+      return NextResponse.json({ error: "already-cancelled" }, { status: 409 });
+    }
+
+    // Money comes back after the chair is released, never before: a gateway that
+    // is having a bad day must not be able to keep a customer's appointment alive.
+    // refundBookings never throws — a failure is logged for the admin to settle.
+    refund = await refundBookings(cancelled, "customer-cancelled");
+
+    // A pack credit comes back exactly where money does, and only where money
+    // does. Inside the window it is returned; cancel later and it is spent, the
+    // same way the fee is kept — the symmetry is the rule, and putting this call
+    // beside the refund is what keeps the two from drifting apart.
+    //
+    // Nothing here can fail the cancellation: the chair is already released, and a
+    // credit that did not come back is a support ticket, not a reason to leave an
+    // appointment standing.
+    try {
+      creditsBack = await returnPackCredits(cancelled, "customer-cancelled");
+    } catch (err) {
+      console.error("[cancel] could not return pack credits", err);
+    }
   }
 
   await recordAudit(
@@ -164,6 +192,7 @@ export async function POST(request: Request) {
       diff: {
         status: { from: anchor.status, to: "cancelled" },
         refundedHalalas: { from: null, to: refund.ok ? refund.amountHalalas : null },
+        creditedHalalas: { from: null, to: creditedHalalas || null },
         packCreditsReturned: { from: null, to: creditsBack || null },
       },
     },
@@ -188,5 +217,6 @@ export async function POST(request: Request) {
     // `false` here is not a failed cancellation — the booking is gone either
     // way. It means the money needs a human, and the screen says so.
     refunded: refund.ok,
+    credited: creditedHalalas,
   });
 }

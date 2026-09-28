@@ -71,9 +71,10 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
   items but **not gift cards**, leaves ≥ 1 SAR to charge unless it covers the whole
   bill. Only the owner (CEO) can correct a balance, with a reason, audited. Staff
   actions never write to the ledger. A chargeback writes a `reversal` row.
-- ⚠ Today a customer cancel still refunds the card (`refundBookings` in
-  `app/api/my-bookings/cancel/route.ts`). That is legacy pending the wallet — do not
-  copy it anywhere new.
+- ⚠ Until `wallet_launched_at` is set, a customer cancel still refunds the card
+  (`refundBookings` in `app/api/my-bookings/cancel/route.ts`). That is legacy pending
+  the wallet — do not copy it anywhere new. After launch it credits the wallet
+  (`creditCancelled`, `lib/wallet.ts`).
 
 **Cancel, reschedule, no-show**
 - Customer may cancel/reschedule only `pending`/`confirmed` bookings, until 3 h before

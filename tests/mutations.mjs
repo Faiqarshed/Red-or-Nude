@@ -742,6 +742,30 @@ const mutations = [
         '  if (status === "no_show" || row.noShow) return false;',
       ),
   },
+
+  // ---- cancelling into the wallet -------------------------------------------
+  {
+    name: "cancel credit: give back the card part and forget what her wallet paid",
+    expect: "tests/cancel-credit.test.ts",
+    apply: () => mutate(WALLET, "    const amount = b.cardPart + b.walletPart;", "    const amount = b.cardPart;"),
+  },
+  {
+    name: "cancel credit: let a credited cancel be set back to confirmed",
+    expect: "tests/cancel-credit.test.ts",
+    apply: () =>
+      mutate(STATUS, '    if (credited) return { ok: false, error: "has-credit" };', ""),
+  },
+  {
+    name: "cancel credit: decide open question 1 by crediting inside the window",
+    expect: "tests/cancel-credit.test.ts",
+    apply: () =>
+      mutate(STATUS, '    if (now >= cancelDeadline(before, cutoff)) return { ok: false, error: "held" };', ""),
+  },
+  {
+    name: "cancel credit: refund her card after launch as before",
+    expect: "tests/cancel-credit.test.ts",
+    apply: () => mutate(CANCEL, "  if (await walletLaunched()) {", "  if (false) {"),
+  },
 ];
 
 const touched = [
