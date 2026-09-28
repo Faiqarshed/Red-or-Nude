@@ -126,6 +126,39 @@ describe("a guest is her email", () => {
   });
 });
 
+describe("a wallet is an email", () => {
+  it("reaches credit made while she was signed out, once she signs in with that email", async () => {
+    const [account] = await db
+      .insert(customers)
+      .values({ phone: PHONE, email: "sara@test.local", emailVerifiedAt: new Date() })
+      .returning();
+    // Signed out, she books as a guest under her own address: a guest row.
+    const signedOut = await book({ phone: PHONE, email: "sara@test.local" });
+    expect(signedOut.customerId).not.toBe(account.id);
+    await credit(signedOut.customerId!, "sara@test.local", 10_000);
+
+    expect((await walletBalance("sara@test.local")).available).toBe(10_000);
+  });
+
+  it("lets only one of two checkouts spend it, from whichever row each books as", async () => {
+    const [account] = await db
+      .insert(customers)
+      .values({ phone: PHONE, email: "sara@test.local", emailVerifiedAt: new Date() })
+      .returning();
+    const asGuest = await book({ phone: PHONE, email: "sara@test.local" }, 0);
+    const asAccount = await book({ phone: PHONE, email: "sara@test.local" }, 1, account.id);
+    await credit(account.id, "sara@test.local", 30_000);
+
+    const results = await Promise.all(
+      [asGuest, asAccount].map((b) =>
+        db.transaction((tx) => spendWallet(tx, b.customerId!, "sara@test.local", 30_000, { bookingId: b.id })),
+      ),
+    );
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+});
+
 describe("the ledger", () => {
   async function guest(email = "sara@test.local", slot = 0) {
     const b = await book({ phone: PHONE, email }, slot);
@@ -137,10 +170,10 @@ describe("the ledger", () => {
     await credit(customerId, "sara@test.local", 30_000);
     await credit(customerId, "someone-else@test.local", 99_900);
 
-    expect(await walletBalance(customerId, "Sara@Test.local")).toEqual({ total: 30_000, available: 30_000 });
+    expect(await walletBalance("Sara@Test.local")).toEqual({ total: 30_000, available: 30_000 });
 
     await credit(customerId, "sara@test.local", -45_000);
-    expect(await walletBalance(customerId, "sara@test.local")).toEqual({ total: -15_000, available: 0 });
+    expect(await walletBalance("sara@test.local")).toEqual({ total: -15_000, available: 0 });
   });
 
   it("spends what she has and refuses a halala more", async () => {
@@ -151,7 +184,7 @@ describe("the ledger", () => {
       spendWallet(tx, customerId, "sara@test.local", 10_001, { bookingId }),
     );
     expect(refused).toBeNull();
-    expect((await walletBalance(customerId, "sara@test.local")).total).toBe(10_000);
+    expect((await walletBalance("sara@test.local")).total).toBe(10_000);
 
     const spent = await db.transaction((tx) =>
       spendWallet(tx, customerId, "sara@test.local", 10_000, { bookingId }),
@@ -159,7 +192,7 @@ describe("the ledger", () => {
     expect(spent).toEqual(expect.any(String));
     const [row] = await db.select().from(walletTxns).where(eq(walletTxns.id, spent!));
     expect(row).toMatchObject({ deltaHalalas: -10_000, reason: "spend", bookingId });
-    expect(await walletBalance(customerId, "sara@test.local")).toEqual({ total: 0, available: 0 });
+    expect(await walletBalance("sara@test.local")).toEqual({ total: 0, available: 0 });
   });
 
   it("lets only one of two checkouts at once spend one balance", async () => {
@@ -174,7 +207,7 @@ describe("the ledger", () => {
     );
 
     expect(results.filter(Boolean)).toHaveLength(1);
-    expect(await walletBalance(customerId, "sara@test.local")).toEqual({ total: 0, available: 0 });
+    expect(await walletBalance("sara@test.local")).toEqual({ total: 0, available: 0 });
   });
 
   it("refuses a second spend on the same booking", async () => {
@@ -185,7 +218,7 @@ describe("the ledger", () => {
     await expect(
       db.transaction((tx) => spendWallet(tx, customerId, "sara@test.local", 10_000, { bookingId })),
     ).rejects.toThrow();
-    expect((await walletBalance(customerId, "sara@test.local")).total).toBe(40_000);
+    expect((await walletBalance("sara@test.local")).total).toBe(40_000);
   });
 
   it("gives a spend back once, however many times it is released", async () => {
@@ -204,7 +237,7 @@ describe("the ledger", () => {
       .where(and(eq(walletTxns.reason, "release"), eq(walletTxns.reversesId, spent!)));
     expect(releases).toHaveLength(1);
     expect(releases[0].deltaHalalas).toBe(15_000);
-    expect((await walletBalance(customerId, "sara@test.local")).total).toBe(20_000);
+    expect((await walletBalance("sara@test.local")).total).toBe(20_000);
   });
 
   it("takes a released spend again once, for a checkout that turned up paid", async () => {
@@ -220,7 +253,7 @@ describe("the ledger", () => {
       spendWallet(tx, customerId, "sara@test.local", 15_000, { bookingId, reSpendOf: release.id }),
     );
     expect(again).toEqual(expect.any(String));
-    expect((await walletBalance(customerId, "sara@test.local")).total).toBe(5_000);
+    expect((await walletBalance("sara@test.local")).total).toBe(5_000);
 
     await expect(
       db.transaction((tx) =>

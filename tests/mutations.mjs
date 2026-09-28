@@ -643,13 +643,18 @@ const mutations = [
 
   // ---- the wallet: who a guest is, and one balance spent once --------------
   {
-    name: "wallet: spend without taking the customer lock",
+    name: "wallet: spend without locking the wallet",
+    expect: "tests/wallet.test.ts",
+    apply: () => mutate(WALLET, "  await lockWallet(tx, email);\n", ""),
+  },
+  {
+    name: "subtle: lock the row she books as, not her email",
     expect: "tests/wallet.test.ts",
     apply: () =>
       mutate(
         WALLET,
-        "  await tx.execute(sql`select 1 from customers where id = ${customerId} for update`);\n",
-        "",
+        "  await lockWallet(tx, email);",
+        "  await tx.execute(sql`select 1 from customers where id = ${customerId} for update`);",
       ),
   },
   {
@@ -658,8 +663,8 @@ const mutations = [
     apply: () =>
       mutate(
         WALLET,
-        "      and(eq(walletTxns.customerId, customerId), eq(walletTxns.ownerEmail, ownerEmail.trim().toLowerCase())),",
-        "      and(eq(walletTxns.customerId, customerId)),",
+        "    .where(eq(walletTxns.ownerEmail, ownerEmail.trim().toLowerCase()));",
+        "    ;",
       ),
   },
   {
@@ -674,8 +679,8 @@ const mutations = [
     apply: () =>
       mutate(
         WALLET,
-        "  if ((await walletBalance(customerId, ownerEmail, tx)).available < halalas) return null;",
-        "  if ((await walletBalance(customerId, ownerEmail, tx)).available + 1 < halalas) return null;",
+        "  if ((await walletBalance(email, tx)).available < halalas) return null;",
+        "  if ((await walletBalance(email, tx)).available + 1 < halalas) return null;",
       ),
   },
   {

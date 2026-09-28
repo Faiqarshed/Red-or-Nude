@@ -132,7 +132,7 @@ export async function sendCancelCreditEmail(bookingIds: string[], salonReason: s
         lang: customer.lang,
         name: customer.name,
         amountHalalas: w.amount,
-        balanceHalalas: (await walletBalance(w.customerId, w.ownerEmail)).available,
+        balanceHalalas: (await walletBalance(w.ownerEmail)).available,
         salonReason,
         guestEmail: customer.emailVerifiedAt ? null : w.ownerEmail,
       });

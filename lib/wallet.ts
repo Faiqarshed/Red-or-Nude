@@ -1,8 +1,10 @@
 // The wallet: money a customer holds with the salon (docs/WALLET-PLAN.md).
 //
-// A ledger, wallet_txns, with no balance column. Her balance is SUM(delta) over
-// her rows *for one email*: credit belongs to the email of the booking or gift
-// card it came from, and only a sign-in with that email reaches it.
+// A ledger, wallet_txns, with no balance column. A wallet is an email: its
+// balance is SUM(delta) over the rows of that email, whichever customer row
+// each was written on. Credit belongs to the email of the booking or gift card
+// it came from, and only a sign-in with that email reaches it: an account
+// holder who booked signed out has credit on a guest row with her address.
 //
 // Every write is one row, and every repeat of a write is refused by a unique
 // index on that table rather than by a read before it.
@@ -10,7 +12,7 @@
 import "server-only";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
-import { bookings, customers, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
+import { bookings, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
 import { getSettings } from "@/lib/settings";
 
 /** Whether the wallet is live (`wallet_launched_at`). */
@@ -31,23 +33,28 @@ export class WalletHeld extends Error {}
  * sees and can spend is `available`.
  */
 export async function walletBalance(
-  customerId: string,
   ownerEmail: string,
   executor: Pick<typeof db, "select"> = db,
 ): Promise<{ total: number; available: number }> {
   const [row] = await executor
     .select({ total: sql<number>`coalesce(sum(${walletTxns.deltaHalalas}), 0)::int` })
     .from(walletTxns)
-    .where(
-      and(eq(walletTxns.customerId, customerId), eq(walletTxns.ownerEmail, ownerEmail.trim().toLowerCase())),
-    );
+    .where(eq(walletTxns.ownerEmail, ownerEmail.trim().toLowerCase()));
   return { total: row.total, available: Math.max(0, row.total) };
 }
 
+/** Serialise every write that reads a wallet's balance. Held to the end of `tx`. */
+async function lockWallet(tx: Tx, ownerEmail: string) {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"wallet:" + ownerEmail}))`);
+}
+
 /**
- * The only way to spend. Takes the customer row lock and reads the balance
- * inside it, so two checkouts in two tabs cannot both spend one balance: the
- * second waits here and sees the first's spend.
+ * The only way to spend. Locks the wallet (its email, not a customer row: one
+ * email can book as an account and as a guest) and reads the balance inside
+ * the lock, so two checkouts cannot both spend one balance: the second waits
+ * here and sees the first's spend.
+ *
+ * `customerId` is the row the checkout books as, recorded on the spend.
  *
  * Returns the spend row's id, or null when she does not have that much.
  * A checkout's first spend is one per booking or payment (the unique indexes),
@@ -62,15 +69,16 @@ export async function spendWallet(
   on: { bookingId?: string; paymentId?: string; reSpendOf?: string },
 ): Promise<string | null> {
   if (!Number.isInteger(halalas) || halalas <= 0) return null;
-  await tx.execute(sql`select 1 from customers where id = ${customerId} for update`);
+  const email = ownerEmail.trim().toLowerCase();
+  await lockWallet(tx, email);
 
-  if ((await walletBalance(customerId, ownerEmail, tx)).available < halalas) return null;
+  if ((await walletBalance(email, tx)).available < halalas) return null;
 
   const [row] = await tx
     .insert(walletTxns)
     .values({
       customerId,
-      ownerEmail: ownerEmail.trim().toLowerCase(),
+      ownerEmail: email,
       deltaHalalas: -halalas,
       reason: "spend",
       bookingId: on.bookingId,
@@ -156,7 +164,7 @@ export async function creditCancelled(
     }
     if (!b.customerEmail) throw new WalletHeld(`booking ${b.id} has no email (open question 6)`);
 
-    await tx.execute(sql`select 1 from ${customers} where ${customers.id} = ${b.customerId} for update`);
+    await lockWallet(tx, b.customerEmail);
     const [row] = await tx
       .insert(walletTxns)
       .values({

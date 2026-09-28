@@ -118,8 +118,8 @@ Examples:
 - `wallet_launched_at` in `lib/settings.ts`, default empty. Not on any admin screen.
 
 ### `lib/wallet.ts` (one file)
-- `walletBalance(customerId, ownerEmail, executor?)`: SUM(delta) over the customer's rows whose `owner_email` matches. Returns `{ total, available }`, `available = max(0, total)`. Nothing is derived from payment status: releases are rows.
-- `spendWallet(tx, customerId, ownerEmail, halalas, { bookingId | paymentId, reSpendOf? })`: **the only way to spend.** Locks the customer row (`select … for update`, as `createBookings` does), reads the balance inside the lock, refuses more than `available`, writes the `spend` row. `reSpendOf` (a release id) marks a revive's second spend.
+- `walletBalance(ownerEmail, executor?)`: SUM(delta) over every row whose `owner_email` matches, **whatever customer row it sits on**. A wallet is an email: an account holder who books signed out gets a guest row with her own address (an account is never found from a typed email), and credit from that booking must still reach her account. Returns `{ total, available }`, `available = max(0, total)`. Nothing is derived from payment status: releases are rows.
+- `spendWallet(tx, customerId, ownerEmail, halalas, { bookingId | paymentId, reSpendOf? })`: **the only way to spend.** Locks the wallet (a transaction advisory lock on the email, since one email can book as two customer rows), reads the balance inside the lock, refuses more than `available`, writes the `spend` row on the row the checkout books as. `reSpendOf` (a release id) marks a revive's second spend. Every write that reads a balance takes the same lock.
 - `releaseSpend(tx, spendId)`: writes the matching `release` row. Called in the same transaction as every write that ends a checkout: `markFailed` (`purchase.ts:435`), `releaseWebHold` (`lib/bookings.ts:748`) and the hold sweep (`payment-timeout`), and the undelivered-zero-bill path (gap 7).
 - `claimGiftCard(tx, code, email, customerId)`:
   - lock the card;

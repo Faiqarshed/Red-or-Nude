@@ -112,7 +112,7 @@ describe("her cancel, after launch", () => {
       customerId: b.customerId,
     });
     expect(credit.paymentId).not.toBeNull();
-    expect(await walletBalance(b.customerId!, EMAIL)).toEqual({
+    expect(await walletBalance(EMAIL)).toEqual({
       total: b.totalHalalas + 5_000,
       available: b.totalHalalas + 5_000,
     });
