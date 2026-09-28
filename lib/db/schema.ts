@@ -12,6 +12,7 @@
 import { relations, sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   date,
   index,
   type AnyPgColumn,
@@ -82,6 +83,18 @@ export const giftCardStatus = pgEnum("gift_card_status", [
 export const promoType = pgEnum("promo_type", ["percent", "fixed"]);
 
 export const langEnum = pgEnum("lang", ["ar", "en"]);
+
+/** Why a wallet row moved money. See walletTxns and docs/WALLET-PLAN.md. */
+export const walletReason = pgEnum("wallet_reason", [
+  "cancel-customer",
+  "cancel-salon",
+  "gift-card",
+  "chair-credit",
+  "spend",
+  "release",
+  "reversal",
+  "correction",
+]);
 
 // ------------------------------------------------------ identity & access ---
 
@@ -386,26 +399,32 @@ export const customers = pgTable(
   },
   (t) => ({
     /**
-     * One *guest* row per phone, so checkout recognises a returning guest.
+     * A guest is her email: one guest row per address, so checkout recognises
+     * a returning guest whatever phone she typed. Two people sharing a phone are
+     * two rows, and neither can overwrite the other's email (docs/WALLET-PLAN.md,
+     * gap 3). `lower()` because an address is not case sensitive.
+     *
+     * Partial on unverified rows: an account and a guest row may share an
+     * address until createAccount folds the guest row in.
+     */
+    guestEmailUnique: uniqueIndex("customers_guest_email_unique")
+      .on(sql`lower(${t.email})`)
+      .where(sql`${t.emailVerifiedAt} is null and ${t.email} is not null`),
+    /**
+     * One *email-less* guest row per phone: the old walk-in records, made at
+     * the desk before walk-ins were retired. No new ones are made; her first
+     * online booking with that phone gives the row her email (createBookings).
+     *
      * Accounts are left out on purpose: nobody proves they own a number, so a
-     * phone must never lead to an account. Otherwise signing up with, or booking
-     * as a guest under, someone else's number hands over their history and
-     * points. An account is found by its verified email alone.
+     * phone must never lead to an account.
      */
     guestPhoneUnique: uniqueIndex("customers_guest_phone_unique")
       .on(t.phone)
-      .where(sql`${t.emailVerifiedAt} is null`),
+      .where(sql`${t.emailVerifiedAt} is null and ${t.email} is null`),
     /**
-     * Unique, but only over *verified* emails — deliberately partial.
-     *
-     * Checkout upserts on phone and writes whatever email was typed
-     * (createBookings below), so the same address legitimately appears on two
-     * rows when someone books twice from two numbers. A blanket unique index
-     * would turn that into a constraint violation and fail the booking.
-     *
-     * Sign-in only ever resolves *verified* addresses, so uniqueness is only
-     * needed there. `lower()` because an address is not case sensitive and
-     * `Sara@` must not become a second account beside `sara@`.
+     * Unique over *verified* emails. Sign-in only ever resolves verified
+     * addresses. `lower()` because `Sara@` must not become a second account
+     * beside `sara@`.
      */
     accountEmailUnique: uniqueIndex("customers_account_email_unique")
       .on(sql`lower(${t.email})`)
@@ -490,6 +509,17 @@ export const bookings = pgTable(
      */
     customerName: text("customer_name"),
 
+    /**
+     * The email this booking was made under, lowercased: the form's for a
+     * guest, the account's for a signed-in customer.
+     *
+     * Snapshotted because the customer row is not who booked: a guest row once
+     * held whichever email was typed last, and wallet credit from this booking
+     * must reach the person who paid (docs/WALLET-PLAN.md, gap 3). Null on rows
+     * written before this column existed.
+     */
+    customerEmail: text("customer_email"),
+
     // Snapshotted at booking time. Never joined live off the catalog — raising a
     // price must not rewrite last month's revenue.
     serviceName: localized("service_name"),
@@ -507,6 +537,8 @@ export const bookings = pgTable(
     discountHalalas: integer("discount_halalas").notNull().default(0),
     promoDiscountHalalas: integer("promo_discount_halalas").notNull().default(0),
     pointsDiscountHalalas: integer("points_discount_halalas").notNull().default(0),
+    /** This guest's share of the wallet credit spent on the bill. Part of discount_halalas. */
+    walletDiscountHalalas: integer("wallet_discount_halalas").notNull().default(0),
     vatHalalas: integer("vat_halalas").notNull().default(0),
     totalHalalas: integer("total_halalas").notNull().default(0),
 
@@ -1052,6 +1084,101 @@ export const packTxns = pgTable(
       .where(sql`${t.bookingId} is not null and ${t.delta} > 0`),
   }),
 );
+
+// --------------------------------------------------------------- wallet -----
+//
+// Money a customer holds with the salon: cancellation credit, gift cards and
+// small chair refunds in, checkouts out (docs/WALLET-PLAN.md). A ledger with no
+// balance column, like loyalty_txns and pack_txns: the balance is SUM(delta)
+// over the rows of one customer *and one email* (lib/wallet.ts).
+//
+// Every change is a row, including a checkout that gave its spend back, so
+// "why did my balance change?" is answered from this table alone.
+
+export const walletTxns = pgTable(
+  "wallet_txns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * `restrict`: this is money. A customer row with wallet history cannot be
+     * deleted; a merge moves the rows first (createAccount).
+     */
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "restrict" }),
+    /**
+     * Whose money this is: the email of the booking or gift card it came from,
+     * lowercased. Only a sign-in with this email reaches it.
+     */
+    ownerEmail: text("owner_email").notNull(),
+    /** Negative takes money out. Never zero. */
+    deltaHalalas: integer("delta_halalas").notNull(),
+    reason: walletReason("reason").notNull(),
+    bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "restrict" }),
+    paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "restrict" }),
+    giftCardId: uuid("gift_card_id").references(() => giftCards.id, { onDelete: "restrict" }),
+    /** The row a `release`, a re-spend or a `reversal` answers. */
+    reversesId: uuid("reverses_id").references((): AnyPgColumn => walletTxns.id, {
+      onDelete: "restrict",
+    }),
+    /** Why, in words. Required on a `correction` and a `cancel-salon`. */
+    note: text("note"),
+    actorId: uuid("actor_id").references(() => staff.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    byOwner: index("wallet_txns_owner_idx").on(t.customerId, t.ownerEmail),
+    nonZero: check("wallet_txns_delta_nonzero", sql`${t.deltaHalalas} <> 0`),
+    lowerEmail: check("wallet_txns_owner_email_lower", sql`${t.ownerEmail} = lower(${t.ownerEmail})`),
+    needsNote: check(
+      "wallet_txns_note_required",
+      sql`${t.reason} not in ('correction', 'cancel-salon') or coalesce(trim(${t.note}), '') <> ''`,
+    ),
+    // Each write is made idempotent by the database, not by a read before it
+    // (the pack_txns_*_unique pattern). A retried request or a second tab hits
+    // one of these and writes nothing.
+    oneCancelCredit: uniqueIndex("wallet_txns_cancel_unique")
+      .on(t.bookingId)
+      .where(sql`${t.reason} in ('cancel-customer', 'cancel-salon')`),
+    /** The first spend of a checkout. A revive's re-spend points at a release, so is not one. */
+    oneSpendPerBooking: uniqueIndex("wallet_txns_spend_booking_unique")
+      .on(t.bookingId)
+      .where(sql`${t.reason} = 'spend' and ${t.reversesId} is null and ${t.bookingId} is not null`),
+    oneSpendPerPayment: uniqueIndex("wallet_txns_spend_payment_unique")
+      .on(t.paymentId)
+      .where(sql`${t.reason} = 'spend' and ${t.reversesId} is null and ${t.paymentId} is not null`),
+    /** One release per spend, and one re-spend per release. */
+    oneAnswer: uniqueIndex("wallet_txns_reverses_unique")
+      .on(t.reversesId)
+      .where(sql`${t.reason} in ('release', 'spend')`),
+    oneClaim: uniqueIndex("wallet_txns_gift_card_unique")
+      .on(t.giftCardId)
+      .where(sql`${t.reason} = 'gift-card'`),
+    oneChairCredit: uniqueIndex("wallet_txns_chair_unique")
+      .on(t.paymentId)
+      .where(sql`${t.reason} = 'chair-credit'`),
+  }),
+);
+
+/**
+ * Cases the wallet cannot settle by itself, waiting for the owner: a balance
+ * below zero after a reversal, a gift card loss, money on a booking with no
+ * customer. Written from the first step that can raise one, before the page
+ * that shows them exists, so nothing raised meanwhile is lost.
+ */
+export const walletDecisions = pgTable("wallet_decisions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  kind: text("kind").notNull(),
+  customerId: uuid("customer_id").references(() => customers.id, { onDelete: "set null" }),
+  bookingId: uuid("booking_id").references(() => bookings.id, { onDelete: "set null" }),
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
+  amountHalalas: integer("amount_halalas").notNull(),
+  detail: jsonb("detail"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  resolvedBy: uuid("resolved_by").references(() => staff.id, { onDelete: "set null" }),
+  resolutionNote: text("resolution_note"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export const promoCodes = pgTable(
   "promo_codes",

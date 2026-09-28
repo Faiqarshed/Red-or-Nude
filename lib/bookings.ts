@@ -11,7 +11,7 @@
 
 import "server-only";
 import { randomInt, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
 import {
   addons,
@@ -869,6 +869,62 @@ export async function sweepNoShows(branchId: string): Promise<void> {
 }
 
 /**
+ * The guest row a checkout books against, locked for the rest of the
+ * transaction: the lock is what serialises two checkouts spending one balance.
+ *
+ * A guest is her email (customers_guest_email_unique, docs/WALLET-PLAN.md gap 3):
+ *   1. the guest row with her email;
+ *   2. else an old walk-in record (her phone, no email), which takes her email,
+ *      so her walk-in visits and points join her;
+ *   3. else a new row.
+ * Two people sharing a phone are two rows, and neither overwrites the other.
+ *
+ * An account is never found here: nobody proves they own a phone or a typed
+ * email. Only the tests and scripts still book without an email; they get the
+ * email-less record for the phone.
+ *
+ * A newly typed name is recorded; an empty one never blanks the old.
+ */
+async function guestRow(
+  tx: Tx,
+  g: { phone: string; email: string | null; name?: string | null; lang?: "ar" | "en" },
+) {
+  const name = g.name?.trim() || undefined;
+  const fresh = { phone: g.phone, name: name ?? null, email: g.email, lang: g.lang ?? "ar" } as const;
+  const guest = isNull(customers.emailVerifiedAt);
+
+  if (!g.email) {
+    return tx
+      .insert(customers)
+      .values(fresh)
+      .onConflictDoUpdate({
+        target: customers.phone,
+        targetWhere: sql`${customers.emailVerifiedAt} is null and ${customers.email} is null`,
+        set: { name, updatedAt: new Date() },
+      })
+      .returning();
+  }
+
+  const byEmail = and(guest, sql`lower(${customers.email}) = ${g.email}`);
+  const found = await tx.update(customers).set({ name, updatedAt: new Date() }).where(byEmail).returning();
+  if (found.length) return found;
+
+  const walkIn = await tx
+    .update(customers)
+    .set({ email: g.email, name, updatedAt: new Date() })
+    .where(and(guest, isNull(customers.email), eq(customers.phone, g.phone)))
+    .returning();
+  if (walkIn.length) return walkIn;
+
+  // Another checkout with this new email may be inserting it right now. The
+  // unique index makes this one wait for it and then write nothing, and the
+  // row it made is read back, locked.
+  const made = await tx.insert(customers).values(fresh).onConflictDoNothing().returning();
+  if (made.length) return made;
+  return tx.select().from(customers).where(byEmail).limit(1).for("update");
+}
+
+/**
  * The single write path. One guest or two, identically.
  *
  * Everything happens in one transaction: the chairs are locked, the customer is
@@ -1159,32 +1215,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
             .where(eq(customers.id, input.customerId))
             .limit(1)
             .for("update")
-        : await tx
-            .insert(customers)
-            .values({
-              phone,
-              name: input.customer.name?.trim() || null,
-              email,
-              lang: input.customer.lang ?? "ar",
-            })
-            .onConflictDoUpdate({
-              // Guest rows only (customers_guest_phone_unique): an account
-              // holder's number makes a guest row beside the account, never a
-              // booking on it, and never a change to its sign-in email.
-              target: customers.phone,
-              targetWhere: sql`${customers.emailVerifiedAt} is null`,
-              // Don't blank an existing name or email with an empty one from a
-              // rushed form — but do record a newly supplied one: it is how a
-              // returning customer gets an address on file, and it keeps the
-              // invoice going to the address typed at checkout rather than a
-              // stale one.
-              set: {
-                name: input.customer.name?.trim() || undefined,
-                email: email ?? undefined,
-                updatedAt: new Date(),
-              },
-            })
-            .returning();
+        : await guestRow(tx, { phone, email, name: input.customer.name, lang: input.customer.lang });
 
       // The session pointed at a row that is no longer there. Rare, but the
       // alternative is a foreign key error further down.
@@ -1247,6 +1278,9 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
             // else is the person who booked. The customer row's name is
             // overwritten by every later booking; this one is not.
             customerName: guest.member.guestName?.trim() || customer.name || null,
+            // Whose credit this booking makes: a signed-in customer's own
+            // address, never whatever the form carried.
+            customerEmail: input.customerId ? customer.email?.toLowerCase() ?? null : email,
             // Snapshotted here and never joined live afterwards: raising a price
             // must not rewrite what this customer was charged.
             serviceName: guest.service.name as Localized,

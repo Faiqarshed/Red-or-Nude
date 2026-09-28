@@ -40,6 +40,7 @@ const DBERR = "lib/db/errors.ts";
 const CATALOG = "app/(admin)/admin/(shell)/catalog/actions.ts";
 const PROMO = "app/(admin)/admin/(shell)/promo-codes/actions.ts";
 const STAFFCODE = "lib/staff-codes.ts";
+const WALLET = "lib/wallet.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -638,11 +639,69 @@ const mutations = [
         '    return { ok: false, error: "expired" };',
       ),
   },
+
+  // ---- the wallet: who a guest is, and one balance spent once --------------
+  {
+    name: "wallet: spend without taking the customer lock",
+    expect: "tests/wallet.test.ts",
+    apply: () =>
+      mutate(
+        WALLET,
+        "  await tx.execute(sql`select 1 from customers where id = ${customerId} for update`);\n",
+        "",
+      ),
+  },
+  {
+    name: "wallet: count another email's credit as hers",
+    expect: "tests/wallet.test.ts",
+    apply: () =>
+      mutate(
+        WALLET,
+        "      and(eq(walletTxns.customerId, customerId), eq(walletTxns.ownerEmail, ownerEmail.trim().toLowerCase())),",
+        "      and(eq(walletTxns.customerId, customerId)),",
+      ),
+  },
+  {
+    name: "subtle: let her spend a debt as if it were money",
+    expect: "tests/wallet.test.ts",
+    apply: () =>
+      mutate(WALLET, "  return { total: row.total, available: Math.max(0, row.total) };", "  return { total: row.total, available: row.total };"),
+  },
+  {
+    name: "subtle: let a spend go one halala past her balance",
+    expect: "tests/wallet.test.ts",
+    apply: () =>
+      mutate(
+        WALLET,
+        "  if ((await walletBalance(customerId, ownerEmail, tx)).available < halalas) return null;",
+        "  if ((await walletBalance(customerId, ownerEmail, tx)).available + 1 < halalas) return null;",
+      ),
+  },
+  {
+    name: "identity: let a booking take over a phone's row that already has an email",
+    expect: "tests/wallet.test.ts",
+    apply: () =>
+      mutate(
+        ENGINE,
+        "    .where(and(guest, isNull(customers.email), eq(customers.phone, g.phone)))",
+        "    .where(and(guest, eq(customers.phone, g.phone)))",
+      ),
+  },
+  {
+    name: "identity: tag a signed-in booking with the email typed in the form",
+    expect: "tests/wallet.test.ts",
+    apply: () =>
+      mutate(
+        ENGINE,
+        "            customerEmail: input.customerId ? customer.email?.toLowerCase() ?? null : email,",
+        "            customerEmail: email,",
+      ),
+  },
 ];
 
 const touched = [
   CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, LINES, TREAT,
-  DBERR, CATALOG, PROMO, STAFFCODE,
+  DBERR, CATALOG, PROMO, STAFFCODE, WALLET,
 ];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));

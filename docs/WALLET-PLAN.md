@@ -32,6 +32,9 @@ Fixed decisions:
 3. **One sentence for the refund policy.** Card refunds still happen when she pays late, pays the wrong amount, pays twice, or buys something we can't deliver. Proposed: "A payment that bought nothing goes back to the card; everything else goes to the wallet." Written into PAYMENTS-STATUS.md once agreed.
 4. **Invoice wording.** "Wallet credit" and "Gift card" lines print on StreamPay's tax invoice as coupons, the way promo codes do (PR #21 Q4). Is that wording right for the client?
 
+**For us, before step 2:**
+6. **Bookings made before step 1 have no `customer_email`.** Their cancel credit has no email to belong to. Either take the customer row's email (the unreliable one, gap 3) or send each to "Needs your decision". Decide before step 2 writes cancel credit.
+
 **For StreamPay support:**
 5. What status does a chargeback show on a payment: `REFUNDED`, or something like `DISPUTED`? Is there a disputes API or webhook? Today there is no chargeback event (`app/api/payments/streampay/webhook/route.ts`), and the daily comparison is what finds one.
 
@@ -155,7 +158,7 @@ Examples:
 - **Remove** `refundBookings` and the `payments.refund` permission (`lib/auth/rbac.ts:42,70`) at launch, once `wallet_launched_at` is set.
 
 ### Walk-ins retired
-- The walk-in button and `WalkInDrawer` (`app/(admin)/admin/(shell)/bookings/BookingsView.tsx:34`) are hidden. The code stays until nothing calls it, then goes in its own PR.
+- **Built (step 1).** The walk-in button, `WalkInDrawer`, the `createWalkIn` action and the catalogue the drawer loaded are gone. Removed, not hidden: a hidden button leaves the action reachable.
 - The front desk still checks in, starts and completes online bookings; only making a booking at the desk goes.
 - A customer who arrives without a booking books herself on the app, at the desk if need be.
 
@@ -196,7 +199,7 @@ Examples:
 ## Build order
 One commit per step, docs in the same commit. Nothing reaches customers until step 9.
 0. The accountant's VAT answer (open question 2). Steps 4 and 5 don't start without it.
-1. Migration (guest identity, `customer_email`, `wallet_txns`, `wallet_decisions`, `wallet_launched_at`), `lib/wallet.ts`, and its balance and lock tests. Hide the walk-in flow.
+1. **Built.** Migration 0031 (guest rows merged by email, guest identity, `customer_email`, `wallet_discount_halalas`, `wallet_txns`, `wallet_decisions`); `lib/wallet.ts` with `walletBalance`, `spendWallet`, `releaseSpend`; `guestRow` in `createBookings`; `tests/wallet.test.ts` and its mutants; the walk-in flow removed. `wallet_launched_at` moves to step 2, where the first thing reads it.
 2. Cancellation: customer and salon (one transaction, guarded status, reason, no un-cancel), no-show points, the cancel email. Behind `wallet_launched_at`. Dropping guests from a group comes after, in its own commit, only once the client agrees (open question 0).
 3. Account screen: the wallet card and its history.
 4. Booking checkout: gift card and wallet, quote route, UI.
