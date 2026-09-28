@@ -12,6 +12,7 @@ import { recordAudit } from "@/lib/audit";
 import { returnPackCredits } from "@/lib/packs";
 import { cancelDeadline } from "@/lib/cancellation";
 import { creditCancelled, walletLaunched, WalletHeld } from "@/lib/wallet";
+import { sendCancelCreditEmail } from "@/lib/wallet-email";
 import { rescheduleBooking as moveBooking } from "@/lib/bookings";
 import { inviteReview } from "@/lib/reviews/invite";
 import { assignIfToday, notifyTechnician, pickTechnician } from "@/lib/assign";
@@ -179,6 +180,7 @@ export async function setBookingStatus(
     return { ok: false, error: "failed" };
   }
   if (!moved) return { ok: false, error: "changed" };
+  if (credit) await sendCancelCreditEmail([id], why ?? null);
 
   await recordAudit(actor, {
     action: status === "cancelled" ? "cancel" : "update",

@@ -349,9 +349,13 @@ export default function BookingCard({
         setDetails(null);
         setSuccessMsg(
           what === "cancel"
-            ? data.refunded
-              ? h.cancelled
-              : h.cancelledNoRefund
+            ? row.cancelToWallet
+              ? data.credited
+                ? h.cancelledToWallet
+                : h.cancelledNothingPaid
+              : data.refunded
+                ? h.cancelled
+                : h.cancelledNoRefund
             : h.rescheduled,
         );
         onChanged();
@@ -781,8 +785,10 @@ export default function BookingCard({
           // question has to say so — "this booking" was about to cancel four.
           message={
             row.groupSize > 1
-              ? h.cancelConfirmGroup.replace("{n}", String(row.groupSize))
-              : h.cancelConfirm
+              ? (row.cancelToWallet ? h.cancelConfirmGroupWallet : h.cancelConfirmGroup).replace("{n}", String(row.groupSize))
+              : row.cancelToWallet
+                ? h.cancelConfirmWallet
+                : h.cancelConfirm
           }
           icon={
             <svg viewBox="0 0 24 24" width={32} height={32} fill="none" stroke="#B80007" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">

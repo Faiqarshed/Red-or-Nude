@@ -22,6 +22,7 @@ import { getSettings } from "@/lib/settings";
 import { clientIp, throttled } from "@/lib/throttle";
 import { refundBookings } from "@/lib/payments/refund";
 import { creditCancelled, walletLaunched, WalletHeld } from "@/lib/wallet";
+import { sendCancelCreditEmail } from "@/lib/wallet-email";
 import { returnPackCredits } from "@/lib/packs";
 import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
@@ -156,6 +157,7 @@ export async function POST(request: Request) {
     if (cancelled.length === 0) {
       return NextResponse.json({ error: "already-cancelled" }, { status: 409 });
     }
+    await sendCancelCreditEmail(cancelled);
   } else {
     // Legacy until the wallet launches. Do not copy (CLAUDE.md).
     cancelled = await release(db);

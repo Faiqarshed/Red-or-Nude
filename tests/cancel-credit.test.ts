@@ -15,11 +15,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/throttle", () => ({ throttled: () => false, clientIp: () => "127.0.0.1" }));
 vi.mock("@/lib/booking-auth", () => ({ refuseBookingAction: async () => null }));
+const mail = vi.hoisted(() => ({ sent: [] as { to: string; subject: string; text: string }[] }));
+vi.mock("@/lib/email", () => ({
+  sendMail: async (m: { to: string; subject: string; text: string }) => {
+    mail.sent.push(m);
+    return { ok: true };
+  },
+}));
 
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, payments, settings, walletDecisions, walletTxns } from "@/lib/db/schema";
-import { createBookings } from "@/lib/bookings";
+import { bookingSummaries, createBookings } from "@/lib/bookings";
+import { formatSAR } from "@/lib/money";
 import { walletBalance } from "@/lib/wallet";
 import { POST } from "@/app/api/my-bookings/cancel/route";
 import { FUTURE, TEST_PHONE, fixtures, reset, type Fixtures } from "./helpers";
@@ -38,6 +46,7 @@ async function launch() {
 }
 
 beforeEach(async () => {
+  mail.sent = [];
   f = await fixtures();
   await db.delete(walletDecisions);
   await reset(f.branchA, f.branchB);
@@ -176,6 +185,41 @@ describe("her cancel, after launch", () => {
     expect(await creditsOn([b.id])).toHaveLength(0);
   });
   it.todo("credits a booking made before bookings kept their email (open question 6)");
+});
+
+describe("telling her", () => {
+  it("emails her the credit after launch, to the booking's email", async () => {
+    await launch();
+    const [b] = await paidParty();
+
+    await cancel(b.code);
+
+    const credit = mail.sent.filter((m) => m.text.includes(formatSAR(b.totalHalalas, { decimals: true })));
+    expect(credit).toHaveLength(1);
+    expect(credit[0].to).toBe(EMAIL);
+  });
+
+  it("emails her when the salon cancels, with its reason", async () => {
+    await launch();
+    const [b] = await paidParty();
+
+    await setBookingStatus(b.id, "cancelled", "Technician off sick", "confirmed");
+
+    expect(mail.sent.filter((m) => m.text.includes("Technician off sick"))).toHaveLength(1);
+  });
+
+  it("sends no credit email before launch", async () => {
+    const [b] = await paidParty();
+    await cancel(b.code);
+    expect(mail.sent.filter((m) => /wallet|المحفظة/i.test(m.subject))).toHaveLength(0);
+  });
+
+  it("warns her before she cancels that it goes to her wallet, only after launch", async () => {
+    const [b] = await paidParty();
+    expect((await bookingSummaries({ code: b.code }))[0].cancelToWallet).toBe(false);
+    await launch();
+    expect((await bookingSummaries({ code: b.code }))[0].cancelToWallet).toBe(true);
+  });
 });
 
 describe("before launch", () => {

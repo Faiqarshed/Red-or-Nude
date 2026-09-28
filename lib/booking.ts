@@ -426,6 +426,12 @@ export type BookingSummary = {
    * the API refuses is worse than no button.
    */
   canCancel: boolean;
+  /**
+   * Whether cancelling puts what she paid in her wallet rather than back on
+   * her card: the wallet is live (`wallet_launched_at`). Decided by the server
+   * so the question she answers before cancelling says what will happen.
+   */
+  cancelToWallet: boolean;
   /** ISO UTC deadline, shown so a closed window explains itself. */
   cancelBy: string;
   /** What the reschedule picker needs, and nothing more. */

@@ -41,6 +41,7 @@ import { formatTicketNo } from "@/lib/tickets";
 import { assignIfToday } from "@/lib/assign";
 import { mediaUrl } from "@/lib/storage";
 import { checkoutOpen, PAY_WINDOW_MIN } from "@/lib/payments";
+import { walletLaunched } from "@/lib/wallet";
 import type { BookingSummary } from "@/lib/booking";
 
 /** What one guest is booking. */
@@ -543,9 +544,10 @@ export async function bookingSummaries(
 
   const bookingIds = rows.map((r) => r.id);
 
-  const [spentOn, { cancel_cutoff_hours: cutoff }, addonRows] = await Promise.all([
+  const [spentOn, { cancel_cutoff_hours: cutoff }, cancelToWallet, addonRows] = await Promise.all([
     claimedWindows(bookingIds),
     getSettings(["cancel_cutoff_hours"]),
+    walletLaunched(),
     bookingIds.length
       ? db
           .select({
@@ -610,6 +612,7 @@ export async function bookingSummaries(
       // `cancelBy` is sent even once the window has shut, so the screen can
       // explain *why* the buttons are gone rather than silently omitting them.
       canCancel: canCancel(r, cutoff, now),
+      cancelToWallet,
       cancelBy: cancelDeadline(r, cutoff).toISOString(),
       branchId: r.branchId,
       durationMin: Math.round((r.endsAt.getTime() - r.startsAt.getTime()) / 60_000),

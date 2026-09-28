@@ -397,6 +397,11 @@ const ar = {
     cancelling: "جارٍ الإلغاء…",
     cancelled: "تم إلغاء الحجز وسيُعاد المبلغ إلى بطاقتك.",
     cancelledNoRefund: "تم إلغاء الحجز. سنتواصل معك بخصوص استرداد المبلغ.",
+    // Once the wallet is live: what she paid becomes credit, never a card refund.
+    cancelConfirmWallet: "هل أنتِ متأكدة من إلغاء هذا الحجز؟ يُضاف ما دفعتِه إلى محفظتك لتستخدميه في حجزك القادم.",
+    cancelConfirmGroupWallet: "هذا حجز جماعي ({n}) — سيُلغى لجميع الضيفات معاً، ويُضاف ما دُفع إلى محفظتك. هل أنتِ متأكدة؟",
+    cancelledToWallet: "تم إلغاء الحجز وأُضيف ما دفعتِه إلى محفظتك.",
+    cancelledNothingPaid: "تم إلغاء الحجز.",
     rescheduling: "جارٍ تغيير الموعد…",
     rescheduled: "تم تغيير موعدك.",
     successDone: "تم",
@@ -996,6 +1001,11 @@ const en: Content = {
     cancelling: "Cancelling…",
     cancelled: "Booking cancelled — the amount is on its way back to your card.",
     cancelledNoRefund: "Booking cancelled. We'll be in touch about your refund.",
+    // Once the wallet is live: what she paid becomes credit, never a card refund.
+    cancelConfirmWallet: "Cancel this booking? What you paid goes to your wallet, for your next booking.",
+    cancelConfirmGroupWallet: "This is a group booking ({n}). Cancelling cancels it for everyone, and what was paid goes to your wallet. Continue?",
+    cancelledToWallet: "Booking cancelled. What you paid is in your wallet.",
+    cancelledNothingPaid: "Booking cancelled.",
     rescheduling: "Moving your appointment…",
     rescheduled: "Your appointment has been moved.",
     successDone: "Done",

@@ -1,0 +1,144 @@
+// "Added to your wallet": the email after a cancellation became wallet credit
+// (docs/WALLET-PLAN.md). Before the wallet there was no cancellation email at
+// all; notifyCustomer("booking-cancelled") only logs.
+//
+// Not a tax document: whether a credit note needs one is open with the
+// accountant (docs/WALLET-PLAN.md, open question 2), so this carries no invoice.
+
+import "server-only";
+import { and, eq, inArray } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { customers, walletTxns } from "@/lib/db/schema";
+import { esc } from "@/lib/email/html";
+import { brandedEmail, INK, RED, sendReceipt, side } from "@/lib/email/shell";
+import { formatSAR } from "@/lib/money";
+import { siteOrigin } from "@/lib/site";
+import { walletBalance } from "@/lib/wallet";
+
+type Lang = "ar" | "en";
+
+const T = {
+  ar: {
+    subject: "أُضيف رصيد إلى محفظتك في ريد أور نيود",
+    title: "أُضيف رصيد إلى محفظتك",
+    greeting: (name: string | null) => (name ? `أهلاً ${name}،` : "أهلاً،"),
+    yours: "أُلغي حجزك، وأضفنا ما دفعتِه إلى محفظتك:",
+    salons: (why: string) => `اضطررنا إلى إلغاء حجزك، ونعتذر عن ذلك. السبب: ${why}. أضفنا ما دفعتِه إلى محفظتك:`,
+    added: "أُضيف إلى محفظتك",
+    balance: "رصيدك الآن",
+    sar: "ر.س",
+    use: "يمكنك استخدامه في حجزك القادم، ولا تنتهي صلاحيته.",
+    signIn: (email: string, url: string) => `سجّلي الدخول بالبريد ${email} في ${url} لاستخدامه.`,
+    footer: "ريد أور نيود",
+  },
+  en: {
+    subject: "Credit added to your Red or Nude wallet",
+    title: "Credit added to your wallet",
+    greeting: (name: string | null) => (name ? `Hi ${name},` : "Hi,"),
+    yours: "Your booking is cancelled, and what you paid is in your wallet:",
+    salons: (why: string) => `We had to cancel your booking, and we're sorry. The reason: ${why}. What you paid is in your wallet:`,
+    added: "Added to your wallet",
+    balance: "Your balance now",
+    sar: "SAR",
+    use: "Use it on your next booking. It never expires.",
+    signIn: (email: string, url: string) => `Sign in with ${email} at ${url} to use it.`,
+    footer: "Red or Nude",
+  },
+};
+
+export type CancelCreditEmailInput = {
+  lang: Lang;
+  name: string | null;
+  amountHalalas: number;
+  /** What she can spend now, never below zero. */
+  balanceHalalas: number;
+  /** The desk's reason when the salon cancelled; null when she did. */
+  salonReason: string | null;
+  /** Set for a guest: the email her credit waits under. Null for an account. */
+  guestEmail: string | null;
+};
+
+export function renderCancelCreditEmail(input: CancelCreditEmailInput) {
+  const t = T[input.lang];
+  const { start } = side(input.lang);
+  const money = (h: number) => `${formatSAR(h, { decimals: true })} ${t.sar}`;
+  const intro = input.salonReason ? t.salons(input.salonReason) : t.yours;
+  const signIn = input.guestEmail ? t.signIn(input.guestEmail, `${siteOrigin()}/account`) : null;
+
+  const line = (label: string, value: string, strong = false) =>
+    `<p style="margin:6px 0 0;font-size:14px;${strong ? "font-weight:700;" : ""}color:${INK};text-align:${start};">${esc(label)}: <span dir="ltr" style="color:${RED};">${esc(value)}</span></p>`;
+
+  const html = brandedEmail({
+    lang: input.lang,
+    subject: t.subject,
+    title: t.title,
+    taxInvoiceUrl: null,
+    pdfAttached: false,
+    body: `
+        <p style="margin:0 0 6px;font-size:15px;font-weight:600;color:${INK};text-align:${start};">${esc(t.greeting(input.name))}</p>
+        <p style="margin:0 0 14px;font-size:14px;line-height:1.6;color:rgba(26,26,26,0.6);text-align:${start};">${esc(intro)}</p>
+        ${line(t.added, money(input.amountHalalas), true)}
+        ${line(t.balance, money(input.balanceHalalas))}
+        <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:rgba(26,26,26,0.6);text-align:${start};">${esc(t.use)}${signIn ? ` ${esc(signIn)}` : ""}</p>`,
+  });
+
+  const text = [
+    t.greeting(input.name),
+    intro,
+    "",
+    `${t.added}: ${money(input.amountHalalas)}`,
+    `${t.balance}: ${money(input.balanceHalalas)}`,
+    "",
+    t.use,
+    ...(signIn ? [signIn] : []),
+    "",
+    t.footer,
+  ].join("\n");
+
+  return { subject: t.subject, html, text };
+}
+
+/**
+ * Tell her what the cancellation of these bookings put in her wallet: one
+ * email per wallet it credited, for what the ledger actually holds. Call after
+ * the transaction commits. Never throws: the credit is hers either way.
+ */
+export async function sendCancelCreditEmail(bookingIds: string[], salonReason: string | null = null): Promise<void> {
+  try {
+    if (bookingIds.length === 0) return;
+    const credits = await db
+      .select({
+        customerId: walletTxns.customerId,
+        ownerEmail: walletTxns.ownerEmail,
+        deltaHalalas: walletTxns.deltaHalalas,
+      })
+      .from(walletTxns)
+      .where(
+        and(inArray(walletTxns.bookingId, bookingIds), inArray(walletTxns.reason, ["cancel-customer", "cancel-salon"])),
+      );
+
+    const wallets = new Map<string, { customerId: string; ownerEmail: string; amount: number }>();
+    for (const c of credits) {
+      const key = `${c.customerId}:${c.ownerEmail}`;
+      const w = wallets.get(key) ?? { customerId: c.customerId, ownerEmail: c.ownerEmail, amount: 0 };
+      w.amount += c.deltaHalalas;
+      wallets.set(key, w);
+    }
+
+    for (const w of wallets.values()) {
+      const [customer] = await db.select().from(customers).where(eq(customers.id, w.customerId)).limit(1);
+      if (!customer) continue;
+      const { subject, html, text } = renderCancelCreditEmail({
+        lang: customer.lang,
+        name: customer.name,
+        amountHalalas: w.amount,
+        balanceHalalas: (await walletBalance(w.customerId, w.ownerEmail)).available,
+        salonReason,
+        guestEmail: customer.emailVerifiedAt ? null : w.ownerEmail,
+      });
+      await sendReceipt("wallet-cancel-credit", { to: w.ownerEmail, toName: customer.name, subject, html, text });
+    }
+  } catch (err) {
+    console.error("[wallet] could not build or send the cancel credit email", err);
+  }
+}
