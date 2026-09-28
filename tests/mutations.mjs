@@ -41,6 +41,7 @@ const CATALOG = "app/(admin)/admin/(shell)/catalog/actions.ts";
 const PROMO = "app/(admin)/admin/(shell)/promo-codes/actions.ts";
 const STAFFCODE = "lib/staff-codes.ts";
 const WALLET = "lib/wallet.ts";
+const STATUS = "app/(admin)/admin/(shell)/bookings/actions.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -697,11 +698,33 @@ const mutations = [
         "            customerEmail: email,",
       ),
   },
+
+  // ---- the salon's cancel: guarded, with a reason, all or none --------------
+  {
+    name: "salon cancel: write the status whatever it has become",
+    expect: "tests/salon-cancel.test.ts",
+    apply: () =>
+      mutate(
+        STATUS,
+        "        .where(and(eq(bookings.id, id), eq(bookings.status, from)))",
+        "        .where(eq(bookings.id, id))",
+      ),
+  },
+  {
+    name: "salon cancel: let the desk cancel without saying why",
+    expect: "tests/salon-cancel.test.ts",
+    apply: () =>
+      mutate(
+        STATUS,
+        '  if (entering("cancelled") && !why) return { ok: false, error: "reason-required" };',
+        "",
+      ),
+  },
 ];
 
 const touched = [
   CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, LINES, TREAT,
-  DBERR, CATALOG, PROMO, STAFFCODE, WALLET,
+  DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS,
 ];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));

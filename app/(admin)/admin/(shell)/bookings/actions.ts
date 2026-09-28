@@ -34,10 +34,17 @@ function revalidate() {
   revalidatePath("/admin");
 }
 
+/**
+ * `shown` is the status the desk was looking at when it chose this one. The
+ * write only lands on that status, so a drawer left open, a second tab or a
+ * double click answers `changed` instead of acting on a booking that has moved
+ * on. Callers that just read the row may leave it out.
+ */
 export async function setBookingStatus(
   id: string,
   status: (typeof STATUSES)[number],
   reason?: string,
+  shown?: (typeof STATUSES)[number],
 ): Promise<Result> {
   const actor = await requireCan("bookings.manage");
 
@@ -81,6 +88,11 @@ export async function setBookingStatus(
   // moves on every unrelated edit.
   const entering = (to: (typeof STATUSES)[number]) => status === to && before.status !== to;
   const now = new Date();
+  const from = shown ?? before.status;
+  if (from !== before.status) return { ok: false, error: "changed" };
+
+  // The salon's word on why, for her and for the owner's books (CLAUDE.md).
+  if (entering("cancelled") && !why) return { ok: false, error: "reason-required" };
 
   // Not before her slot (brief §3.1, and `checkin_early_min` in lib/settings.ts).
   //
@@ -105,39 +117,44 @@ export async function setBookingStatus(
       ? await pickTechnician(before.branchId)
       : before.technicianId;
 
-  await db
-    .update(bookings)
-    .set({
-      status,
-      technicianId,
-      checkedInAt: entering("checked_in") ? now : before.checkedInAt,
-      // She is here, so the "starting soon" mail has been overtaken by events.
-      // Stamping it here is what stops the reminder job sending a second one.
-      techNotifiedAt: entering("checked_in") ? now : before.techNotifiedAt,
-      startedAt: entering("in_progress") ? now : before.startedAt,
-      cancelReason: status === "cancelled" ? (why ?? null) : before.cancelReason,
-      updatedAt: now,
-    })
-    .where(eq(bookings.id, id));
+  // The status and everything it moves are one transaction: a crash between
+  // them leaves all or none, never a cancelled booking with its credit lost.
+  let moved: boolean;
+  try {
+    moved = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(bookings)
+        .set({
+          status,
+          technicianId,
+          checkedInAt: entering("checked_in") ? now : before.checkedInAt,
+          // She is here, so the "starting soon" mail has been overtaken by events.
+          // Stamping it here is what stops the reminder job sending a second one.
+          techNotifiedAt: entering("checked_in") ? now : before.techNotifiedAt,
+          startedAt: entering("in_progress") ? now : before.startedAt,
+          cancelReason: status === "cancelled" ? (why ?? null) : before.cancelReason,
+          updatedAt: now,
+        })
+        .where(and(eq(bookings.id, id), eq(bookings.status, from)))
+        .returning({ id: bookings.id });
+      if (!row) return false;
 
-  // Unconditionally, unlike the self-service button. `cancel_cutoff_hours`
-  // governs that one because cancelling late is her choice; none of it applies
-  // when the desk cancels — technician off sick, branch shut — and she should
-  // not lose an appointment she paid for over a decision that was not hers.
-  //
-  // Not resolveNoShow, which also ends at `cancelled`: she did not come, and the
-  // credit goes the way the money goes.
-  // Never allowed to fail the cancellation, the same bargain the customer's
-  // route strikes and inviteReview below: the chair is already released, and a
-  // credit that did not come back is a support ticket, not a reason to throw
-  // away the audit row and tell the desk an appointment is still standing.
-  if (entering("cancelled")) {
-    try {
-      await returnPackCredits([id], "salon-cancelled");
-    } catch (err) {
-      console.error("[bookings] could not return pack credits", err);
-    }
+      // Unconditionally, unlike the self-service button. `cancel_cutoff_hours`
+      // governs that one because cancelling late is her choice; none of it
+      // applies when the desk cancels — technician off sick, branch shut — and
+      // she should not lose an appointment she paid for over a decision that
+      // was not hers.
+      //
+      // Not resolveNoShow, which also ends at `cancelled`: she did not come, and
+      // the credit goes the way the money goes.
+      if (entering("cancelled")) await returnPackCredits([id], "salon-cancelled", tx);
+      return true;
+    });
+  } catch (err) {
+    console.error("[bookings] status change failed", err);
+    return { ok: false, error: "failed" };
   }
+  if (!moved) return { ok: false, error: "changed" };
 
   await recordAudit(actor, {
     action: status === "cancelled" ? "cancel" : "update",

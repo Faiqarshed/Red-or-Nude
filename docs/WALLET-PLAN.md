@@ -150,10 +150,10 @@ Examples:
 - **Only the booker cancels.** Signed in, the party's customer; a guest, the booking email proved by its code, as today.
 - **Dropping guests from a group** *(assumption, open question 0; not built until the client agrees)*: the route takes the guest ids to drop. Allowed only when 2 or more stay and none of the dropped is past `cancelRefusal`. Each dropped guest's credit is her own discounted share (`splitGroupPrice`, as billed), so the guests who stay keep their 10% and nobody gains a discount they didn't have. Leaving 1 → "Cancel the whole group instead." The whole-group cancel stays as it is.
 - **Salon** (`setBookingStatus`, `app/(admin)/admin/(shell)/bookings/actions.ts`):
-  - the admin form sends the status it showed; the update is `where status = <that status>`, and zero rows back answers "This booking changed. Reload." instead of acting twice;
-  - entering `cancelled` requires a reason, and the status change, `creditCancelled(..., "cancel-salon", reason)` and `returnPackCredits` run in **one transaction**, so a crash leaves all or none;
+  - **built (step 2a):** the admin form sends the status it showed; the update is `where status = <that status>`, and zero rows back answers "This booking changed. Reload." instead of acting twice;
+  - **built (step 2a):** entering `cancelled` requires a reason, and the status change and `returnPackCredits` run in **one transaction**, so a crash leaves all or none. `creditCancelled(..., "cancel-salon", reason)` joins that transaction in step 2c;
   - leaving `cancelled` is refused while the booking has a cancel credit;
-  - inside `cancel_cutoff_hours`: open question 1. Until then it is allowed with a reason.
+  - inside `cancel_cutoff_hours`: open question 1. The cancel itself stays allowed, as it is today. Whether it credits her is held until the client answers, and launch waits on it.
 - **No-show:** `isDead` (`lib/rewards.ts:215`) stops treating `no_show` and no-show-resolved rows as dead, so spent points are kept.
 - **Remove** `refundBookings` and the `payments.refund` permission (`lib/auth/rbac.ts:42,70`) at launch, once `wallet_launched_at` is set.
 

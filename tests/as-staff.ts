@@ -9,6 +9,6 @@
 import { vi } from "vitest";
 
 vi.mock("@/lib/auth/guard", () => ({
-  requireCan: async () => ({ id: null, name: "Test run" }),
+  requireCan: async () => ({ id: null, name: "Test run", role: "ceo", branchId: null }),
 }));
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));

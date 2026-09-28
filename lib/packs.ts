@@ -364,11 +364,18 @@ export async function spendPackCredit(
  * the second `+1` for a booking and service. Reading the ledger first and
  * looking for an existing return was a check before a write, and two
  * receptionists on one appointment raced straight past it.
+ *
+ * `executor` is the caller's transaction when the return must stand or fall
+ * with the status change beside it (setBookingStatus).
  */
-export async function returnPackCredits(bookingIds: string[], reason: string): Promise<number> {
+export async function returnPackCredits(
+  bookingIds: string[],
+  reason: string,
+  executor: Pick<typeof db, "select" | "insert"> = db,
+): Promise<number> {
   if (bookingIds.length === 0) return 0;
 
-  const spent = await db
+  const spent = await executor
     .select()
     .from(packTxns)
     .where(and(inArray(packTxns.bookingId, bookingIds), lt(packTxns.delta, 0)));
@@ -378,7 +385,7 @@ export async function returnPackCredits(bookingIds: string[], reason: string): P
   // Whatever the index let through is what actually came back, which is what
   // the caller is told. A row already returned conflicts and is skipped, so
   // calling this twice is not an error — it is simply a second no-op.
-  const back = await db
+  const back = await executor
     .insert(packTxns)
     .values(
       spent.map((row) => ({
