@@ -70,8 +70,10 @@ clicked".** The codebase says so itself, in
 So on day one this will flag people who were served. Three things make that
 survivable, and they are why the design looks the way it does:
 
-1. **Today only.** Switching this on cannot flag months of untouched history,
-   because history is not today.
+1. **A short lookback.** The sweep reaches back 7 days (`NO_SHOW_LOOKBACK_DAYS`
+   in `lib/bookings.ts`), not today only as first designed — with "today", a
+   booking nobody swept by midnight stayed `confirmed` for good. Switching this
+   on still cannot flag months of untouched history.
 2. **Releasing is not taking.** The booking row is untouched — same ticket, same
    price, same customer. The chair only actually changes hands if a walk-in
    claims it, and until then the customer can still sit down.

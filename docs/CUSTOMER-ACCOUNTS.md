@@ -83,7 +83,7 @@ new package, no hand-written crypto, no passwords anywhere.
 | Encryption | JWE (A256CBC-HS512) from `AUTH_SECRET` + salt `ron_account` |
 | Session lifetime | **30 days**, enforced by both `Max-Age` and the token's `exp` |
 | Signup ticket | 15 minutes |
-| Sign-in code | 10 minutes, single use, 5 attempts, hashed at rest |
+| Sign-in code | 1 minute (`ACCOUNT_OTP_TTL_MS`), single use, 5 attempts, hashed at rest |
 
 `sameSite: "lax"` and not `"strict"`: customers arrive from a link in the code
 email, and `strict` would drop the cookie on that navigation.
