@@ -73,6 +73,8 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
   const [heldCode, setHeldCode] = useState<string | null>(null);
   /** Asking what became of a hold she came back to (see resumeHeld). */
   const [resuming, setResuming] = useState(false);
+  /** Opening a new checkout after a declined one, without going back to step 1. */
+  const [reopening, setReopening] = useState(false);
   /** The open StreamPay checkout, once Pay has been pressed. */
   const [checkout, setCheckout] = useState<{ ref: string; url: string } | null>(null);
   const [phoneTouched, setPhoneTouched] = useState(false);
@@ -100,6 +102,8 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
   const [rules, setRules] = useState<LoyaltyRules | null>(null);
   /** Null until the session has answered. True once her details are her own. */
   const [signedIn, setSignedIn] = useState(false);
+  /** The session has answered (signed in or not), so the form is filled as it will stay. */
+  const [accountChecked, setAccountChecked] = useState(false);
   const [redeemPoints, setRedeemPoints] = useState<number | null>(null);
   const [redeemDiscountSar, setRedeemDiscountSar] = useState(0);
   const [redeemError, setRedeemError] = useState<string | null>(null);
@@ -195,7 +199,10 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       })
       .catch(() => {
         /* a prefill, never a gate — the form still works typed out */
-      });
+      })
+      // Answered either way: the loader waits for it, so her details do not
+      // pop into the form a moment after it appears.
+      .finally(() => setAccountChecked(true));
   }, []);
 
   // The rules and the balance. Signed out this comes back with `signedIn:
@@ -579,14 +586,15 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
     const data = await pay.json().catch(() => ({}));
     if (pay.ok && data.checkout) {
       setCheckout(data.checkout);
-      return;
+      return true;
     }
     if (pay.ok) {
       clearBooking();
       showPaidOn("/booking", "booking", data.tickets);
-      return;
+      return "paid" as const;
     }
     showPayError(data.error);
+    return false;
   };
 
   /** Her kept hold (releaseHold): paid shows the tickets, paying reopens it. */
@@ -616,8 +624,21 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
 
   /** The embedded checkout ended — or she came back from the hosted one. */
   const onPaid = (outcome: PaymentOutcome) => {
-    // A decline with the checkout still open re-opens it right here.
-    setCheckout(outcome.status === "failed" ? (outcome.checkout ?? null) : null);
+    // Declined, and that checkout is over: straight into a new one on the hold
+    // she still has, rather than back to step 1 to press Pay again. Not after
+    // the timer ran out — a new checkout for someone who walked away would keep
+    // her chair from everyone for another ten minutes. The server still decides:
+    // a hold that has lapsed comes back `expired` and she lands on step 1.
+    const reopen =
+      outcome.status === "failed" &&
+      !outcome.checkout &&
+      outcome.error === "payment-declined" &&
+      outcome.reason !== "timedOut" &&
+      heldCode !== null;
+    // A decline with the checkout still open re-opens it right here. One being
+    // replaced stays on screen, under the loader, until the new one arrives:
+    // clearing it drew step 1 for a moment on the way.
+    if (!reopen) setCheckout(outcome.status === "failed" ? (outcome.checkout ?? null) : null);
     if (outcome.status === "paid" && outcome.result.kind === "booking") {
       clearBooking();
       showPaidOn("/booking", "booking", outcome.result.tickets);
@@ -626,6 +647,25 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
     const why = declineMessage(c.payDecline, outcome);
     if (why) notifyPay(why);
     else showPayError(outcome.status === "failed" ? outcome.error : undefined);
+
+    if (reopen) {
+      setReopening(true);
+      void payHeld(heldCode)
+        .then((result) => {
+          // Paid after all (an earlier attempt came through): the loader stays
+          // up while the page leaves for the success popup.
+          if (result === "paid") return;
+          // Refused (the hold lapsed, say): the dead checkout goes, and step 1
+          // says why — payHeld has already put the reason up.
+          if (!result) setCheckout(null);
+          setReopening(false);
+        })
+        .catch(() => {
+          setCheckout(null);
+          setError(p.bookingFailed);
+          setReopening(false);
+        });
+    }
   };
   const checkingPayment = usePaymentReturn(onPaid, returning);
 
@@ -1277,8 +1317,11 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
 
       <SiteFooter />
 
-      {(checkingPayment || resuming) && <CheckingModal />}
-      {noticeOpen && payNotice && !checkingPayment && (
+      {/* From the first paint on a reload (loaded starts false on the server
+          too) until the page is as it will stay: her selection back, her
+          details in, and any payment she had going found. */}
+      {(checkingPayment || resuming) ? <CheckingModal /> : (!loaded || !accountChecked || reopening) && <CheckingModal loading />}
+      {noticeOpen && payNotice && !checkingPayment && !reopening && (
         <PayNoticeModal message={payNotice} retry={paying} onClose={() => setNoticeOpen(false)} />
       )}
     </main>

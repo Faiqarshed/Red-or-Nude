@@ -42,7 +42,14 @@ export async function GET(request: Request) {
 
   // `<` escaped so a crafted `back` cannot close the script tag.
   const js = JSON.stringify(to).replace(/</g, "\u003c");
-  return new Response(`<!doctype html><script>if (window.top === window) location.replace(${js});</script>`, {
-    headers: { "content-type": "text/html; charset=utf-8" },
-  });
+  // Inside the embed's iframe, the page around it is ours: tell it now, rather
+  // than leave her on a spent form until its next poll (up to 10 s). Only a
+  // nudge to ask again; the page still believes nothing but the status route.
+  const note = JSON.stringify({ streampayReturn: ref.success ? ref.data : null, paid: !declined });
+  return new Response(
+    `<!doctype html><script>if (window.top === window) location.replace(${js}); else window.top.postMessage(${note}, location.origin);</script>`,
+    {
+      headers: { "content-type": "text/html; charset=utf-8" },
+    },
+  );
 }

@@ -67,7 +67,12 @@ export default function BookingView({
 }) {
   // Just paid: the payment page sent her back here with her tickets.
   const [booked, setBooked] = useState<Ticket[] | null>(null);
-  useEffect(() => setBooked(takePaid<Ticket[]>("booking")), []);
+  useEffect(() => {
+    // Only ever set: in development React runs this twice, and the second run,
+    // finding nothing left, was closing the popup the first had opened.
+    const paid = takePaid<Ticket[]>("booking");
+    if (paid) setBooked(paid);
+  }, []);
   const router = useRouter();
   const { c, lang } = useI18n();
   const b = c.booking;

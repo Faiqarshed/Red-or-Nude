@@ -39,7 +39,12 @@ export default function PacksView({
   const k = c.packs;
   // Just paid: the payment page sent her back here with what she bought.
   const [bought, setBought] = useState<{ pack: PublicPack; boughtAt: number } | null>(null);
-  useEffect(() => setBought(takePaid("pack")), []);
+  useEffect(() => {
+    // Only ever set: in development React runs this twice, and the second run,
+    // finding nothing left, was closing the popup the first had opened.
+    const paid = takePaid<{ pack: PublicPack; boughtAt: number }>("pack");
+    if (paid) setBought(paid);
+  }, []);
 
   return (
     <main className="min-h-screen bg-cream">
