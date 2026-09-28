@@ -135,7 +135,7 @@ Examples:
   - What went back beyond the credits (a group where some guests were served) is in the owner's alert that `refundedOutside` already sends for every outside refund, now with what was taken from the wallet. Not a `wallet_decisions` row: it isn't wallet money, and a running total reported again would write it again.
   - Called from `refundedOutside` (`refund.ts`) for full **and** partial refunds, which covers dashboard refunds, the refund webhooks and chargebacks found by the daily comparison.
   - **Built (step 7a)** for cancel and chair credit. The gift card case joins it in step 6.
-- `creditOwedChair(ref)`: `refundOrCredit` (`purchase.ts:268`) credits now instead of marking. A one-off pass converts existing `owedCredit` rows **only where the payment is still `paid`**, and emails her.
+- `creditChair(tx, paymentId, bookingId, halalas)`: **built (step 7b).** After launch, `refundOrCredit` (`purchase.ts`) writes a `chair-credit` to the visit's email in the transaction that marks `owedCredit`, and emails her. The mark stays, since it is what tells the settle job the payment is handled. Before launch it marks only. **Launch (step 9)** still owes a one-off pass converting existing `owedCredit` marks **only where the payment is still `paid`**, emailing each.
 
 ### Checkout
 - **Bookings.** `/api/bookings` takes `giftCard?: { code, email }` and `useWallet?`. In `createBookings`' transaction, after points (`lib/bookings.ts:1322`), under the existing customer row lock:
@@ -215,7 +215,7 @@ One commit per step, docs in the same commit. Nothing reaches customers until st
 4. Booking checkout: gift card and wallet, quote route, UI.
 5. Purchase checkouts: `startPurchase` wallet in one transaction and zero path, two routes, releases, revive re-spend, UI.
 6. Gift cards: required recipient email, the email lock, delivery claim, `createAccount` claim/merge, inline image, emails.
-7. `owedCredit` conversion, `reverseCredit` in `refundedOutside` (**built** for cancel credit).
+7. **Built:** `reverseCredit` in `refundedOutside`, and chair credit after launch. Left for launch: converting `owedCredit` marks made before it. The gift card case of `reverseCredit` waits for step 6.
 8. "Needs your decision" page, owner correction (**built**), and changing a gift card's email.
 9. Launch: set `wallet_launched_at`, remove `refundBookings` and `payments.refund`, PAYMENTS-STATUS.md §2 updated to "built".
 

@@ -1,6 +1,6 @@
-// "Added to your wallet": the email after a cancellation became wallet credit
-// (docs/WALLET-PLAN.md). Before the wallet there was no cancellation email at
-// all; notifyCustomer("booking-cancelled") only logs.
+// The wallet's emails (docs/WALLET-PLAN.md): credit from a cancellation or an
+// undelivered chair purchase, and the owner's correction. Before the wallet
+// there was no cancellation email at all; notifyCustomer only logs.
 //
 // Not a tax document: whether a credit note needs one is open with the
 // accountant (docs/WALLET-PLAN.md, open question 2), so this carries no invoice.
@@ -8,7 +8,7 @@
 import "server-only";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { customers, walletTxns } from "@/lib/db/schema";
+import { bookings, customers, walletTxns } from "@/lib/db/schema";
 import { esc } from "@/lib/email/html";
 import { brandedEmail, INK, RED, sendReceipt, side } from "@/lib/email/shell";
 import { formatSAR } from "@/lib/money";
@@ -24,6 +24,8 @@ const T = {
     greeting: (name: string | null) => (name ? `أهلاً ${name}،` : "أهلاً،"),
     yours: "أُلغي حجزك، وأضفنا ما دفعتِه إلى محفظتك:",
     salons: (why: string) => `اضطررنا إلى إلغاء حجزك، ونعتذر عن ذلك. السبب: ${why}. أضفنا ما دفعتِه إلى محفظتك:`,
+    chair: "لم نتمكن من إضافة طلبك إلى زيارتك، فأضفنا ما دفعتِه إلى محفظتك:",
+    chairSubject: "أُضيف ثمن طلبك إلى محفظتك في ريد أور نيود",
     added: "أُضيف إلى محفظتك",
     balance: "رصيدك الآن",
     sar: "ر.س",
@@ -41,6 +43,8 @@ const T = {
     greeting: (name: string | null) => (name ? `Hi ${name},` : "Hi,"),
     yours: "Your booking is cancelled, and what you paid is in your wallet:",
     salons: (why: string) => `We had to cancel your booking, and we're sorry. The reason: ${why}. What you paid is in your wallet:`,
+    chair: "We couldn't add your order to your visit, so what you paid is in your wallet:",
+    chairSubject: "Your order's price is in your Red or Nude wallet",
     added: "Added to your wallet",
     balance: "Your balance now",
     sar: "SAR",
@@ -54,7 +58,7 @@ const T = {
   },
 };
 
-export type CancelCreditEmailInput = {
+export type CreditEmailInput = {
   lang: Lang;
   name: string | null;
   amountHalalas: number;
@@ -64,13 +68,16 @@ export type CancelCreditEmailInput = {
   salonReason: string | null;
   /** Set for a guest: the email her credit waits under. Null for an account. */
   guestEmail: string | null;
+  /** A chair purchase that could not be delivered, not a cancellation. */
+  chair?: boolean;
 };
 
-export function renderCancelCreditEmail(input: CancelCreditEmailInput) {
+export function renderCreditEmail(input: CreditEmailInput) {
   const t = T[input.lang];
   const { start } = side(input.lang);
   const money = (h: number) => `${formatSAR(h, { decimals: true })} ${t.sar}`;
-  const intro = input.salonReason ? t.salons(input.salonReason) : t.yours;
+  const intro = input.chair ? t.chair : input.salonReason ? t.salons(input.salonReason) : t.yours;
+  const subject = input.chair ? t.chairSubject : t.subject;
   const signIn = input.guestEmail ? t.signIn(input.guestEmail, `${siteOrigin()}/account`) : null;
 
   const line = (label: string, value: string, strong = false) =>
@@ -78,7 +85,7 @@ export function renderCancelCreditEmail(input: CancelCreditEmailInput) {
 
   const html = brandedEmail({
     lang: input.lang,
-    subject: t.subject,
+    subject,
     title: t.title,
     taxInvoiceUrl: null,
     pdfAttached: false,
@@ -103,7 +110,7 @@ export function renderCancelCreditEmail(input: CancelCreditEmailInput) {
     t.footer,
   ].join("\n");
 
-  return { subject: t.subject, html, text };
+  return { subject, html, text };
 }
 
 /**
@@ -136,7 +143,7 @@ export async function sendCancelCreditEmail(bookingIds: string[], salonReason: s
     for (const w of wallets.values()) {
       const [customer] = await db.select().from(customers).where(eq(customers.id, w.customerId)).limit(1);
       if (!customer) continue;
-      const { subject, html, text } = renderCancelCreditEmail({
+      const { subject, html, text } = renderCreditEmail({
         lang: customer.lang,
         name: customer.name,
         amountHalalas: w.amount,
@@ -211,4 +218,29 @@ export function renderCorrectionEmail(input: {
   ].join("\n");
 
   return { subject: t.correctedSubject, html, text };
+}
+
+/** Tell her an undelivered chair purchase went to her wallet. Never throws. */
+export async function sendChairCreditEmail(bookingId: string, amountHalalas: number): Promise<void> {
+  try {
+    const [visit] = await db
+      .select({ customerId: bookings.customerId, ownerEmail: bookings.customerEmail })
+      .from(bookings)
+      .where(eq(bookings.id, bookingId));
+    if (!visit?.customerId || !visit.ownerEmail) return;
+    const [customer] = await db.select().from(customers).where(eq(customers.id, visit.customerId)).limit(1);
+    if (!customer) return;
+    const { subject, html, text } = renderCreditEmail({
+      lang: customer.lang,
+      name: customer.name,
+      amountHalalas,
+      balanceHalalas: (await walletBalance(visit.ownerEmail)).available,
+      salonReason: null,
+      guestEmail: customer.emailVerifiedAt ? null : visit.ownerEmail,
+      chair: true,
+    });
+    await sendReceipt("wallet-chair-credit", { to: visit.ownerEmail, toName: customer.name, subject, html, text });
+  } catch (err) {
+    console.error("[wallet] could not build or send the chair credit email", err);
+  }
 }

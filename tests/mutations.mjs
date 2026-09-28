@@ -44,6 +44,7 @@ const WALLET = "lib/wallet.ts";
 const STATUS = "app/(admin)/admin/(shell)/bookings/actions.ts";
 const DECIDE = "app/(admin)/admin/(shell)/wallet-decisions/actions.ts";
 const RBAC = "lib/auth/rbac.ts";
+const PURCHASE = "lib/payments/purchase.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -827,11 +828,23 @@ const mutations = [
     expect: "tests/wallet-decisions.test.ts",
     apply: () => mutate(RBAC, '    "payments.view",\n  ],\n  receptionist: [', '    "payments.view",\n    "wallet.decide",\n  ],\n  receptionist: ['),
   },
+
+  // ---- an undelivered chair purchase becomes credit -------------------------
+  {
+    name: "chair credit: write it to the wallet before the wallet is live",
+    expect: "tests/payment-hardening.test.ts",
+    apply: () =>
+      mutate(
+        PURCHASE,
+        "      return launched && row ? creditChair(tx, row.id, intent.bookingId, amountHalalas) : false;",
+        "      return row ? creditChair(tx, row.id, intent.bookingId, amountHalalas) : false;",
+      ),
+  },
 ];
 
 const touched = [
   CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, LINES, TREAT,
-  DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS, DECIDE, RBAC,
+  DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS, DECIDE, RBAC, PURCHASE,
 ];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));

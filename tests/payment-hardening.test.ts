@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createHmac, randomUUID } from "node:crypto";
 import { eq, inArray, like, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { addons, bookings, customers, giftCardValues, giftCards, loyaltyTxns, payments, refunds, paymentEvents, stations, streampayIds } from "@/lib/db/schema";
+import { addons, bookings, customers, giftCardValues, giftCards, loyaltyTxns, payments, refunds, paymentEvents, settings, stations, streampayIds, walletTxns } from "@/lib/db/schema";
 import { createBookings, heldState, releaseWebHold } from "@/lib/bookings";
 import { getDayAvailability, stationFreeWindow, utcToLocalDate, utcToLocalTime } from "@/lib/availability";
 import { settleBookingPayment } from "@/lib/payments/confirm";
@@ -637,6 +637,42 @@ describe("#12 a chair purchase paid after her visit ended", () => {
   it("refunds anything more to her card", async () => {
     const row = await lateTreat(CHAIR_CREDIT_MAX_HALALAS + 500);
     expect(row.status).toBe("refunded");
+  });
+
+  describe("once the wallet is live", () => {
+    beforeEach(async () => {
+      await db.insert(settings).values({ key: "wallet_launched_at", value: new Date().toISOString() })
+        .onConflictDoUpdate({ target: settings.key, set: { value: new Date().toISOString() } });
+    });
+    afterEach(async () => {
+      await db.delete(settings).where(eq(settings.key, "wallet_launched_at"));
+    });
+
+    it("puts it in the wallet of the visit's email, once", async () => {
+      const row = await lateTreat(CHAIR_CREDIT_MAX_HALALAS);
+      await redeliver(row.providerRef!);
+      await settlePurchase(row.providerRef!, paid(CHAIR_CREDIT_MAX_HALALAS));
+
+      const credits = await db.select().from(walletTxns).where(eq(walletTxns.paymentId, row.id));
+      expect(credits).toHaveLength(1);
+      expect(credits[0]).toMatchObject({
+        reason: "chair-credit",
+        deltaHalalas: CHAIR_CREDIT_MAX_HALALAS,
+        ownerEmail: "hardening@example.com",
+      });
+      expect((await rowsOf(row.providerRef!))[0].status).toBe("paid");
+    });
+
+    it("still refunds anything more to her card", async () => {
+      const row = await lateTreat(CHAIR_CREDIT_MAX_HALALAS + 500);
+      expect(row.status).toBe("refunded");
+      expect(await db.select().from(walletTxns).where(eq(walletTxns.paymentId, row.id))).toHaveLength(0);
+    });
+  });
+
+  it("puts nothing in a wallet before the wallet is live", async () => {
+    const row = await lateTreat(CHAIR_CREDIT_MAX_HALALAS);
+    expect(await db.select().from(walletTxns).where(eq(walletTxns.paymentId, row.id))).toHaveLength(0);
   });
 });
 

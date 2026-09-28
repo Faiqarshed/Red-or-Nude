@@ -300,3 +300,33 @@ export async function correctWallet(
     .returning({ id: walletTxns.id });
   return row.id;
 }
+
+/**
+ * A chair purchase of CHAIR_CREDIT_MAX_HALALAS or less that could not be
+ * delivered: credit to the visit's email instead of a card refund (CLAUDE.md).
+ * Call in the transaction that marks the payment `owedCredit`. One per payment
+ * (wallet_txns_chair_unique). False when the visit has no customer or no email:
+ * the payment stays marked, as before the wallet, for the owner to settle.
+ */
+export async function creditChair(tx: Tx, paymentId: string, bookingId: string, halalas: number): Promise<boolean> {
+  const [visit] = await tx
+    .select({ customerId: bookings.customerId, customerEmail: bookings.customerEmail })
+    .from(bookings)
+    .where(eq(bookings.id, bookingId));
+  if (!visit?.customerId || !visit.customerEmail) return false;
+
+  await lockWallet(tx, visit.customerEmail);
+  const [row] = await tx
+    .insert(walletTxns)
+    .values({
+      customerId: visit.customerId,
+      ownerEmail: visit.customerEmail,
+      deltaHalalas: halalas,
+      reason: "chair-credit",
+      bookingId,
+      paymentId,
+    })
+    .onConflictDoNothing()
+    .returning({ id: walletTxns.id });
+  return Boolean(row);
+}

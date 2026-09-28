@@ -25,6 +25,8 @@ import { sendMembershipEmail } from "@/lib/membership-email";
 import { sendVisitEmail } from "@/lib/visit-email";
 import { returnOrigin } from "@/lib/site";
 import { afterResponse } from "@/lib/after-response";
+import { creditChair, walletLaunched } from "@/lib/wallet";
+import { sendChairCreditEmail } from "@/lib/wallet-email";
 import { refundRef } from "./refund";
 import { errorText, logPaymentEvent } from "./events";
 import { checkoutOf, getDriver, mergeRaw, PAY_WINDOW_MIN, type Checkout, type Line, type Payer, type Verdict } from "./index";
@@ -267,12 +269,20 @@ export const CHAIR_CREDIT_MAX_HALALAS = 1000;
  */
 export async function refundOrCredit(ref: string, amountHalalas: number, intent: Intent): Promise<boolean> {
   if (intent.kind === "treat" && amountHalalas <= CHAIR_CREDIT_MAX_HALALAS) {
-    // ponytail: marked only. The wallet (its own PR) turns every `owedCredit`
-    // whose payment is still paid into real credit, and tells her then.
-    await db
-      .update(payments)
-      .set({ raw: mergeRaw(payments.raw, { owedCredit: amountHalalas }) })
-      .where(eq(payments.providerRef, ref));
+    // Marked `owedCredit` either way, which is what tells the settle job it is
+    // handled. Once the wallet is live the credit is written with the mark;
+    // before that it stays marked only, and launch converts every mark whose
+    // payment is still paid (docs/WALLET-PLAN.md).
+    const launched = await walletLaunched();
+    const credited = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(payments)
+        .set({ raw: mergeRaw(payments.raw, { owedCredit: amountHalalas }) })
+        .where(eq(payments.providerRef, ref))
+        .returning({ id: payments.id });
+      return launched && row ? creditChair(tx, row.id, intent.bookingId, amountHalalas) : false;
+    });
+    if (credited) await sendChairCreditEmail(intent.bookingId, amountHalalas);
     return true;
   }
   return (await refundRef(ref, "not-delivered")).ok;

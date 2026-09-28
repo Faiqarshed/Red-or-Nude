@@ -2,7 +2,7 @@
 // (docs/WALLET-PLAN.md, gap 2: there was no cancellation email at all).
 
 import { describe, expect, it } from "vitest";
-import { renderCancelCreditEmail, renderCorrectionEmail } from "@/lib/wallet-email";
+import { renderCreditEmail, renderCorrectionEmail } from "@/lib/wallet-email";
 
 const base = {
   name: "Sara",
@@ -14,7 +14,7 @@ const base = {
 
 describe("the cancel credit email", () => {
   it("says how much went to her wallet and what she now holds", () => {
-    const { subject, text, html } = renderCancelCreditEmail({ ...base, lang: "en" });
+    const { subject, text, html } = renderCreditEmail({ ...base, lang: "en" });
     expect(subject).toMatch(/wallet/i);
     expect(text).toContain("150.00 SAR");
     expect(text).toContain("200.00 SAR");
@@ -24,27 +24,34 @@ describe("the cancel credit email", () => {
   });
 
   it("tells a guest which email to sign in with, and an account holder nothing of the sort", () => {
-    const guest = renderCancelCreditEmail({ ...base, lang: "en", guestEmail: "sara@test.local" });
+    const guest = renderCreditEmail({ ...base, lang: "en", guestEmail: "sara@test.local" });
     expect(guest.text).toContain("sara@test.local");
     expect(guest.text).toContain("/account");
 
-    const account = renderCancelCreditEmail({ ...base, lang: "en" });
+    const account = renderCreditEmail({ ...base, lang: "en" });
     expect(account.text).not.toContain("Sign in");
   });
 
   it("gives the salon's reason when the salon cancelled", () => {
-    const { text } = renderCancelCreditEmail({ ...base, lang: "en", salonReason: "Technician off sick" });
+    const { text } = renderCreditEmail({ ...base, lang: "en", salonReason: "Technician off sick" });
     expect(text).toContain("Technician off sick");
   });
 
   it("speaks Arabic to an Arabic customer", () => {
-    const { subject, text } = renderCancelCreditEmail({ ...base, lang: "ar" });
+    const { subject, text } = renderCreditEmail({ ...base, lang: "ar" });
     expect(subject).toMatch(/[؀-ۿ]/);
     expect(text).toContain("150.00");
   });
 
+  it("says a chair purchase could not be added, not that a booking was cancelled", () => {
+    const { subject, text } = renderCreditEmail({ ...base, lang: "en", chair: true });
+    expect(text).toContain("couldn't add your order");
+    expect(text).not.toMatch(/cancel/i);
+    expect(subject).not.toMatch(/cancel/i);
+  });
+
   it("escapes a reason typed at the desk", () => {
-    const { html } = renderCancelCreditEmail({ ...base, lang: "en", salonReason: "<b>x</b>" });
+    const { html } = renderCreditEmail({ ...base, lang: "en", salonReason: "<b>x</b>" });
     expect(html).not.toContain("<b>x</b>");
   });
 });
