@@ -6,7 +6,7 @@
 // screen and the price charged come from one set of functions.
 
 import "server-only";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, loyaltyTxns } from "@/lib/db/schema";
 import { getSettings } from "@/lib/settings";
@@ -64,6 +64,7 @@ export async function loyaltyBalance(customerId: string, executor: Pick<typeof d
       bookingStatus: bookings.status,
       bookingCreatedAt: bookings.createdAt,
       checkoutOpen: checkoutOpen(bookings.id),
+      noShow: sql<boolean>`${bookings.noShowAt} is not null`,
     })
     .from(loyaltyTxns)
     .leftJoin(bookings, eq(bookings.id, loyaltyTxns.bookingId))

@@ -182,6 +182,11 @@ export type LedgerRow = {
   bookingCreatedAt: Date | null;
   /** A checkout for the booking is still payable (lib/payments `checkoutOpen`). */
   checkoutOpen?: boolean;
+  /**
+   * The sweep flagged the booking a no-show (`no_show_at`). Still set after the
+   * desk closes it as `cancelled`; a reschedule clears it.
+   */
+  noShow?: boolean;
 };
 
 /**
@@ -208,10 +213,14 @@ export type LedgerRow = {
  * Nor is a hold past its window dead while a checkout for it is still open: she
  * may be on her bank's page, and the booking can still confirm. Releasing the
  * points then would let her spend them twice.
+ *
+ * And a no-show gets nothing back (CLAUDE.md): points she spent on it stay
+ * spent. What a no-show earned still does not count.
  */
 function isDead(row: LedgerRow, holdMin: number, now: Date): boolean {
   const { bookingStatus: status, bookingCreatedAt: createdAt } = row;
   if (status === null) return false; // not attached to a booking at all
+  if (row.deltaPoints < 0 && (status === "no_show" || row.noShow)) return false;
   if (status === "cancelled" || status === "no_show") return true;
   if (status !== "pending") return false;
   if (row.checkoutOpen) return false;

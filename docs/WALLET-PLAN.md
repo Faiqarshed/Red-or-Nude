@@ -154,7 +154,7 @@ Examples:
   - **built (step 2a):** entering `cancelled` requires a reason, and the status change and `returnPackCredits` run in **one transaction**, so a crash leaves all or none. `creditCancelled(..., "cancel-salon", reason)` joins that transaction in step 2c;
   - leaving `cancelled` is refused while the booking has a cancel credit;
   - inside `cancel_cutoff_hours`: open question 1. The cancel itself stays allowed, as it is today. Whether it credits her is held until the client answers, and launch waits on it.
-- **No-show:** `isDead` (`lib/rewards.ts:215`) stops treating `no_show` and no-show-resolved rows as dead, so spent points are kept.
+- **No-show (built, step 2b):** `isDead` (`lib/rewards.ts`) keeps a spend on a `no_show` or no-show-resolved booking, so spent points stay spent. What a no-show earned still doesn't count: the rule speaks of spent points only.
 - **Remove** `refundBookings` and the `payments.refund` permission (`lib/auth/rbac.ts:42,70`) at launch, once `wallet_launched_at` is set.
 
 ### Walk-ins retired

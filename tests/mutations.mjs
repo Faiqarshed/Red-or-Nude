@@ -720,6 +720,28 @@ const mutations = [
         "",
       ),
   },
+
+  // ---- a no-show gets nothing back ----------------------------------------
+  {
+    name: "no-show: hand her spent points back",
+    expect: "tests/no-show-points.test.ts",
+    apply: () =>
+      mutate(
+        REWARDS,
+        '  if (row.deltaPoints < 0 && (status === "no_show" || row.noShow)) return false;\n',
+        "",
+      ),
+  },
+  {
+    name: "subtle: keep a no-show's earned points as well as her spent ones",
+    expect: "tests/no-show-points.test.ts",
+    apply: () =>
+      mutate(
+        REWARDS,
+        '  if (row.deltaPoints < 0 && (status === "no_show" || row.noShow)) return false;',
+        '  if (status === "no_show" || row.noShow) return false;',
+      ),
+  },
 ];
 
 const touched = [

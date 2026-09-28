@@ -84,8 +84,8 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
   her in full. ⚠ **Salon cancel inside 3 h is an open question with the client —
   ask before building anything that depends on it.**
 - No-show: not checked in within `no_show_grace_min` (20) → released by `sweepNoShows`,
-  7-day lookback. Moves no money. A no-show gets nothing back, points stay spent
-  (planned — `isDead` in `lib/rewards.ts` still returns them).
+  7-day lookback. Moves no money. A no-show gets nothing back: points spent on it
+  stay spent (`isDead` in `lib/rewards.ts`); points it earned don't count.
 - A cancelled booking holding a cancel credit can never be set back to confirmed.
 
 **Payments (StreamPay)**
