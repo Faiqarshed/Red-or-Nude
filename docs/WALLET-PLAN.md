@@ -132,8 +132,9 @@ Examples:
   - due = min(running total, the card-paid part of every credit that payment funded) − what is already reversed for that payment; 0 → nothing written, so a repeat call is harmless;
   - **cancel or chair credit** (she paid): one `reversal` of `due`, which may take her below 0 → alert + `wallet_decisions`;
   - **gift card claim** (someone else paid): a `reversal` of at most her `available`; the rest → `wallet_decisions` as the salon's loss. If the buyer's email is the recipient's, it is treated as her own payment.
-  - What went back beyond the credits (a group where some guests were served) → `wallet_decisions`, as today's dashboard refunds are.
-  - Called from `refundedOutside` (`refund.ts:245`) for full **and** partial refunds, which covers dashboard refunds, the refund webhooks and chargebacks found by the daily comparison.
+  - What went back beyond the credits (a group where some guests were served) is in the owner's alert that `refundedOutside` already sends for every outside refund, now with what was taken from the wallet. Not a `wallet_decisions` row: it isn't wallet money, and a running total reported again would write it again.
+  - Called from `refundedOutside` (`refund.ts`) for full **and** partial refunds, which covers dashboard refunds, the refund webhooks and chargebacks found by the daily comparison.
+  - **Built (step 7a)** for cancel and chair credit. The gift card case joins it in step 6.
 - `creditOwedChair(ref)`: `refundOrCredit` (`purchase.ts:268`) credits now instead of marking. A one-off pass converts existing `owedCredit` rows **only where the payment is still `paid`**, and emails her.
 
 ### Checkout
@@ -213,7 +214,7 @@ One commit per step, docs in the same commit. Nothing reaches customers until st
 4. Booking checkout: gift card and wallet, quote route, UI.
 5. Purchase checkouts: `startPurchase` wallet in one transaction and zero path, two routes, releases, revive re-spend, UI.
 6. Gift cards: required recipient email, the email lock, delivery claim, `createAccount` claim/merge, inline image, emails.
-7. `owedCredit` conversion, `reverseCredit` in `refundedOutside`.
+7. `owedCredit` conversion, `reverseCredit` in `refundedOutside` (**built** for cancel credit).
 8. "Needs your decision" page, owner correction, and changing a gift card's email.
 9. Launch: set `wallet_launched_at`, remove `refundBookings` and `payments.refund`, PAYMENTS-STATUS.md §2 updated to "built".
 

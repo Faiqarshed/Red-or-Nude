@@ -182,3 +182,78 @@ export async function creditCancelled(
   }
   return credited;
 }
+
+/**
+ * Take back credit whose payment went back to her card after all: a refund
+ * from StreamPay's dashboard, or a chargeback found by the daily comparison.
+ * Called from refundedOutside with every payment row of the one StreamPay
+ * payment and StreamPay's **running** refunded total for it.
+ *
+ * Worked out per payment, never per booking: a group's one payment funds a
+ * credit per guest, and a sum per credit would take the refund back once per
+ * guest. Only the card-paid part of those credits can be taken; what her
+ * wallet paid was never on that card. What is due is that part, capped by
+ * the running total, less what earlier calls already took, so a repeat of the
+ * same total writes nothing.
+ *
+ * It can leave her below zero when she already spent the credit. She is shown
+ * zero, and the owner is sent the case (wallet_decisions). Returns what it took.
+ */
+export async function reverseCredit(
+  tx: Tx,
+  paymentIds: string[],
+  refundedSoFarHalalas: number,
+): Promise<{ tookHalalas: number; owedHalalas: number }> {
+  const none = { tookHalalas: 0, owedHalalas: 0 };
+  if (paymentIds.length === 0 || refundedSoFarHalalas <= 0) return none;
+
+  const credits = await tx
+    .select({
+      customerId: walletTxns.customerId,
+      ownerEmail: walletTxns.ownerEmail,
+      deltaHalalas: walletTxns.deltaHalalas,
+      paymentId: walletTxns.paymentId,
+      cardHalalas: payments.amountHalalas,
+    })
+    .from(walletTxns)
+    .innerJoin(payments, eq(payments.id, walletTxns.paymentId))
+    .where(
+      and(
+        inArray(walletTxns.paymentId, paymentIds),
+        inArray(walletTxns.reason, ["cancel-customer", "cancel-salon", "chair-credit"]),
+      ),
+    );
+  if (credits.length === 0) return none;
+
+  // One payment is one bill, booked under one email.
+  const [first] = credits;
+  await lockWallet(tx, first.ownerEmail);
+
+  const cardPart = credits.reduce((sum, c) => sum + Math.min(c.deltaHalalas, c.cardHalalas), 0);
+  const [{ taken }] = await tx
+    .select({ taken: sql<number>`coalesce(-sum(${walletTxns.deltaHalalas}), 0)::int` })
+    .from(walletTxns)
+    .where(and(eq(walletTxns.reason, "reversal"), inArray(walletTxns.paymentId, paymentIds)));
+  const due = Math.min(refundedSoFarHalalas, cardPart) - taken;
+  if (due <= 0) return none;
+
+  await tx.insert(walletTxns).values({
+    customerId: first.customerId,
+    ownerEmail: first.ownerEmail,
+    deltaHalalas: -due,
+    reason: "reversal",
+    paymentId: first.paymentId,
+  });
+
+  const { total } = await walletBalance(first.ownerEmail, tx);
+  if (total < 0) {
+    await tx.insert(walletDecisions).values({
+      kind: "negative-balance",
+      customerId: first.customerId,
+      paymentId: first.paymentId,
+      amountHalalas: -total,
+      detail: { ownerEmail: first.ownerEmail, reversedHalalas: due },
+    });
+  }
+  return { tookHalalas: due, owedHalalas: Math.max(0, -total) };
+}

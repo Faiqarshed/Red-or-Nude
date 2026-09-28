@@ -771,6 +771,33 @@ const mutations = [
     expect: "tests/cancel-credit.test.ts",
     apply: () => mutate(CANCEL, "  if (await walletLaunched()) {", "  if (false) {"),
   },
+
+  // ---- taking credit back when its payment went back -----------------------
+  {
+    // Equivalent while a group cancels as one: every payment on the bill then
+    // funds a credit, and StreamPay cannot refund more than the card paid, so
+    // the refunded total already caps the card part. Dropping guests from a
+    // group (docs/WALLET-PLAN.md, open question 0) would make it matter.
+    name: "equivalent: take back what her wallet paid as well as her card",
+    expect: "tests/cancel-credit.test.ts",
+    equivalent: true,
+    apply: () =>
+      mutate(
+        WALLET,
+        "  const cardPart = credits.reduce((sum, c) => sum + Math.min(c.deltaHalalas, c.cardHalalas), 0);",
+        "  const cardPart = credits.reduce((sum, c) => sum + c.deltaHalalas, 0);",
+      ),
+  },
+  {
+    name: "reversal: forget what earlier reports already took back",
+    expect: "tests/cancel-credit.test.ts",
+    apply: () =>
+      mutate(
+        WALLET,
+        "  const due = Math.min(refundedSoFarHalalas, cardPart) - taken;",
+        "  const due = Math.min(refundedSoFarHalalas, cardPart);",
+      ),
+  },
 ];
 
 const touched = [

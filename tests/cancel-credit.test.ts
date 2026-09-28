@@ -28,7 +28,9 @@ import { db } from "@/lib/db";
 import { bookings, payments, settings, walletDecisions, walletTxns } from "@/lib/db/schema";
 import { bookingSummaries, createBookings } from "@/lib/bookings";
 import { formatSAR } from "@/lib/money";
-import { walletBalance } from "@/lib/wallet";
+import { spendWallet, walletBalance } from "@/lib/wallet";
+import { refundedOutside } from "@/lib/payments/refund";
+import { fakeDriver } from "@/lib/payments/fake";
 import { POST } from "@/app/api/my-bookings/cancel/route";
 import { FUTURE, TEST_PHONE, fixtures, reset, type Fixtures } from "./helpers";
 
@@ -54,6 +56,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await db.delete(settings).where(eq(settings.key, "wallet_launched_at"));
 });
 
@@ -273,4 +276,88 @@ describe("the salon's cancel, after launch", () => {
     expect(await creditsOn([b.id])).toHaveLength(0);
   });
   it.todo("credits (or not) a salon cancel inside the 3 h window (open question 1)");
+});
+
+describe("when the payment behind a credit goes back to her card", () => {
+  // StreamPay reports a running total, not the amount of this refund.
+  const refunded = (halalas: number) => vi.spyOn(fakeDriver, "refundedHalalas").mockResolvedValue(halalas);
+  const reversals = () => db.select().from(walletTxns).where(eq(walletTxns.reason, "reversal"));
+  const refOf = (groupId: string | null) => `test-wallet-${groupId}`;
+
+  it("takes back what went to her card, outside the app or by chargeback", async () => {
+    await launch();
+    const [b] = await paidParty();
+    await cancel(b.code);
+
+    refunded(b.totalHalalas);
+    await refundedOutside(refOf(b.groupId));
+
+    const [r] = await reversals();
+    expect(r).toMatchObject({ deltaHalalas: -b.totalHalalas, ownerEmail: EMAIL });
+    expect(await walletBalance(EMAIL)).toEqual({ total: 0, available: 0 });
+  });
+
+  it("takes back each part once, however often StreamPay reports it", async () => {
+    await launch();
+    const [b] = await paidParty();
+    await cancel(b.code);
+
+    refunded(Math.min(100_00, b.totalHalalas));
+    await refundedOutside(refOf(b.groupId));
+    refunded(Math.min(250_00, b.totalHalalas - 1));
+    await refundedOutside(refOf(b.groupId));
+    await refundedOutside(refOf(b.groupId));
+
+    const back = (await reversals()).map((r) => -r.deltaHalalas);
+    expect(back.reduce((a, n) => a + n, 0)).toBe(Math.min(250_00, b.totalHalalas - 1));
+    expect(back).toHaveLength(2);
+  });
+
+  it("takes back a group's refund once, not once per guest", async () => {
+    await launch();
+    const rows = await paidParty(2);
+    await cancel(rows[0].code);
+
+    refunded(100_00);
+    await refundedOutside(refOf(rows[0].groupId));
+
+    const back = await reversals();
+    expect(back).toHaveLength(1);
+    expect(back[0].deltaHalalas).toBe(-100_00);
+  });
+
+  it("never takes back what her wallet paid, only what went to her card", async () => {
+    await launch();
+    const [b] = await paidParty(1, { walletPart: 5_000 });
+    await cancel(b.code);
+
+    refunded(b.totalHalalas);
+    await refundedOutside(refOf(b.groupId));
+
+    expect(await walletBalance(EMAIL)).toEqual({ total: 5_000, available: 5_000 });
+  });
+
+  it("shows her nothing below zero when she already spent it, and tells the owner", async () => {
+    await launch();
+    const [b, later] = [...(await paidParty()), ...(await paidParty(1, { startsAt: new Date(FUTURE + 7_200_000) }))];
+    await cancel(b.code);
+    await db.transaction((tx) => spendWallet(tx, later.customerId!, EMAIL, b.totalHalalas, { bookingId: later.id }));
+
+    refunded(b.totalHalalas);
+    await refundedOutside(refOf(b.groupId));
+
+    expect(await walletBalance(EMAIL)).toEqual({ total: -b.totalHalalas, available: 0 });
+    const [decision] = await db.select().from(walletDecisions).where(eq(walletDecisions.kind, "negative-balance"));
+    expect(decision.amountHalalas).toBe(b.totalHalalas);
+  });
+
+  it("touches no wallet when the refunded payment funded no credit", async () => {
+    await launch();
+    const [b] = await paidParty();
+
+    refunded(b.totalHalalas);
+    await refundedOutside(refOf(b.groupId));
+
+    expect(await reversals()).toHaveLength(0);
+  });
 });

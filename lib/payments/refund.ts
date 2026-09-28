@@ -14,6 +14,7 @@ import { bookings, customers, giftCards, payments, refunds } from "@/lib/db/sche
 import { sendMail } from "@/lib/email";
 import { esc } from "@/lib/email/html";
 import { formatSAR } from "@/lib/money";
+import { reverseCredit } from "@/lib/wallet";
 import { alertOwner } from "./alert";
 import { errorText, logPaymentEvent } from "./events";
 import { getDriver, mergeRaw } from "./index";
@@ -238,7 +239,8 @@ async function refundRecipient(row: RefundedRow): Promise<{ email: string; lang:
  * refunded gift card still spendable.
  *
  * Fully refunded: the payment is recorded as refunded and a gift card it bought
- * is frozen. A booking or membership is left to the owner, who is told either
+ * is frozen. Fully or partly: wallet credit the payment funded is taken back
+ * (reverseCredit), since the money is on her card again. A booking or membership is left to the owner, who is told either
  * way — what a refund from the dashboard means for an appointment is a person's
  * call. Never throws.
  */
@@ -260,6 +262,8 @@ export async function refundedOutside(ref: string): Promise<void> {
     const back = await getDriver().refundedHalalas(rows[0].raw);
     if (back <= 0) return;
     const full = back >= total;
+
+    const wallet = await db.transaction((tx) => reverseCredit(tx, rows.map((r) => r.id), back));
 
     if (full) {
       await db.transaction(async (tx) => {
@@ -309,7 +313,13 @@ export async function refundedOutside(ref: string): Promise<void> {
       full ? "A payment was refunded outside the app" : "A payment was partly refunded outside the app",
       `Payment ${ref}: ${formatSAR(back)} of ${formatSAR(total)} SAR went back through StreamPay's dashboard.
 ` +
-        `It paid for ${what.join("; ") || "nothing we can find"}.`,
+        `It paid for ${what.join("; ") || "nothing we can find"}.` +
+        (wallet.tookHalalas
+          ? `\n${formatSAR(wallet.tookHalalas)} SAR of wallet credit it had funded was taken back.`
+          : "") +
+        (wallet.owedHalalas
+          ? ` She had already spent it: her wallet is ${formatSAR(wallet.owedHalalas)} SAR below zero (shown to her as 0). See "Needs your decision".`
+          : ""),
     );
   } catch (err) {
     console.error(`[payments] could not record the outside refund of ${ref}`, err);
