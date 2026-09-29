@@ -13,9 +13,11 @@ import { usePathname } from "next/navigation";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { cn } from "@/lib/cn";
 
-export default function AdminSkeleton() {
+/** `path` is the page being opened, when Shell knows it before the address changes. */
+export default function AdminSkeleton({ path: goingTo }: { path?: string }) {
   const { t } = useAdminI18n();
-  const path = usePathname();
+  const current = usePathname();
+  const path = goingTo ?? current;
   return (
     <div aria-busy="true" aria-live="polite">
       <span className="sr-only">{t.common.loading}</span>

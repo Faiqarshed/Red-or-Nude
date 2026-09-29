@@ -27,6 +27,7 @@ import { useAdminI18n } from "@/lib/admin/i18n";
 import { can } from "@/lib/auth/rbac";
 import type { StaffRole } from "@/lib/db/schema";
 import { NAV } from "./nav";
+import { useGoingTo } from "./going-to";
 import { cn } from "@/lib/cn";
 
 const ICONS: Record<string, LucideIcon> = {
@@ -93,7 +94,10 @@ export function SidebarNav({
   onNavigate?: () => void;
 }) {
   const { t } = useAdminI18n();
-  const pathname = usePathname();
+  // The page a click is on its way to lights up at once (see Shell).
+  const goingTo = useGoingTo();
+  const current = usePathname();
+  const pathname = goingTo ?? current;
 
   return (
     <nav className="flex-1 overflow-y-auto px-2 py-3">
