@@ -12,7 +12,7 @@ const ar = {
     { label: "خدماتنا", href: "/booking" },
     { label: "اختاري الفرع", href: "/#branches" },
   ],
-  header: { otherLang: "English", search: "بحث", wishlist: "المفضلة", cart: "السلة", menu: "القائمة" },
+  header: { otherLang: "English", search: "بحث", wishlist: "المفضلة", cart: "السلة", menu: "القائمة", loading: "جارٍ التحميل…" },
 
   hero: {
     cards: [
@@ -619,7 +619,7 @@ const en: Content = {
     { label: "Our Services", href: "/booking" },
     { label: "Bookings", href: "/my-bookings" },
   ],
-  header: { otherLang: "عربي", search: "Search", wishlist: "Wishlist", cart: "Cart", menu: "Menu" },
+  header: { otherLang: "عربي", search: "Search", wishlist: "Wishlist", cart: "Cart", menu: "Menu", loading: "Loading…" },
 
   hero: {
     cards: [
