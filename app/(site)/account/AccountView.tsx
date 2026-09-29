@@ -497,8 +497,8 @@ function Wallet({ balance, rules }: { balance: number; rules: LoyaltyRules }) {
 /**
  * Name, birthday and mobile, edited in place.
  *
- * Email is deliberately NOT in this form — it is the identity, so it gets the
- * two-step flow below. See app/api/account/email/route.ts for why.
+ * Email is deliberately NOT in this form — it is the identity, and customers
+ * cannot change it. EmailLine below only shows it.
  */
 function ProfileForm({ customer }: { customer: Customer }) {
   const { c, lang } = useI18n();
@@ -627,171 +627,23 @@ function ProfileForm({ customer }: { customer: Customer }) {
         )}
       </form>
 
-      <EmailForm currentEmail={customer.email} lang={lang} />
+      <EmailLine email={customer.email} />
     </section>
   );
 }
 
 /**
- * Changing the address, in two steps.
- *
- * A code goes to the NEW address and the account is not touched until it comes
- * back. Anything less would let a signed-in customer point their invoices at
- * someone else's inbox — and squat that person's address into the bargain,
- * since the partial unique index would then stop the real owner signing up.
+ * The address, read-only. It is the identity — what sign-in resolves and where
+ * invoices go — and customers may not change it (salon's call, Sep 2026).
  */
-function EmailForm({ currentEmail, lang }: { currentEmail: string; lang: "ar" | "en" }) {
+function EmailLine({ email }: { email: string }) {
   const { c } = useI18n();
-  const a = c.account;
-  const router = useRouter();
-
-  const [open, setOpen] = useState(false);
-  const [step, setStep] = useState<"email" | "code">("email");
-  const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [sentTo, setSentTo] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [tried, setTried] = useState(false);
-  const timer = useCodeTimer();
-  useEffect(() => {
-    if (timer.expired) setCode("");
-  }, [timer.expired]);
-
-  const emailError =
-    checkEmail(validationMessages[lang], a.emailLabel, email, { required: true }) ??
-    (email.trim().toLowerCase() === currentEmail.toLowerCase() ? a.errors.sameEmail : undefined);
-
-  const say = (key: string | undefined): string =>
-    (a.errors as Record<string, string>)[toCamel(key ?? "failed")] ?? a.errors.failed;
-
-  const reset = () => {
-    setOpen(false);
-    setStep("email");
-    setEmail("");
-    setCode("");
-    setError(null);
-    setTried(false);
-  };
-
-  const request = async () => {
-    if (busy) return;
-    setTried(true);
-    if (emailError) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/account/email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), lang }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(res.status === 429 ? a.errors.tooMany : say(data.error));
-        return;
-      }
-      setSentTo(data.sentTo ?? null);
-      setCode("");
-      setStep("code");
-      timer.start();
-    } catch {
-      setError(a.errors.failed);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const confirm = async () => {
-    if (busy || code.length !== 6 || timer.expired) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/account/email/confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), code }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(res.status === 429 ? a.errors.tooMany : say(data.error));
-        setCode("");
-        return;
-      }
-      reset();
-      // The address is the subheading and is what the invoice uses, so this has
-      // to come back from the server rather than be patched in place.
-      router.refresh();
-    } catch {
-      setError(a.errors.failed);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="mt-6 border-t border-black/[0.06] pt-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <span className="block text-[12px] text-ink/55">{a.emailLabel}</span>
-          <span className="text-sm font-semibold text-ink" dir="ltr">
-            {currentEmail}
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={() => (open ? reset() : setOpen(true))}
-          className="rounded-[12px] border border-black/[0.08] px-4 py-2 text-[13px] font-semibold text-ink transition-colors hover:border-red/40"
-        >
-          {open ? a.cancelEdit : a.changeEmailAction}
-        </button>
-      </div>
-
-      {open && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void (step === "email" ? request() : confirm());
-          }}
-          className="mt-4"
-        >
-          <p className="mb-3 text-[12px] text-ink/50">{a.changeEmailNote}</p>
-
-          {step === "email" ? (
-            <>
-              <TextInput
-                label={a.emailLabel}
-                opts={EMAIL_TEXT}
-                max={EMAIL_MAX}
-                error={emailError}
-                showError={tried}
-                placeholder={a.newEmailPlaceholder}
-                value={email}
-                onChange={setEmail}
-              />
-              <Submit disabled={busy} label={busy ? a.sending : a.sendCode} />
-            </>
-          ) : (
-            <>
-              <p className="mb-3 text-[13px] text-ink/60">
-                {a.codeSentTo.replace("{email}", sentTo ?? email)}
-              </p>
-              <OtpInput value={code} onChange={setCode} />
-              <CodeCountdown timer={timer} />
-              <Submit disabled={busy || code.length !== 6 || timer.expired} label={busy ? a.sending : a.verify} />
-              <div className="mt-4 text-[12px]">
-                <ResendButton timer={timer} busy={busy} onClick={() => void request()} />
-              </div>
-            </>
-          )}
-
-          {error && (
-            <p role="alert" className="mt-3 rounded-[12px] bg-red/[0.08] px-4 py-3 text-xs text-red">
-              {error}
-            </p>
-          )}
-        </form>
-      )}
+      <span className="block text-[12px] text-ink/55">{c.account.emailLabel}</span>
+      <span className="text-sm font-semibold text-ink" dir="ltr">
+        {email}
+      </span>
     </div>
   );
 }

@@ -1,8 +1,8 @@
 // Edit the profile: name, birthday, mobile.
 //
 // Not email. That one is the identity — it is what sign-in resolves and where
-// invoices go — so changing it has to prove ownership of the *new* address
-// first. See ../email/route.ts.
+// invoices go — and customers may not change it at all (salon's call, Sep
+// 2026). The schema below does not accept it.
 
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
