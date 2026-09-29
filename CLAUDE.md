@@ -106,6 +106,9 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
 - Promo: a use counts once per bill at payment; codes are deactivated, never deleted.
 - Staff code: 90% off, once per Riyadh month.
 - Points: 50 at 199 SAR then every 200 SAR; 1 pt = 20 halalas; spent in 50s.
+  Points earned on a guest booking count on the account with that email
+  (`loyaltyBalance`); spending needs her signed in. Never say to a guest whether
+  an email has an account or points.
 - Gift cards: preset amounts only; charge first, issue second.
 
 **Roles** (`lib/auth/rbac.ts` is the truth)

@@ -45,6 +45,7 @@ const STATUS = "app/(admin)/admin/(shell)/bookings/actions.ts";
 const DECIDE = "app/(admin)/admin/(shell)/wallet-decisions/actions.ts";
 const RBAC = "lib/auth/rbac.ts";
 const PURCHASE = "lib/payments/purchase.ts";
+const LOYALTY = "lib/loyalty.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -840,11 +841,36 @@ const mutations = [
         "      return row ? creditChair(tx, row.id, intent.bookingId, amountHalalas) : false;",
       ),
   },
+
+  // ---- points follow the email -----------------------------------------------
+  {
+    name: "points: leave what she earned signed out off her account",
+    expect: "tests/loyalty-email.test.ts",
+    apply: () =>
+      mutate(
+        LOYALTY,
+        "       where g.id = ${customerId}\n          or (g.email_verified_at is null and lower(g.email) = (",
+        "       where g.id = ${customerId}\n          and (g.email_verified_at is null and lower(g.email) = (",
+      ),
+  },
+  {
+    // Equivalent while customers_guest_email_unique holds: one guest record per
+    // email, so a guest record's email matches only itself.
+    name: "equivalent: let a guest record count another guest's points by email",
+    expect: "tests/loyalty-email.test.ts",
+    equivalent: true,
+    apply: () =>
+      mutate(
+        LOYALTY,
+        "                 where a.id = ${customerId} and a.email_verified_at is not null))",
+        "                 where a.id = ${customerId}))",
+      ),
+  },
 ];
 
 const touched = [
   CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, LINES, TREAT,
-  DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS, DECIDE, RBAC, PURCHASE,
+  DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS, DECIDE, RBAC, PURCHASE, LOYALTY,
 ];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));

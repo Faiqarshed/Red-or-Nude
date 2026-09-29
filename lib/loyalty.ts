@@ -8,7 +8,7 @@
 import "server-only";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, loyaltyTxns } from "@/lib/db/schema";
+import { bookings, customers, loyaltyTxns } from "@/lib/db/schema";
 import { getSettings } from "@/lib/settings";
 import { checkoutOpen } from "@/lib/payments";
 import {
@@ -54,6 +54,13 @@ export async function loyaltyRules(): Promise<LoyaltyRules> {
  * the two copies had to be edited together, which is exactly the kind of note
  * that stops being true. A customer's ledger is one row per booking; reading it
  * is not the expensive part of any page that asks.
+ *
+ * An account also counts the guest records with its email. An account is never
+ * found from a typed email, so an account holder who books signed out gets a
+ * guest record under her own address, and the points that booking earns land
+ * there. They are hers: the email is her identity. Spending still needs her to
+ * sign in, because only a signed-in checkout spends, and it spends on the
+ * account. A guest record counts only its own rows.
  */
 export async function loyaltyBalance(customerId: string, executor: Pick<typeof db, "select"> = db): Promise<number> {
   const { booking_hold_min: holdMin } = await getSettings(["booking_hold_min"]);
@@ -68,7 +75,13 @@ export async function loyaltyBalance(customerId: string, executor: Pick<typeof d
     })
     .from(loyaltyTxns)
     .leftJoin(bookings, eq(bookings.id, loyaltyTxns.bookingId))
-    .where(eq(loyaltyTxns.customerId, customerId));
+    .where(sql`${loyaltyTxns.customerId} in (
+      select g.id from ${customers} g
+       where g.id = ${customerId}
+          or (g.email_verified_at is null and lower(g.email) = (
+                select lower(a.email) from ${customers} a
+                 where a.id = ${customerId} and a.email_verified_at is not null))
+    )`);
 
   return spendableBalance(rows, holdMin);
 }
