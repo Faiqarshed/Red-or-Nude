@@ -191,7 +191,6 @@ const ar = {
   bookings: {
     title: "الحجوزات",
     onThisDay: "حجز في هذا اليوم",
-    walkIn: "حجز مباشر",
     create: "إنشاء الحجز",
     dayView: "اليوم",
     listView: "قائمة",
@@ -247,8 +246,6 @@ const ar = {
     prevPage: "السابق",
     nextPage: "التالي",
     cancelReason: "سبب الإلغاء (اختياري)",
-    walkInEmailHint: "إذا كان لها حساب بهذا البريد، تُسجَّل الزيارة ونقاطها في حسابها.",
-    walkInBlocked: "هذا الحساب موقوف، لا يمكن الحجز له",
     cancelAskTitle: "إلغاء هذا الحجز؟",
     cancelAskBody: (code: string, when: string) => `${code}، ${when}. يُحرَّر الكرسي ولا يمكن التراجع عن الإلغاء.`,
     cancelConfirm: "إلغاء الحجز",
@@ -965,7 +962,6 @@ const en: AdminStrings = {
   bookings: {
     title: "Bookings",
     onThisDay: "on this day",
-    walkIn: "Walk-in",
     create: "Create booking",
     dayView: "Day",
     listView: "List",
@@ -1021,8 +1017,6 @@ const en: AdminStrings = {
     prevPage: "Previous",
     nextPage: "Next",
     cancelReason: "Reason for cancelling (optional)",
-    walkInEmailHint: "If she has an account with this email, the visit and its points go to that account.",
-    walkInBlocked: "This account is blocked, so it can't be booked",
     cancelAskTitle: "Cancel this booking?",
     cancelAskBody: (code: string, when: string) => `${code}, ${when}. The chair is freed and the cancellation can't be undone.`,
     cancelConfirm: "Cancel booking",

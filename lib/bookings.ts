@@ -1235,7 +1235,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   }
 }
 
-/** One guest. Thin wrapper so the admin walk-in form is unaffected by the above. */
+/** One guest. A thin wrapper over the above, for the tests. */
 export async function createBooking(input: CreateBookingInput): Promise<CreateBookingResult> {
   const result = await createBookings({
     branchId: input.branchId,

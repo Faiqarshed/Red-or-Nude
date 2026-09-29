@@ -71,7 +71,7 @@ name, a group-level promo).
 
 | File | Job |
 |---|---|
-| `lib/bookings.ts` | `createBookings()` — the single write path, 1 or 2 guests. `createBooking()` is a thin wrapper so the admin walk-in form is untouched. |
+| `lib/bookings.ts` | `createBookings()` — the single write path, 1 or 2 guests. `createBooking()` is a thin one-guest wrapper, used by the tests since walk-ins were retired. |
 | `lib/availability.ts` | `reserveStations()` claims N chairs under a lock. `getDayAvailability(..., guests)` answers "can two people sit here?" |
 | `lib/money.ts` | `splitGroupPrice()` — the discount maths. Pure, no database. |
 | `lib/tickets.ts` | `formatTicketNo()` — `1 → A1`, `100 → B1`. |

@@ -327,8 +327,9 @@ curl -s "localhost:3000/api/availability?branchId=<id>&date=<today>&duration=45&
 ```
 
 Compare with the same call **without** `walkIn=1` — signed out the two must match
-exactly. Signed in to the admin in a browser, the walk-in drawer should show more
-slots than the public booking page does for the same day.
+exactly. Signed in to the admin in a browser, the reschedule dialog should show more
+slots than the public booking page does for the same day. (The walk-in drawer this
+used to name is retired.)
 
 ## 8. Regression
 
