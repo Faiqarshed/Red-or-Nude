@@ -17,6 +17,7 @@ import {
 import { Drawer } from "@/components/admin/overlays";
 import { AdminTable } from "@/components/admin/Table";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import TextField from "@/components/admin/TextField";
 import {
   checkCustomer,
@@ -181,7 +182,9 @@ function CustomerDrawer({
   onSaved: () => void;
 }) {
   const { t, lang } = useAdminI18n();
-  const [pending, startTransition] = useTransition();
+  // Busy from the click until the save answers. A bare useTransition ended at
+  // the first await (React 18), so the button came back while it was saving.
+  const { pending, run } = usePendingAction();
   const [loadedId, setLoadedId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -209,10 +212,13 @@ function CustomerDrawer({
   const errors = tried ? check() : {};
 
   const save = () =>
-    startTransition(async () => {
+    run(async () => {
       setError(null);
       setTried(true);
-      if (hasErrors(check())) return focusFirstInvalid();
+      if (hasErrors(check())) {
+        focusFirstInvalid();
+        return false;
+      }
       // It used to close whatever came back, so a refused save looked like a
       // successful one.
       const res = await updateCustomer({
@@ -223,6 +229,7 @@ function CustomerDrawer({
         notes: notes.trim(),
         blocked,
       });
+      // onSaved closes the drawer and refreshes the list itself.
       if (res.ok) onSaved();
       else
         setError(
@@ -232,6 +239,7 @@ function CustomerDrawer({
               ? t.validation.notFound
               : t.common.error,
         );
+      return false;
     });
 
   return (
@@ -245,7 +253,7 @@ function CustomerDrawer({
           <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
             {t.common.cancel}
           </Button>
-          <Button size="sm" disabled={pending} onClick={save}>
+          <Button size="sm" pending={pending} onClick={save}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>
