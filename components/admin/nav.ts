@@ -1,6 +1,6 @@
-// Sidebar structure. `cap` gates visibility; `soon` marks modules that land in a
-// later phase (docs/ADMIN-PANEL.md §8) — they render disabled rather than being
-// hidden, so staff can see what's coming instead of wondering what's missing.
+// Sidebar structure. `cap` gates visibility. Only sections that exist are
+// listed: the "Soon" placeholders for designs, branches, content, marketing
+// and settings were taken out at the salon's request.
 
 import type { Capability } from "@/lib/auth/rbac";
 import type { AdminStrings } from "@/lib/admin/strings";
@@ -11,7 +11,6 @@ export type NavItem = {
   icon: string; // lucide icon name, resolved in Sidebar
   /** Omitted where every signed-in role may reach the page — see /admin. */
   cap?: Capability;
-  soon?: boolean;
 };
 
 export type NavGroup = {
@@ -47,7 +46,6 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "catalog", href: "/admin/catalog", icon: "Sparkles", cap: "catalog.manage" },
       { key: "media", href: "/admin/media", icon: "Images", cap: "media.manage" },
-      { key: "designs", href: "/admin/designs", icon: "Palette", cap: "designs.manage", soon: true },
       { key: "packs", href: "/admin/memberships", icon: "Package", cap: "catalog.manage" },
       { key: "giftCards", href: "/admin/gift-cards", icon: "Gift", cap: "giftcards.issue" },
     ],
@@ -69,18 +67,12 @@ export const NAV: NavGroup[] = [
   {
     key: "site",
     items: [
-      { key: "branches", href: "/admin/branches", icon: "MapPin", cap: "branches.manage", soon: true },
-      { key: "content", href: "/admin/content", icon: "FileText", cap: "content.manage", soon: true },
-      // The first piece of Marketing to actually land; the rest of that module
-      // (offers, carousel scheduling) is still the `soon` item below.
       { key: "promoCodes", href: "/admin/promo-codes", icon: "Ticket", cap: "marketing.manage" },
-      { key: "marketing", href: "/admin/marketing", icon: "Megaphone", cap: "marketing.manage", soon: true },
     ],
   },
   {
     key: "system",
     items: [
-      { key: "settings", href: "/admin/settings", icon: "Settings", cap: "settings.manage", soon: true },
       { key: "auditLog", href: "/admin/audit", icon: "ScrollText", cap: "audit.view" },
     ],
   },

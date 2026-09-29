@@ -5,19 +5,14 @@ import { usePathname } from "next/navigation";
 import {
   CalendarDays,
   Clock,
-  FileText,
   Gift,
   Package,
   IdCard,
   Images,
   LayoutDashboard,
-  MapPin,
-  Megaphone,
-  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
-  Settings,
   Sparkles,
   Star,
   Ticket,
@@ -39,16 +34,11 @@ const ICONS: Record<string, LucideIcon> = {
   CalendarDays,
   Clock,
   Sparkles,
-  Palette,
   Gift,
   Package,
   Images,
   Users,
   IdCard,
-  MapPin,
-  FileText,
-  Megaphone,
-  Settings,
   ScrollText,
   Star,
   Ticket,
@@ -132,11 +122,6 @@ export function SidebarNav({
                     <>
                       <Icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />
                       {!collapsed && <span className="truncate">{label}</span>}
-                      {!collapsed && item.soon && (
-                        <span className="ms-auto rounded-full bg-black/[0.05] px-1.5 py-0.5 text-[9px] font-medium text-ink/40">
-                          {t.common.soon}
-                        </span>
-                      )}
                     </>
                   );
 
@@ -148,30 +133,20 @@ export function SidebarNav({
 
                   return (
                     <li key={item.key}>
-                      {item.soon ? (
-                        <span
-                          className={cn(base, "cursor-not-allowed text-ink/35")}
-                          title={t.common.comingSoon}
-                          aria-disabled
-                        >
-                          {inner}
-                        </span>
-                      ) : (
-                        <Link
-                          href={item.href}
-                          onClick={onNavigate}
-                          title={collapsed ? label : undefined}
-                          aria-current={active ? "page" : undefined}
-                          className={cn(
-                            base,
-                            active
-                              ? "bg-red/[0.07] font-medium text-red"
-                              : "text-ink/70 hover:bg-black/[0.04] hover:text-ink",
-                          )}
-                        >
-                          {inner}
-                        </Link>
-                      )}
+                      <Link
+                        href={item.href}
+                        onClick={onNavigate}
+                        title={collapsed ? label : undefined}
+                        aria-current={active ? "page" : undefined}
+                        className={cn(
+                          base,
+                          active
+                            ? "bg-red/[0.07] font-medium text-red"
+                            : "text-ink/70 hover:bg-black/[0.04] hover:text-ink",
+                        )}
+                      >
+                        {inner}
+                      </Link>
                     </li>
                   );
                 })}
