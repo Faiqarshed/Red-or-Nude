@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
-import { CalendarClock, ChevronRight, Phone, RefreshCw, Trash2, Users } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CalendarClock, ChevronRight, Loader2, Phone, RefreshCw, Trash2, Users } from "lucide-react";
 import { Badge, Button, scoreTone } from "@/components/admin/ui";
 import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
 import TextField from "@/components/admin/TextField";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { CANCEL_REASON_MAX, checkNote, NOTES_TEXT } from "@/lib/admin/validate";
 import { serviceClock } from "@/lib/booking-clock";
 import { pick } from "@/lib/localized";
@@ -310,7 +311,12 @@ export default function BookingDrawer({
   onOpenPartner?: (b: BookingRow) => void;
 }) {
   const { t, lang } = useAdminI18n();
-  const [pending, startTransition] = useTransition();
+  // Busy from the click until the server answers. A bare useTransition ended
+  // at the first await (React 18), so the buttons came back mid-save. On
+  // success onChanged closes the drawer and refreshes the list.
+  const { pending, run } = usePendingAction();
+  // Which status button was pressed, so only that one spins.
+  const [movingTo, setMovingTo] = useState<BookingStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   // The three moves that can't be walked back ask first, in the panel's own
@@ -351,9 +357,12 @@ export default function BookingDrawer({
   const remove = () => {
     if (!booking) return;
     setAskError(null);
-    startTransition(async () => {
+    void run(async () => {
       const res = await deleteBooking(booking.id);
-      if (res.ok) return onChanged();
+      if (res.ok) {
+        onChanged();
+        return false;
+      }
       setAskError(
         res.error === "has-payment"
           ? t.bookings.delHasPayment
@@ -365,6 +374,7 @@ export default function BookingDrawer({
                 ? t.bookings.delHasPackCredit
                 : t.common.error,
       );
+      return false;
     });
   };
 
@@ -375,12 +385,16 @@ export default function BookingDrawer({
       ? checkNote(t.validation, t.bookings.cancelReason, reason, { required: false, max: CANCEL_REASON_MAX })
       : undefined;
 
-  const move = (status: BookingStatus, why?: string) =>
-    startTransition(async () => {
+  const move = (status: BookingStatus, why?: string) => {
+    setMovingTo(status);
+    void run(async () => {
       setError(null);
       setAskError(null);
       const res = await setBookingStatus(booking.id, status, why);
-      if (res.ok) return onChanged();
+      if (res.ok) {
+        onChanged();
+        return false;
+      }
       const message =
         // Check-in has one refusal a person can act on — she isn't due yet — so
         // it says when, and how long that is, rather than "something went wrong".
@@ -392,7 +406,9 @@ export default function BookingDrawer({
           : t.common.error;
       if (asking) setAskError(message);
       else setError(message);
+      return false;
     });
+  };
 
   const when = formatDateTime(new Date(booking.startsAt), lang);
   const partySize = booking.groupId ? partners.length + partnersElsewhere.length + 1 : 1;
@@ -444,13 +460,15 @@ export default function BookingDrawer({
                   key={status}
                   disabled={pending}
                   onClick={() => (status === "cancelled" || status === "no_show" ? ask(status) : move(status))}
+                  aria-busy={(pending && movingTo === status) || undefined}
                   className={cn(
-                    "rounded-xl border px-3 py-2 text-xs font-medium transition-colors disabled:opacity-50",
+                    "inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition-colors disabled:opacity-50",
                     status === "cancelled" || status === "no_show"
                       ? "border-red/25 text-red hover:bg-red/[0.06]"
                       : "border-black/10 text-ink hover:bg-black/[0.03]",
                   )}
                 >
+                  {pending && movingTo === status ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
                   {/* The one button whose label is not just its status name.
                       Pressing it is the arrival record the no-show rule
                       measures, so it says so; the badge above reads "Waiting
