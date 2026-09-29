@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { Button, FormErrors, touchTargetSwitch } from "@/components/admin/ui";
 import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
 import MediaPicker from "@/components/admin/MediaPicker";
 import { pick } from "@/lib/localized";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { NumberField, TextPair } from "@/components/admin/TextField";
 import { arScript, collect, DESC_MAX, focusFirstInvalid, hasErrors, NAME_MAX, rules } from "@/lib/admin/validate";
 import { catalogError, type CatalogRow, type DesignRow } from "./CatalogView";
@@ -59,7 +60,9 @@ export default function CatalogDrawer({
   const [form, setForm] = useState<FormState>(empty);
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
-  const [pending, startTransition] = useTransition();
+  // Busy from the click until the server answers. A bare useTransition ended
+  // at the first await (React 18), so the button came back mid-save.
+  const { pending, run } = usePendingAction();
   // Its own state rather than a field on the form: this is a list, and the
   // form holds scalars.
   const [designs, setDesigns] = useState<DesignRow[]>([]);
@@ -169,10 +172,13 @@ export default function CatalogDrawer({
   const errors = tried ? check() : {};
 
   const save = () =>
-    startTransition(async () => {
+    run(async () => {
       setError(null);
       setTried(true);
-      if (hasErrors(check())) return focusFirstInvalid();
+      if (hasErrors(check())) {
+        focusFirstInvalid();
+        return false;
+      }
       const res = await saveCatalogItem({
         kind,
         id: row?.id,
@@ -195,20 +201,23 @@ export default function CatalogDrawer({
         active: form.active,
         sort: row?.sort ?? nextSort,
       });
+      // onSaved closes the drawer and refreshes the list itself.
       if (res.ok) onSaved();
       else setError(catalogError(t, res.error));
+      return false;
     });
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const remove = () =>
-    startTransition(async () => {
-      if (!row) return;
+    run(async () => {
+      if (!row) return false;
       setDeleteError(null);
       const res = await deleteCatalogItem(kind, row.id);
-      if (res.ok) return onSaved();
-      setDeleteError(catalogError(t, res.error));
+      if (res.ok) onSaved();
+      else setDeleteError(catalogError(t, res.error));
+      return false;
     });
 
   return (
@@ -234,7 +243,7 @@ export default function CatalogDrawer({
           <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
             {t.common.cancel}
           </Button>
-          <Button size="sm" onClick={save} disabled={pending}>
+          <Button size="sm" onClick={save} pending={pending}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>

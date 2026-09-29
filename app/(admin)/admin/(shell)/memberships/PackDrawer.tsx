@@ -7,13 +7,14 @@
 // than a fixed grid: the client asked for it to be up to the salon how much
 // goes in, and a form that decides that in advance is the wrong form.
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { AlertTriangle, Minus, Plus, Trash2 } from "lucide-react";
 import { Button, FormErrors, invalidRing } from "@/components/admin/ui";
 import { ConfirmDialog, Drawer } from "@/components/admin/overlays";
 import MediaPicker from "@/components/admin/MediaPicker";
 import { NumberField, TextPair } from "@/components/admin/TextField";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { cn } from "@/lib/cn";
 import { TIMEZONE } from "@/lib/time";
 import { arScript, collect, DESC_MAX, focusFirstInvalid, hasErrors, NAME_MAX, rules } from "@/lib/admin/validate";
@@ -34,7 +35,9 @@ export default function PackDrawer({
   onSaved: () => void;
 }) {
   const { t, lang } = useAdminI18n();
-  const [pending, startTransition] = useTransition();
+  // Busy from the click until the server answers. A bare useTransition ended
+  // at the first await (React 18), so the button came back mid-save.
+  const { pending, run } = usePendingAction();
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
 
@@ -128,10 +131,13 @@ export default function PackDrawer({
   })();
 
   const save = () =>
-    startTransition(async () => {
+    run(async () => {
       setError(null);
       setTried(true);
-      if (hasErrors(check())) return focusFirstInvalid();
+      if (hasErrors(check())) {
+        focusFirstInvalid();
+        return false;
+      }
       const res = await savePack({
         id: row?.id,
         name: { ar: form.nameAr.trim(), en: form.nameEn.trim() },
@@ -152,18 +158,21 @@ export default function PackDrawer({
               ? t.validation.notFound
               : t.common.error,
         );
+      // onSaved closes the drawer and refreshes the list itself.
+      return false;
     });
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const remove = () =>
-    startTransition(async () => {
-      if (!row) return;
+    run(async () => {
+      if (!row) return false;
       setDeleteError(null);
       const res = await deletePack(row.id);
-      if (res.ok) return onSaved();
-      setDeleteError(t.common.error);
+      if (res.ok) onSaved();
+      else setDeleteError(t.common.error);
+      return false;
     });
 
   return (
@@ -189,7 +198,7 @@ export default function PackDrawer({
           <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
             {t.common.cancel}
           </Button>
-          <Button size="sm" onClick={save} disabled={pending}>
+          <Button size="sm" onClick={save} pending={pending}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>

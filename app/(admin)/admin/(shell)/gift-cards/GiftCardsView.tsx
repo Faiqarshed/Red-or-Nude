@@ -444,7 +444,7 @@ function IssueDrawer({
             <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
               {t.common.cancel}
             </Button>
-            <Button size="sm" onClick={submit} disabled={pending}>
+            <Button size="sm" onClick={submit} pending={pending}>
               {pending ? t.common.saving : t.giftCards.issue}
             </Button>
           </>
@@ -682,7 +682,7 @@ function CardDrawer({
               />
             </div>
             <div className="flex gap-2">
-              <Button size="sm" onClick={apply} disabled={pending}>
+              <Button size="sm" onClick={apply} pending={pending}>
                 {t.giftCards.adjust}
               </Button>
               <Button
@@ -818,7 +818,7 @@ function DesignDrawer({
           <Button variant="secondary" size="sm" onClick={onClose}>
             {t.common.cancel}
           </Button>
-          <Button size="sm" disabled={pending} onClick={save}>
+          <Button size="sm" pending={pending} onClick={save}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>
