@@ -24,6 +24,7 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { promoCodes, staff } from "@/lib/db/schema";
 import { recordAudit } from "@/lib/audit";
+import { can } from "@/lib/auth/rbac";
 import { UTC_OFFSET_HOURS, riyadhDateKey } from "@/lib/time";
 
 /** The client's number. One place, so raising it is one edit. */
@@ -83,7 +84,7 @@ export async function myStaffCode(staffId: string): Promise<StaffCodeView | null
 
 export type IssueOutcome =
   | { ok: true; code: string; renewed: boolean }
-  | { ok: false; reason: "already-issued" | "not-found" };
+  | { ok: false; reason: "already-issued" | "not-found" | "not-eligible" };
 
 /** Who renewal is recorded as in the audit log. */
 export const RENEWAL_ACTOR = { id: null, name: "Automatic renewal" } as const;
@@ -104,6 +105,9 @@ export async function issueMonthlyCode(staffId: string, date: Date = new Date())
 
   const [member] = await db.select().from(staff).where(eq(staff.id, staffId)).limit(1);
   if (!member) return { ok: false, reason: "not-found" };
+  // The owner and admins have no code. One they held from before is refused at
+  // checkout (quotePromo) and simply not renewed here.
+  if (!can(member.role, "staff.discount")) return { ok: false, reason: "not-eligible" };
 
   // Newest first: older rows can exist from before codes were renewed in place.
   const [current] = await db

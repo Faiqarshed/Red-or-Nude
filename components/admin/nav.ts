@@ -76,4 +76,12 @@ export const NAV: NavGroup[] = [
       { key: "auditLog", href: "/admin/audit", icon: "ScrollText", cap: "audit.view" },
     ],
   },
+  {
+    key: "perks",
+    items: [
+      // It used to be a banner above each home screen; she looks it up once a
+      // month, so it lives here. Only the roles that hold a code see it.
+      { key: "myCode", href: "/admin/my-code", icon: "Ticket", cap: "staff.discount" },
+    ],
+  },
 ];

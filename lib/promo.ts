@@ -11,7 +11,8 @@
 import "server-only";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { promoCodes } from "@/lib/db/schema";
+import { promoCodes, staff } from "@/lib/db/schema";
+import { can } from "@/lib/auth/rbac";
 
 /** The fields the rule needs. A subset of a promo_codes row, so tests can fake it. */
 export type PromoRule = {
@@ -107,6 +108,19 @@ export async function quotePromo(
     .where(eq(promoCodes.code, normalized))
     .limit(1);
   if (!row) return { ok: false, reason: "unknown" };
+
+  // A staff code works only while its owner's role holds one. Checked here, at
+  // the one place a code is priced, rather than by switching rows off: it also
+  // covers someone promoted to admin mid-month, whose code would otherwise run
+  // until the month ends.
+  if (row.staffId) {
+    const [owner] = await db
+      .select({ role: staff.role })
+      .from(staff)
+      .where(eq(staff.id, row.staffId))
+      .limit(1);
+    if (!can(owner?.role, "staff.discount")) return { ok: false, reason: "inactive" };
+  }
 
   const refusal = promoRefusal(row, totalHalalas, now);
   if (refusal) {

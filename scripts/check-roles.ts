@@ -15,7 +15,7 @@
 import "./_test-db";
 
 import assert from "node:assert";
-import { can, mustHaveBranch, scopedBranchId, ROLE_LABELS } from "@/lib/auth/rbac";
+import { can, drawerStatuses, mustHaveBranch, scopedBranchId, ROLE_LABELS } from "@/lib/auth/rbac";
 import { chooseTechnician, isToday, planAssignments, type PlannableBooking } from "@/lib/assign";
 import { monthWindow, STAFF_CODE_PERCENT } from "@/lib/staff-codes";
 import { NAV } from "@/components/admin/nav";
@@ -40,6 +40,22 @@ assert.ok(
   "the front desk cancels bookings, it does not delete them",
 );
 assert.ok(!can("technician", "bookings.delete"), "a technician cannot delete a booking");
+assert.ok(can("receptionist", "bookings.cancel"), "the front desk cancels bookings");
+assert.deepStrictEqual(
+  ROLES.filter((r) => can(r, "staff.discount")),
+  ["receptionist", "technician"],
+  "the owner and admins hold no staff discount code",
+);
+assert.ok(
+  !can("admin", "bookings.cancel") && !can("technician", "bookings.cancel"),
+  "cancelling is the owner's and the desk's",
+);
+// What the booking drawer draws from those: the desk gets check-in and cancel,
+// and never the owner's corrections (no-show, completing out of order).
+assert.deepStrictEqual(drawerStatuses("receptionist"), ["checked_in", "cancelled"]);
+assert.deepStrictEqual(drawerStatuses("admin"), ["checked_in"]);
+assert.deepStrictEqual(drawerStatuses("technician"), []);
+assert.ok(drawerStatuses("ceo").includes("no_show"), "the owner keeps every move");
 
 // Brief §3.3, both halves: admin runs the service list, and admin does not
 // touch a booking's timing.

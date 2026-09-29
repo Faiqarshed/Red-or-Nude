@@ -53,10 +53,18 @@ export async function setBookingStatus(
   // other status is a correction to the record — cancelling, marking someone
   // absent, completing out of order — and that is the owner's call.
   //
+  // Cancelling is the desk's too, on its own capability: it is who a customer
+  // rings to call an appointment off.
+  //
   // Guarded here rather than in the drawer that offers the buttons: this is
   // the single write path for a status, and a check in the one caller that
   // renders controls is a check the next caller forgets.
-  if (status !== "checked_in" && status !== "completed" && !can(actor.role, "bookings.status")) {
+  if (
+    status !== "checked_in" &&
+    status !== "completed" &&
+    !(status === "cancelled" && can(actor.role, "bookings.cancel")) &&
+    !can(actor.role, "bookings.status")
+  ) {
     return { ok: false, error: "forbidden" };
   }
   if (!STATUSES.includes(status)) return { ok: false, error: "invalid-status" };

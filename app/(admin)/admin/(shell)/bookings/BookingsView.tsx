@@ -71,6 +71,8 @@ export type BookingRow = {
   addons: Localized[];
   /** Coffee and treats — an errand, not part of the work. */
   treats: Treat[];
+  /** The removal before the service, when she booked one. */
+  removal?: Localized | null;
   totalSar: number;
   notes: string | null;
   customerName: string | null;
@@ -369,7 +371,7 @@ export default function BookingsView({
   bookings,
   noShowCount,
   canManage,
-  canSetStatus,
+  statuses,
   canReschedule,
   canDelete,
   checkinEarlyMin,
@@ -390,8 +392,8 @@ export default function BookingsView({
   noShowCount: number;
   /** The no-show backlog — everyone but a technician. */
   canManage: boolean;
-  /** `bookings.status`: rewriting a booking by hand. The owner only. */
-  canSetStatus: boolean;
+  /** The status buttons the drawer offers — drawerStatuses() in lib/auth/rbac.ts. */
+  statuses: BookingStatus[];
   /** `bookings.reschedule`. Separate from canManage — a technician has neither,
    *  but the two came apart so admin could hold one without the other. */
   canReschedule: boolean;
@@ -828,7 +830,7 @@ export default function BookingsView({
           selected?.groupId ? partnersElsewhere.filter((p) => p.groupId === selected.groupId) : []
         }
         branchName={branchName}
-        canSetStatus={canSetStatus}
+        statuses={statuses}
         canReschedule={canReschedule}
         canDelete={canDelete}
         checkinEarlyMin={checkinEarlyMin}

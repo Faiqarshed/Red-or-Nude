@@ -12,6 +12,7 @@ import {
   branches,
   customers,
   designs,
+  removalTypes,
   services,
   staff,
   stations,
@@ -66,6 +67,7 @@ export type FrontDeskRow = {
   addons: Localized[];
   /** Coffee and treats, kept apart so the desk can see what to bring. */
   treats: Treat[];
+  removal: Localized | null;
   /** What the service is *meant* to take, for the running timer to sit against. */
   durationMin: number | null;
   stationId: string | null;
@@ -155,6 +157,9 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
         startedAt: bookings.startedAt,
         finishedAt: bookings.finishedAt,
         serviceName: bookings.serviceName,
+        // The removal she has to do first. Named from the catalogue: bookings
+        // snapshot its price but not its name.
+        removal: removalTypes.name,
         durationMin: services.durationMin,
         stationId: bookings.stationId,
         stationLabel: stations.label,
@@ -181,6 +186,7 @@ export async function loadFrontDesk(branchId: string): Promise<FrontDeskData> {
       .leftJoin(staff, eq(staff.id, bookings.technicianId))
       .leftJoin(designs, eq(designs.id, bookings.designId))
       .leftJoin(services, eq(services.id, bookings.serviceId))
+      .leftJoin(removalTypes, eq(removalTypes.id, bookings.removalTypeId))
       .where(
         and(
           eq(bookings.branchId, branchId),

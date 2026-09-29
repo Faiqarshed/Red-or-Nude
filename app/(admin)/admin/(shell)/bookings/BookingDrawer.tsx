@@ -151,6 +151,7 @@ export function BookingFacts({ booking, now }: { booking: BookingRow; now: numbe
     // the desk it is said out loud along with the chair.
     [t.frontDesk.technician, booking.technicianName || t.frontDesk.unassignedShort],
     ...row(t.bookings.station, booking.stationLabel),
+    ...row(t.bookings.removal, booking.removal ? pick(booking.removal, lang) : null),
     [
       t.bookings.addons,
       booking.addons.length ? booking.addons.map((a) => pick(a, lang)).join("، ") : t.common.none,
@@ -264,7 +265,7 @@ export default function BookingDrawer({
   partners,
   partnersElsewhere = [],
   branchName = null,
-  canSetStatus,
+  statuses,
   canReschedule,
   canDelete,
   checkinEarlyMin,
@@ -295,11 +296,10 @@ export default function BookingDrawer({
   /** `bookings.delete` — CEO and admin. The action refuses anything paid for. */
   canDelete: boolean;
   /**
-   * `bookings.status` — the owner only. Not the same as being allowed to work
-   * the desk: check-in and closing a ticket have their own buttons on the front
-   * desk and their own capability. These are the corrections to the record.
+   * The statuses this role may press, from drawerStatuses() in lib/auth/rbac.ts.
+   * Every move for the owner; check-in and cancel for the desk.
    */
-  canSetStatus: boolean;
+  statuses: BookingStatus[];
   /** `bookings.reschedule` — the owner and the desk, never admin. */
   canReschedule: boolean;
   /** `checkin_early_min`, so the drawer can count down to the unlock. */
@@ -410,6 +410,7 @@ export default function BookingDrawer({
     });
   };
 
+  const moves = NEXT[booking.status].filter((s) => statuses.includes(s));
   const when = formatDateTime(new Date(booking.startsAt), lang);
   const partySize = booking.groupId ? partners.length + partnersElsewhere.length + 1 : 1;
 
@@ -435,8 +436,10 @@ export default function BookingDrawer({
               {t.bookings.del}
             </Button>
           ) : null}
+          {/* "Close", not "Cancel": the desk has a real Cancel button above,
+              and this one only shuts the panel. */}
           <Button variant="secondary" size="sm" onClick={onClose}>
-            {t.common.cancel}
+            {t.common.close}
           </Button>
         </>
       }
@@ -451,11 +454,11 @@ export default function BookingDrawer({
           <ReviewPanel review={booking.review ?? null} />
         ) : null}
 
-        {canSetStatus && NEXT[booking.status].length > 0 ? (
+        {moves.length > 0 ? (
           <div>
             <p className="mb-2 text-start text-xs font-medium text-ink/60">{t.bookings.changeStatus}</p>
             <div className="flex flex-wrap gap-2">
-              {NEXT[booking.status].map((status) => (
+              {moves.map((status) => (
                 <button
                   key={status}
                   disabled={pending}

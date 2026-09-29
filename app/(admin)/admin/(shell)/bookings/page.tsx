@@ -6,6 +6,7 @@ import {
   branches,
   customers,
   designs,
+  removalTypes,
   reviews,
   services,
   staff,
@@ -16,7 +17,7 @@ import { mediaUrl } from "@/lib/storage";
 import { getSettings } from "@/lib/settings";
 import { requirePage } from "@/lib/auth/guard";
 import { sweepNoShows } from "@/lib/bookings";
-import { can, scopedBranchId } from "@/lib/auth/rbac";
+import { can, drawerStatuses, scopedBranchId } from "@/lib/auth/rbac";
 import { halalasToSar } from "@/lib/money";
 import { localToUtc, utcToLocalDate } from "@/lib/availability";
 import { riyadhDayRange } from "@/lib/time";
@@ -46,7 +47,7 @@ export default async function BookingsPage({
     : utcToLocalDate(riyadhDayRange().start);
 
   if (!branchId) {
-    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} canManage={false} canSetStatus={false} canReschedule={false} canDelete={false} checkinEarlyMin={0} branchId="" />;
+    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} canManage={false} statuses={[]} canReschedule={false} canDelete={false} checkinEarlyMin={0} branchId="" />;
   }
 
   // Release chairs nobody checked in to, before reading the day back — otherwise
@@ -87,6 +88,9 @@ export default async function BookingsPage({
         source: bookings.source,
         stationId: bookings.stationId,
         serviceName: bookings.serviceName,
+        // The removal she has to do first. Named from the catalogue: bookings
+        // snapshot its price but not its name.
+        removal: removalTypes.name,
         totalHalalas: bookings.totalHalalas,
         notes: bookings.notes,
         customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
@@ -120,6 +124,7 @@ export default async function BookingsPage({
       .leftJoin(designs, eq(designs.id, bookings.designId))
       .leftJoin(services, eq(services.id, bookings.serviceId))
       .leftJoin(staff, eq(staff.id, bookings.technicianId))
+      .leftJoin(removalTypes, eq(removalTypes.id, bookings.removalTypeId))
       .where(
         and(eq(bookings.branchId, branchId), gte(bookings.startsAt, dayStart), lt(bookings.startsAt, dayEnd)),
       )
@@ -164,9 +169,9 @@ export default async function BookingsPage({
       branches={pinned ? [] : branchRows.map((b) => ({ id: b.id, name: b.name }))}
       stations={stationRows.map((s) => ({ id: s.id, label: s.label }))}
       canManage={user.role !== "technician"}
-      // Rewriting a status by hand is the owner's, and so is moving a booking.
-      // Both read the matrix rather than a role list, so they only move once.
-      canSetStatus={can(user.role, "bookings.status")}
+      // Which status buttons the drawer draws. Read from the matrix rather than
+      // a role list, so a capability only has to move once.
+      statuses={drawerStatuses(user.role)}
       // Read from the matrix rather than another role list: this is the one
       // capability the salon has moved, and it should only have to move once.
       canReschedule={can(user.role, "bookings.reschedule")}
@@ -190,6 +195,7 @@ export default async function BookingsPage({
           source: r.source,
           stationId: r.stationId,
           serviceName: r.serviceName,
+          removal: r.removal,
           ...(lines.get(r.id) ?? NO_LINES),
           totalSar: halalasToSar(r.totalHalalas),
           notes: r.notes,

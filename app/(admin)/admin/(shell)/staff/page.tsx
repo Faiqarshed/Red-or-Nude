@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { branches, promoCodes, staff, staffTimeOff } from "@/lib/db/schema";
 import { requirePage } from "@/lib/auth/guard";
 import { describeStaffCode, type StaffCodeView } from "@/lib/staff-codes";
+import { can } from "@/lib/auth/rbac";
 import StaffView from "./StaffView";
 
 export const dynamic = "force-dynamic";
@@ -60,7 +61,9 @@ export default async function StaffPage() {
         // The hash never leaves the server.
         hasPassword: s.passwordHash !== null,
         timeOff: timeOff.get(s.id) ?? [],
-        discount: codeFor.get(s.id) ?? null,
+        // The owner and admins hold no code; an old one of theirs is dead at
+        // checkout, so it is not shown as if it worked.
+        discount: can(s.role, "staff.discount") ? (codeFor.get(s.id) ?? null) : null,
       }))}
     />
   );

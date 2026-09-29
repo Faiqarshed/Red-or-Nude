@@ -27,6 +27,7 @@ const SHAPES: [string, () => React.ReactElement][] = [
   ["/admin/performance", Performance],
   ["/admin/reviews", Reviews],
   ["/admin/media", Gallery],
+  ["/admin/my-code", MyCode],
 ];
 
 /** `path` is the page being opened, when Shell knows it before the address changes. */
@@ -160,7 +161,7 @@ function List() {
   );
 }
 
-/** DashboardView: the code banner, two big figures, three small ones, two columns of cards. */
+/** DashboardView: two big figures, three small ones, two columns of cards. */
 function Dashboard() {
   const rows = (
     <Box>
@@ -181,7 +182,6 @@ function Dashboard() {
   );
   return (
     <>
-      <Box className="mb-6 h-[104px]" />
       <Header />
       <div className="grid gap-4 lg:grid-cols-2">
         {times(2).map((i) => (
@@ -492,6 +492,44 @@ function Gallery() {
         {times(10).map((i) => (
           <Bone key={i} className="aspect-square rounded-2xl" />
         ))}
+      </div>
+    </>
+  );
+}
+
+/** Staff discount: the code card with its two links, and the four steps beside it. */
+function MyCode() {
+  return (
+    <>
+      <Header />
+      <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
+        <Box className="p-5">
+          <div className="flex items-center justify-between">
+            <Bone className="h-3.5 w-24" />
+            <Bone className="h-5 w-28 rounded-full" />
+          </div>
+          <Bone className="mt-5 h-8 w-52" />
+          <Bone className="mt-4 h-4 w-40" />
+          <Bone className="mt-4 h-14 w-full rounded-xl" />
+          <div className="mt-5 flex gap-2">
+            <div className="h-10 w-36 animate-pulse rounded-xl bg-red/15" />
+            <Control className="h-10 w-32" />
+          </div>
+        </Box>
+        <Box className="overflow-hidden">
+          <div className="border-b border-black/[0.06] px-5 py-4">
+            <Bone className="h-4 w-28" />
+          </div>
+          {times(4).map((i) => (
+            <div key={i} className="flex gap-4 border-b border-black/[0.05] px-5 py-4 last:border-0">
+              <Bone className="h-7 w-7 shrink-0 rounded-full" />
+              <div className="flex-1">
+                <Bone className="h-4 w-40" />
+                <Bone className="mt-2 h-3.5 w-3/4" />
+              </div>
+            </div>
+          ))}
+        </Box>
       </div>
     </>
   );

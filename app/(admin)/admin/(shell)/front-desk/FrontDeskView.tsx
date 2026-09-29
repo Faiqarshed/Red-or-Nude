@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, Users } from "lucide-react";
 import { Card, EmptyState, PageHeader, Badge, BranchFilter, Button, Thumb } from "@/components/admin/ui";
-import { STATUS_TONE } from "../bookings/BookingsView";
+import { STATUS_TONE, type BookingStatus } from "../bookings/BookingsView";
 import BookingDrawer, { BookingFacts } from "../bookings/BookingDrawer";
 import { serviceClock } from "@/lib/booking-clock";
 import { useAdminI18n } from "@/lib/admin/i18n";
@@ -101,7 +101,7 @@ export default function FrontDeskView({
   data,
   branchId,
   branchOptions = [],
-  canSetStatus,
+  statuses,
   canReschedule,
 }: {
   data: FrontDeskData;
@@ -109,7 +109,7 @@ export default function FrontDeskView({
   /** Empty for anyone pinned. A desk is one place, so there is no "all". */
   branchOptions?: { id: string; name: Localized }[];
   /** What the drawer may offer beyond reading. */
-  canSetStatus: boolean;
+  statuses: BookingStatus[];
   canReschedule: boolean;
 }) {
   const { t, lang } = useAdminI18n();
@@ -666,7 +666,7 @@ export default function FrontDeskView({
           open?.groupId ? data.partnersElsewhere.filter((p) => p.groupId === open.groupId) : []
         }
         branchName={data.branchName}
-        canSetStatus={canSetStatus}
+        statuses={statuses}
         canReschedule={canReschedule}
         // Never from the desk, whoever is signed in. Deleting is a records job
         // done on the bookings screen with the whole day in front of you, not a
