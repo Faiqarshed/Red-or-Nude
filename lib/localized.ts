@@ -13,6 +13,9 @@ export type { Localized };
  */
 export const LANG_COOKIE = "ron-lang";
 
+/** The panel's own language cookie, read by the admin root layout. Same reason to live here. */
+export const ADMIN_LANG_COOKIE = "ron-admin-lang";
+
 /**
  * Read the active language out of a localized column. Falls back to the other
  * language rather than rendering an empty string — a missing translation should

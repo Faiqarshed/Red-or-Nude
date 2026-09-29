@@ -4,20 +4,14 @@
 // (lib/i18n.tsx) — the two never mount together, since /admin has its own root
 // layout, so they can't fight over document.documentElement.dir.
 //
-// Same rule as the site: localStorage is written only in setLang, never from an
-// effect, so the mount-time read can't be clobbered by the initial "ar".
+// The language is a cookie the root layout reads, so the server renders the
+// panel in it from the first byte, the way the site does (lib/i18n.tsx). It
+// used to live in localStorage, which the server cannot see: every refresh
+// painted Arabic first and flipped to English once the page's code ran.
 
-import { createContext, useContext, useEffect, useLayoutEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
+import { ADMIN_LANG_COOKIE } from "@/lib/localized";
 import { adminStrings, type AdminLang, type AdminStrings } from "./strings";
-
-// The saved language has to be applied before the browser paints, or an English
-// user watches the whole panel render in Arabic and then swap. It cannot be read
-// during the initial render either — the server has no localStorage, so doing so
-// would render one language on the server and another on the client and fail
-// hydration. A layout effect is the one slot that is after hydration and before
-// paint. On the server there is no paint to be before, so it falls back to
-// useEffect purely to avoid React's "does nothing on the server" warning.
-const useBeforePaint = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 type Ctx = {
   lang: AdminLang;
@@ -28,20 +22,36 @@ type Ctx = {
 };
 
 const AdminLangContext = createContext<Ctx | null>(null);
-const STORAGE_KEY = "ron-admin-lang";
 
-export function AdminLangProvider({ children }: { children: React.ReactNode }) {
-  const [lang, setLangState] = useState<AdminLang>("ar");
+function remember(l: AdminLang) {
+  document.cookie = `${ADMIN_LANG_COOKIE}=${l}; path=/; max-age=31536000; samesite=lax`;
+}
 
-  useBeforePaint(() => {
-    let saved: string | null = null;
+export function AdminLangProvider({
+  children,
+  initialLang,
+}: {
+  children: React.ReactNode;
+  /** From the cookie, via the root layout: the language the server rendered. */
+  initialLang: AdminLang;
+}) {
+  const [lang, setLangState] = useState<AdminLang>(initialLang);
+
+  // A choice made before the cookie existed lives only in localStorage (the
+  // same key). Carried over once, into the cookie, so the next refresh
+  // renders it on the server too.
+  useEffect(() => {
     try {
-      saved = localStorage.getItem(STORAGE_KEY);
+      const old = localStorage.getItem(ADMIN_LANG_COOKIE);
+      localStorage.removeItem(ADMIN_LANG_COOKIE);
+      if ((old === "en" || old === "ar") && old !== initialLang) {
+        remember(old);
+        setLangState(old);
+      }
     } catch {
-      /* private mode, blocked site data — Arabic is the right default anyway */
+      /* storage blocked — the cookie is all there is */
     }
-    if (saved === "en" || saved === "ar") setLangState(saved);
-  }, []);
+  }, [initialLang]);
 
   useEffect(() => {
     const el = document.documentElement;
@@ -51,11 +61,7 @@ export function AdminLangProvider({ children }: { children: React.ReactNode }) {
 
   const setLang = (l: AdminLang) => {
     setLangState(l);
-    try {
-      localStorage.setItem(STORAGE_KEY, l);
-    } catch {
-      /* ignore */
-    }
+    remember(l);
   };
 
   return (
