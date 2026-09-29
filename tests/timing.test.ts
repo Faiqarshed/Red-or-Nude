@@ -503,7 +503,8 @@ describe("points stop counting the moment their booking is past saving", () => {
   it("drops them at once for a cancellation, whatever the clock says", () => {
     const madeAt = new Date(FUTURE);
     expect(spendableBalance([row(madeAt, "cancelled")], 15, madeAt)).toBe(0);
-    expect(spendableBalance([row(madeAt, "no_show")], 15, madeAt)).toBe(0);
+    // A no-show was paid for: its points stand (CLAUDE.md).
+    expect(spendableBalance([row(madeAt, "no_show")], 15, madeAt)).toBe(100);
     // Paid for: no clock applies at all.
     expect(spendableBalance([row(madeAt, "confirmed")], 15, new Date(Number(madeAt) + 365 * DAY))).toBe(100);
   });

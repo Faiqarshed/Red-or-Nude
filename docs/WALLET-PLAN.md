@@ -57,7 +57,7 @@ Built around, not decided. Each is a refusal (`WalletHeld`, "held") or an `it.to
 | Salon cancels (reason required) | **+** same amount. Inside 3 h: see open question 1 |
 | She cancels within 3 h | Not allowed (already enforced) |
 | A cancelled booking with a cancel credit set back to confirmed | Refused. The desk makes a new booking |
-| No-show (`resolveNoShow`, marked no-show) | Nothing. Spent points are not returned either |
+| No-show (`resolveNoShow`, marked no-show) | Nothing. Her points on it stand: what it earned counts, what it spent stays spent |
 | Gift card bought for an email that has an account | **+** full card value on delivery. The card becomes `redeemed` |
 | Gift card code + its recipient email entered at checkout | **+** the card's whole balance, tagged to the recipient email, then spent on the bill. Anything left stays in that email's wallet. A card sold before launch needs the code alone, and its leftover goes to the email she books with |
 | The booker drops guests from a group (2 or more stay). *Assumption, open question 0* | **+** each dropped guest's discounted price |
@@ -163,7 +163,7 @@ Examples:
   - **built (step 2c):** after launch, `creditCancelled(..., "cancel-salon", reason)` runs in that transaction;
   - **built (step 2c):** leaving `cancelled` is refused while the booking has a cancel credit;
   - inside `cancel_cutoff_hours`: open question 1. The cancel itself stays allowed, as it is today. Whether it credits her is held until the client answers, and launch waits on it.
-- **No-show (built, step 2b):** `isDead` (`lib/rewards.ts`) keeps a spend on a `no_show` or no-show-resolved booking, so spent points stay spent. What a no-show earned still doesn't count: the rule speaks of spent points only.
+- **No-show (built, step 2b):** `isDead` (`lib/rewards.ts`) no longer voids a `no_show` or no-show-resolved booking. She paid for it, so what it earned counts and what it spent stays spent (the owner, 2026-09-29).
 - **Remove** `refundBookings` and the `payments.refund` permission (`lib/auth/rbac.ts:42,70`) at launch, once `wallet_launched_at` is set.
 
 ### Walk-ins retired
@@ -222,7 +222,7 @@ One commit per step, docs in the same commit. Nothing reaches customers until st
 ## Verification
 **Tests** (`tests/wallet.test.ts`, fake driver as in `tests/streampay.test.ts`):
 - cancel more than 3 h before → credit = card + wallet spent; a second cancel call → no second credit;
-- salon cancel → credit, reason stored; without a reason → refused; no-show → nothing, and points stay spent;
+- salon cancel → credit, reason stored; without a reason → refused; no-show → nothing from the wallet, and its points stand;
 - salon cancel with a stale status (someone changed it meanwhile) → refused, nothing written;
 - a crash after the status write in a salon cancel → status rolled back, no credit (all or none);
 - cancelled with credit → set back to confirmed is refused;

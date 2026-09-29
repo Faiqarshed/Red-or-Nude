@@ -730,26 +730,26 @@ const mutations = [
       ),
   },
 
-  // ---- a no-show gets nothing back ----------------------------------------
+  // ---- a no-show keeps its points ----------------------------------------
   {
-    name: "no-show: hand her spent points back",
+    name: "no-show: void her points as if she had cancelled",
+    expect: "tests/no-show-points.test.ts",
+    apply: () => mutate(REWARDS, '  if (status === "no_show" || row.noShow) return false;\n', ""),
+  },
+  {
+    name: "subtle: void what a no-show earned, keeping only what it spent",
     expect: "tests/no-show-points.test.ts",
     apply: () =>
       mutate(
         REWARDS,
-        '  if (row.deltaPoints < 0 && (status === "no_show" || row.noShow)) return false;\n',
-        "",
+        '  if (status === "no_show" || row.noShow) return false;',
+        '  if (row.deltaPoints < 0 && (status === "no_show" || row.noShow)) return false;',
       ),
   },
   {
-    name: "subtle: keep a no-show's earned points as well as her spent ones",
+    name: "subtle: forget the sweep's no-show once the desk closes it",
     expect: "tests/no-show-points.test.ts",
-    apply: () =>
-      mutate(
-        REWARDS,
-        '  if (row.deltaPoints < 0 && (status === "no_show" || row.noShow)) return false;',
-        '  if (status === "no_show" || row.noShow) return false;',
-      ),
+    apply: () => mutate(REWARDS, '  if (status === "no_show" || row.noShow) return false;', '  if (status === "no_show") return false;'),
   },
 
   // ---- cancelling into the wallet -------------------------------------------

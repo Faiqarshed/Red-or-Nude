@@ -193,11 +193,11 @@ assert.strictEqual(
   "one minute past the window it is not",
 );
 
-// 5. Nobody turned up to a paid booking → its points are revoked.
+// 5. Nobody turned up to a paid booking → she paid, so its points stay hers.
 assert.strictEqual(
   spendableBalance([earned(300, "no_show")], HOLD_MIN, NOW),
-  0,
-  "a no-show earns nothing",
+  300,
+  "a no-show keeps what it earned",
 );
 
 // 6. A confirmed booking cancelled later → the points it earned go with it.

@@ -194,8 +194,8 @@ export type LedgerRow = {
  *
  * Two ways that happens, and both matter:
  *
- *   • it was cancelled or nobody turned up — a customer cancellation, or a hold
- *     the sweep already collected;
+ *   • it was cancelled — a customer cancellation, or a hold the sweep already
+ *     collected;
  *   • it is *still* pending well past the window it had to be paid for — a
  *     declined payment the customer walked away from, or a gateway that threw.
  *
@@ -214,14 +214,15 @@ export type LedgerRow = {
  * may be on her bank's page, and the booking can still confirm. Releasing the
  * points then would let her spend them twice.
  *
- * And a no-show gets nothing back (CLAUDE.md): points she spent on it stay
- * spent. What a no-show earned still does not count.
+ * A no-show is not dead at all. She paid for it, so what she earned on it
+ * counts and what she spent on it stays spent (CLAUDE.md). That covers the
+ * desk's `no_show` and the sweep's flag closed as `cancelled` (`noShow`).
  */
 function isDead(row: LedgerRow, holdMin: number, now: Date): boolean {
   const { bookingStatus: status, bookingCreatedAt: createdAt } = row;
   if (status === null) return false; // not attached to a booking at all
-  if (row.deltaPoints < 0 && (status === "no_show" || row.noShow)) return false;
-  if (status === "cancelled" || status === "no_show") return true;
+  if (status === "no_show" || row.noShow) return false;
+  if (status === "cancelled") return true;
   if (status !== "pending") return false;
   if (row.checkoutOpen) return false;
   // No created_at shouldn't happen. Treated as dead rather than alive: the
