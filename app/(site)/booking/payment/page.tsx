@@ -909,13 +909,16 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
                   </span>
                 </div>
 
-                <div className="space-y-1.5">
+                {/* A grid of small choices, not a row per rung: a big balance
+                    has twenty rungs, and a list of twenty ran a screen long.
+                    Still radios underneath, for the keyboard and screen readers. */}
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                   {affordable.map((points) => {
                     const picked = redeemPoints === points;
                     return (
                       <label
                         key={points}
-                        className={`flex cursor-pointer items-center gap-2.5 rounded-[12px] border px-4 py-3 text-[13px] ${
+                        className={`cursor-pointer rounded-[12px] border px-2 py-2.5 text-center transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-red/30 ${
                           picked
                             ? "border-red/40 bg-red/[0.04] text-red"
                             : "border-black/[0.08] text-ink hover:border-red/30"
@@ -926,20 +929,23 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
                           name="reward"
                           checked={picked}
                           onChange={() => void pickReward(points)}
-                          className="accent-red"
+                          className="sr-only"
                         />
-                        <span className="font-semibold">
-                          {a.rewardRow
-                            .replace("{points}", String(points))
-                            .replace("{sar}", String((points * rules.pointHalalas) / 100))}
+                        <span className="block text-[13px] font-bold">
+                          {a.rewardOff.replace("{sar}", String((points * rules.pointHalalas) / 100))}
+                        </span>
+                        <span className={`block text-[11px] ${picked ? "text-red/70" : "text-ink/45"}`}>
+                          {a.rewardPoints.replace("{points}", String(points))}
                         </span>
                       </label>
                     );
                   })}
+                </div>
 
+                <div className="mt-2">
                   {/* Opt out explicitly. Without this row the only way to
                       un-pick a radio is to reload the page. */}
-                  <label className="flex cursor-pointer items-center gap-2.5 px-4 py-1.5 text-[12px] text-ink/45">
+                  <label className="flex cursor-pointer items-center gap-2.5 px-1 py-1.5 text-[12px] text-ink/45">
                     <input
                       type="radio"
                       name="reward"
