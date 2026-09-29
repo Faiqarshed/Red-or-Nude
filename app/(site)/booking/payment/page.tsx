@@ -26,7 +26,6 @@ import { pick } from "@/lib/localized";
 import {
   pointsEarned,
   redeemable,
-  toNextMilestone,
   type LoyaltyRules,
 } from "@/lib/rewards";
 
@@ -788,72 +787,24 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
             </>
           )}
 
-          {/* What this booking EARNS, as against what it can spend.
-              
-              The gamified half of the scheme, and it lives here rather than on
-              /account because accrual is per bill: "add 24 riyals and you earn
-              50 points" is a fact about the basket in front of her, and this is
-              the only screen where she can act on it. The account page shows a
-              balance, because that is all a balance can honestly show.
-              
-              Shown to guests too — it is the reason to make an account, and the
-              one place the offer is worth stating is where the money is. */}
-          {rules !== null && payableTotal > 0 && (() => {
-            const paidHalalas = Math.round(payableTotal * 100);
-            const earned = pointsEarned(paidHalalas, rules);
-            const gapHalalas = toNextMilestone(paidHalalas, rules);
-            const gapSar = gapHalalas / 100;
-            const stepValueSar = (rules.stepPoints * rules.pointHalalas) / 100;
-            const earnedValueSar = (earned * rules.pointHalalas) / 100;
-            // How far through the current span she is, as a bar. Unlike a tier
-            // track this only ever measures the bill on screen, so it cannot
-            // slide backwards when she spends the points it earned her.
-            //
-            // The span is the FIRST milestone until one is reached and a step
-            // after that — 199 then 200 — because the first award is nearer
-            // than the ones that follow, and a bar measured against 200
-            // throughout would understate how close a new customer is.
-            const spanHalalas = (earned === 0 ? rules.firstSar : rules.stepSar) * 100;
-            const pct = Math.max(
-              2,
-              Math.min(100, Math.round(((spanHalalas - gapHalalas) / spanHalalas) * 100)),
-            );
+          {/* What this booking earns, said as money: "this gives you 10 SAR
+              off your next visit". A progress bar and "add 89 SAR more" read as
+              a push to spend and said nothing a customer could use, so they
+              went (the owner, 2026-09-29). A bill that earns nothing shows
+              nothing.
 
+              Shown to guests too, with the way to sign in and use it: the
+              points go to the account with the email she books with. */}
+          {rules !== null && payableTotal > 0 && (() => {
+            const earned = pointsEarned(Math.round(payableTotal * 100), rules);
+            if (earned === 0) return null;
             return (
               <section className="rounded-[20px] bg-white p-5 text-start ring-1 ring-black/[0.04]">
-                <span className="font-display text-base font-extrabold text-ink">{a.earnTitle}</span>
-
-                <div className="relative mt-3.5 h-2.5 rounded-full bg-black/[0.07]">
-                  <div
-                    className="absolute inset-y-0 rounded-full bg-red-grad transition-[width] duration-700 ease-out"
-                    style={{ insetInlineStart: 0, width: `${pct}%` }}
-                  />
-                </div>
-
-                <p className="mt-2.5 text-[13px] font-semibold text-ink">
-                  {earned > 0
-                    ? a.earnReached
-                        .replace("{points}", String(earned))
-                        .replace("{value}", String(earnedValueSar))
-                    : a.earnAlmost
-                        .replace("{sar}", String(gapSar))
-                        .replace("{points}", String(rules.stepPoints))
-                        .replace("{value}", String(stepValueSar))}
+                <p className="text-[14px] font-semibold text-ink">
+                  {a.earnGives
+                    .replace("{value}", String((earned * rules.pointHalalas) / 100))
+                    .replace("{points}", String(earned))}
                 </p>
-
-                {/* Already over a milestone: name the next one too, so a bill
-                    sitting just under the following threshold still says so. */}
-                {earned > 0 && (
-                  <p className="mt-1 text-[12px] text-ink/55">
-                    {a.earnMore
-                      .replace("{sar}", String(gapSar))
-                      .replace("{points}", String(rules.stepPoints))}
-                  </p>
-                )}
-
-                {/* Currency, not status. Said plainly because the bar above is
-                    the shape people read as a tier. */}
-                <p className="mt-2.5 text-[11px] text-ink/45">{a.earnNote}</p>
 
                 {/* A guest earns on this booking but cannot spend: the balance
                     lives on her account. Back here after signing in — the
