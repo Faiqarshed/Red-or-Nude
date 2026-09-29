@@ -9,6 +9,7 @@ import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookingAddons, bookings, promoCodes, removalTypes } from "@/lib/db/schema";
 import type { Localized } from "@/lib/localized";
+import { discountParts } from "@/lib/money";
 import type { Discount, Line } from "./index";
 
 /** "مانيكير | Manicure" — the invoice is read in both languages. */
@@ -75,9 +76,9 @@ export async function bookingLines(
     }
   }
 
-  const promo = members.reduce((s, m) => s + m.promoDiscountHalalas, 0);
-  const points = members.reduce((s, m) => s + m.pointsDiscountHalalas, 0);
-  const group = members.reduce((s, m) => s + m.discountHalalas, 0) - promo - points;
+  const parts = members.map(discountParts);
+  const total = (k: keyof (typeof parts)[number]) => parts.reduce((s, p) => s + p[k], 0);
+  const promo = total("promo");
 
   let promoLabel = "Promo code";
   const promoId = members.find((m) => m.promoCodeId)?.promoCodeId;
@@ -87,9 +88,10 @@ export async function bookingLines(
   }
 
   const discounts: Discount[] = [
-    { label: "Group discount", halalas: group },
+    { label: "Group discount", halalas: total("group") },
     { label: promoLabel, halalas: promo },
-    { label: "Loyalty points", halalas: points },
+    { label: "Loyalty points", halalas: total("points") },
+    { label: "Wallet credit", halalas: total("wallet") },
   ].filter((d) => d.halalas > 0);
 
   return { lines, discounts };

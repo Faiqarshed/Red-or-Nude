@@ -46,6 +46,7 @@ const DECIDE = "app/(admin)/admin/(shell)/wallet-decisions/actions.ts";
 const RBAC = "lib/auth/rbac.ts";
 const PURCHASE = "lib/payments/purchase.ts";
 const LOYALTY = "lib/loyalty.ts";
+const MONEY = "lib/money.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -866,11 +867,23 @@ const mutations = [
         "                 where a.id = ${customerId}))",
       ),
   },
+
+  // ---- each discount named for what it was -----------------------------------
+  {
+    name: "discounts: count points spent as a group discount again",
+    expect: "tests/invoice-email.test.ts",
+    apply: () =>
+      mutate(
+        MONEY,
+        "  return { group: b.discountHalalas - promo - points - wallet, promo, points, wallet };",
+        "  return { group: b.discountHalalas - promo - wallet, promo, points: 0, wallet };",
+      ),
+  },
 ];
 
 const touched = [
   CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, LINES, TREAT,
-  DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS, DECIDE, RBAC, PURCHASE, LOYALTY,
+  DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS, DECIDE, RBAC, PURCHASE, LOYALTY, MONEY,
 ];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));

@@ -25,6 +25,7 @@ import {
   stations,
   type Localized,
 } from "@/lib/db/schema";
+import { discountParts } from "@/lib/money";
 import { getSettings } from "@/lib/settings";
 import type { PaymentMethod } from "@/lib/payments";
 import { membershipsLeft, packsSpentOn, type MembershipLeft } from "@/lib/packs";
@@ -45,9 +46,13 @@ export type InvoiceGuest = {
    */
   technicianName: string | null;
   lines: InvoiceLine[];
+  /** Each discount on her line, named for what it was (discountParts). */
+  discounts: { kind: InvoiceDiscount; halalas: number }[];
   discountHalalas: number;
   totalHalalas: number;
 };
+
+export type InvoiceDiscount = "group" | "promo" | "points" | "wallet";
 
 export type InvoiceData = {
   seller: {
@@ -67,9 +72,9 @@ export type InvoiceData = {
   providerRef: string | null;
   guests: InvoiceGuest[];
   /**
-   * The discount code applied to this bill, if any. Names the discount line —
+   * The discount code applied to this bill, if any. Names the promo line —
    * "Discount (EID25)" rather than a deduction the customer has to take on
-   * trust. Null when the only reduction was the group discount.
+   * trust.
    */
   promoCode: string | null;
   discountHalalas: number;
@@ -180,6 +185,9 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
       stationLabel: b.stationId ? (labelOf.get(b.stationId) ?? null) : null,
       technicianName: b.technicianId ? (techOf.get(b.technicianId) ?? null) : null,
       lines,
+      discounts: (Object.entries(discountParts(b)) as [InvoiceDiscount, number][])
+        .filter(([, halalas]) => halalas > 0)
+        .map(([kind, halalas]) => ({ kind, halalas })),
       discountHalalas: b.discountHalalas,
       totalHalalas: b.totalHalalas,
     };

@@ -15,7 +15,7 @@ import { formatSAR } from "@/lib/money";
 import { formatDateTime } from "@/lib/time";
 import { membershipHtml, membershipText } from "@/lib/membership-email";
 import { taxInvoiceHtml, taxInvoiceText } from "@/lib/email/shell";
-import type { InvoiceData } from "./data";
+import type { InvoiceData, InvoiceDiscount } from "./data";
 
 const RED = "#b80007";
 const INK = "#1a1a1a";
@@ -40,7 +40,7 @@ const T = {
     item: "البند",
     amount: "المبلغ (ر.س)",
     lineTotal: "الإجمالي",
-    discount: "خصم الحجز الثنائي",
+    discounts: { group: "خصم الحجز الجماعي", promo: "كود خصم", points: "نقاط الولاء", wallet: "رصيد المحفظة" },
     promoDiscount: (code: string) => `خصم (${code})`,
     total: "الإجمالي المدفوع",
     vatNote: "الأسعار شاملة ضريبة القيمة المضافة.",
@@ -64,7 +64,7 @@ const T = {
     item: "Item",
     amount: "Amount (SAR)",
     lineTotal: "Total",
-    discount: "Group booking discount",
+    discounts: { group: "Group discount", promo: "Discount code", points: "Loyalty points", wallet: "Wallet credit" },
     promoDiscount: (code: string) => `Discount (${code})`,
     total: "Total paid",
     vatNote: "All prices include VAT.",
@@ -100,11 +100,10 @@ export function renderInvoiceEmail(data: InvoiceData, pdfAttached = false): Rend
   const multi = data.guests.length > 1;
   const code = data.guests[0]?.code ?? "";
 
-  // One line for everything taken off, named after the code when there was one.
-  // A guest on a group booking with a promo has both inside this figure; the
-  // booking row stores them added together, so the invoice reports them that way
-  // rather than inventing a split it cannot substantiate.
-  const discountLabel = data.promoCode ? t.promoDiscount(data.promoCode) : t.discount;
+  // One line per discount, named for what it was: the row keeps the promo,
+  // points and wallet shares apart, and the group share is the rest.
+  const discountLabel = (kind: InvoiceDiscount) =>
+    kind === "promo" && data.promoCode ? t.promoDiscount(data.promoCode) : t.discounts[kind];
 
   // ---- HTML ---------------------------------------------------------------
 
@@ -126,14 +125,15 @@ export function renderInvoiceEmail(data: InvoiceData, pdfAttached = false): Rend
         )
         .join("");
 
-      const discount =
-        g.discountHalalas > 0
-          ? `
+      const discount = g.discounts
+        .map(
+          (d) => `
         <tr>
-          <td style="padding:9px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:14px;color:${RED};text-align:${start};">${esc(discountLabel)}</td>
-          <td style="padding:9px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:14px;font-weight:600;color:${RED};text-align:${end};" dir="ltr">−${esc(money(g.discountHalalas))}</td>
-        </tr>`
-          : "";
+          <td style="padding:9px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:14px;color:${RED};text-align:${start};">${esc(discountLabel(d.kind))}</td>
+          <td style="padding:9px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:14px;font-weight:600;color:${RED};text-align:${end};" dir="ltr">−${esc(money(d.halalas))}</td>
+        </tr>`,
+        )
+        .join("");
 
       const heading = multi
         ? `<p style="margin:0 0 10px;font-size:14px;font-weight:700;color:${RED};text-align:${start};">${esc(t.guest(i + 1))}</p>`
@@ -265,7 +265,7 @@ ${
     if (g.technicianName) textLines.push(`${t.technician}: ${g.technicianName}`);
     textLines.push(`${t.reference}: ${g.code}`);
     for (const l of g.lines) textLines.push(`  ${pick(l.label, lang)}  ${money(l.amountHalalas)}`);
-    if (g.discountHalalas > 0) textLines.push(`  ${discountLabel}  −${money(g.discountHalalas)}`);
+    for (const d of g.discounts) textLines.push(`  ${discountLabel(d.kind)}  −${money(d.halalas)}`);
     textLines.push(`  ${t.lineTotal}: ${money(g.totalHalalas)}`, "");
   }
 

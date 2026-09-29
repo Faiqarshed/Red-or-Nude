@@ -83,3 +83,21 @@ export function splitGroupPrice(grosses: number[], percent: number): PriceSplit[
 
   return grosses.map((g, i) => ({ discountHalalas: discounts[i], totalHalalas: g - discounts[i] }));
 }
+
+/**
+ * What was taken off one booking row, by what took it. The row keeps the promo,
+ * points and wallet shares on their own; the group share is whatever else is
+ * in `discountHalalas`. One split, for the StreamPay coupons and the booking
+ * email alike, so the two never name a discount differently.
+ */
+export function discountParts(b: {
+  discountHalalas: number;
+  promoDiscountHalalas: number;
+  pointsDiscountHalalas: number;
+  walletDiscountHalalas: number;
+}): { group: number; promo: number; points: number; wallet: number } {
+  const promo = b.promoDiscountHalalas;
+  const points = b.pointsDiscountHalalas;
+  const wallet = b.walletDiscountHalalas;
+  return { group: b.discountHalalas - promo - points - wallet, promo, points, wallet };
+}

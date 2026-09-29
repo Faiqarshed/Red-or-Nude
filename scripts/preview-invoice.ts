@@ -38,6 +38,7 @@ function sample(lang: "ar" | "en"): InvoiceData {
               { label: { ar: "تصميم موسمي", en: "Seasonal design" }, amountHalalas: 5000 },
             ]
           : [{ label: { ar: "مانيكير", en: "Manicure" }, amountHalalas: 18000 }],
+      discounts: s.discountHalalas > 0 ? [{ kind: "group" as const, halalas: s.discountHalalas }] : [],
       discountHalalas: s.discountHalalas,
       totalHalalas: s.totalHalalas,
     };
