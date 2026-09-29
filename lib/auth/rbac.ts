@@ -4,7 +4,7 @@
 // matters is the one in the Server Action / route handler: see requireCan() in
 // lib/auth/guard.ts. Never rely on a hidden nav item as an access control.
 
-import type { StaffRole } from "@/lib/db/schema";
+import type { bookingStatus, StaffRole } from "@/lib/db/schema";
 
 export type Capability =
   | "dashboard.view"
@@ -25,6 +25,10 @@ export type Capability =
   // itself refuses anything carrying money — see deleteBooking — so this grants
   // the power to remove a mistake, not to rewrite the books.
   | "bookings.delete"
+  // Cancelling without the rest of bookings.status. The desk is who a customer
+  // rings to call off an appointment, and who finds out a technician is off
+  // sick; sending every one of those to the owner was a queue, not a safeguard.
+  | "bookings.cancel"
   | "bookings.own" // technicians: their own bookings, status changes only
   | "availability.manage"
   | "catalog.manage"
@@ -35,6 +39,9 @@ export type Capability =
   | "giftcards.adjust"
   | "staff.manage"
   | "staff.performance" // per-technician timings behind brief §3.2
+  // Holding a monthly staff discount code (brief §3.3). The floor and the desk
+  // only: the owner and admins do not get one (salon's call, Sep 2026).
+  | "staff.discount"
   | "branches.manage"
   | "content.manage"
   | "marketing.manage"
@@ -52,6 +59,7 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "bookings.checkin",
     "bookings.reschedule",
     "bookings.status",
+    "bookings.cancel",
     "bookings.delete",
     "bookings.own",
     "availability.manage",
@@ -125,11 +133,13 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     // 2026-09-01 alongside admin's and given straight back: the alternative at
     // the counter is cancel-and-rebook, which loses the ticket number.
     "bookings.reschedule",
+    "bookings.cancel",
     "bookings.own",
     "customers.manage",
     "giftcards.issue",
+    "staff.discount",
   ],
-  technician: ["bookings.own"],
+  technician: ["bookings.own", "staff.discount"],
 };
 
 export function can(role: StaffRole | undefined | null, cap: Capability): boolean {
@@ -139,6 +149,29 @@ export function can(role: StaffRole | undefined | null, cap: Capability): boolea
 
 export function canAny(role: StaffRole | undefined | null, caps: Capability[]): boolean {
   return caps.some((c) => can(role, c));
+}
+
+type BookingStatus = (typeof bookingStatus.enumValues)[number];
+
+/**
+ * The status buttons the booking drawer offers this role.
+ *
+ * `bookings.status` is every move, corrections included. Without it the desk
+ * gets its two: checking her in, and cancelling. Closing a ticket stays on the
+ * front desk's own button, and no-show stays with the owner — it is what the
+ * no-show rule counts against the customer.
+ *
+ * setBookingStatus enforces the same capabilities; this is only which buttons
+ * to draw.
+ */
+export function drawerStatuses(role: StaffRole | undefined | null): BookingStatus[] {
+  if (can(role, "bookings.status")) {
+    return ["pending", "confirmed", "checked_in", "in_progress", "completed", "cancelled", "no_show"];
+  }
+  const out: BookingStatus[] = [];
+  if (can(role, "bookings.checkin")) out.push("checked_in");
+  if (can(role, "bookings.cancel")) out.push("cancelled");
+  return out;
 }
 
 /**

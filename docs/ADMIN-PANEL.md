@@ -369,7 +369,8 @@ calling it — granting the capability to admin changed nothing visible until th
 button was built, which is the sort of gap a capability matrix hides well.
 
 Note it asks the availability endpoint with `walkIn=1`: staff are not held to the
-customer's booking lead time, the same exemption the walk-in drawer takes.
+customer's booking lead time, the same exemption the walk-in drawer took before walk-ins
+were retired.
 
 Not yet built here: drag-to-reschedule on the calendar itself (the dialog covers
 the same ground, one booking at a time), and the ⌘K "find booking by phone"

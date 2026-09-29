@@ -366,7 +366,7 @@ function StaffDrawer({
           <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
             {t.common.cancel}
           </Button>
-          <Button size="sm" disabled={pending} onClick={submit}>
+          <Button size="sm" pending={pending} onClick={submit}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>
@@ -604,7 +604,7 @@ function DaysOff({ member, onError }: { member: StaffRow; onError: (code: string
         size="sm"
         variant="secondary"
         className="mt-2 w-full"
-        disabled={pending}
+        pending={pending}
         onClick={add}
       >
         {t.staff.addDayOff}

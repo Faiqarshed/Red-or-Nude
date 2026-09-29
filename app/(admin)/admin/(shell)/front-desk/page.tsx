@@ -1,5 +1,5 @@
 import { requirePage } from "@/lib/auth/guard";
-import { can } from "@/lib/auth/rbac";
+import { can, drawerStatuses } from "@/lib/auth/rbac";
 import { branchScope } from "@/lib/admin/branch-scope";
 import { NO_BRANCH, loadFrontDesk } from "./data";
 import FrontDeskView from "./FrontDeskView";
@@ -28,7 +28,7 @@ export default async function FrontDeskPage({
   const { branchId: pinned, options: branchOptions } = await branchScope(user, searchParams.branch);
   const branchId = pinned ?? branchOptions[0]?.id;
 
-  const canSetStatus = can(user.role, "bookings.status");
+  const statuses = drawerStatuses(user.role);
   const canReschedule = can(user.role, "bookings.reschedule");
 
   if (!branchId) {
@@ -37,7 +37,7 @@ export default async function FrontDeskPage({
         branchId=""
         branchOptions={branchOptions}
         data={NO_BRANCH}
-        canSetStatus={canSetStatus}
+        statuses={statuses}
         canReschedule={canReschedule}
       />
     );
@@ -48,7 +48,7 @@ export default async function FrontDeskPage({
       branchId={branchId}
       branchOptions={branchOptions}
       data={await loadFrontDesk(branchId)}
-      canSetStatus={canSetStatus}
+      statuses={statuses}
       canReschedule={canReschedule}
     />
   );

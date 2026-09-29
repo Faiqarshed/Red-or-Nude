@@ -38,8 +38,9 @@ function minutesBetween(fromIso: string, to: number): number {
  * technician looking for "that ombré on Tuesday" navigates by day before she
  * navigates by anything else.
  *
- * Read-only by construction: there is no action on a service that is over, and
- * offering one would only raise the question of what it does.
+ * Nothing to press on a service that is over, but each row opens the same
+ * detail dialog as today's cards: "what did I do for her last time" is a
+ * question about the add-ons and the design, not only the name.
  */
 function HistoryList({
   rows,
@@ -47,12 +48,14 @@ function HistoryList({
   title,
   empty,
   took,
+  onOpen,
 }: {
   rows: MyPastService[];
   lang: "ar" | "en";
   title: string;
   empty: string;
   took: string;
+  onOpen: (id: string) => void;
 }) {
   if (rows.length === 0) {
     return (
@@ -85,27 +88,33 @@ function HistoryList({
             </h3>
             <ul className="divide-y divide-black/[0.04]">
               {items.map((r) => (
-                <li key={r.id} className="flex items-center gap-3 px-4 py-3 text-start">
-                  <span className="w-12 shrink-0 text-xs tabular-nums text-ink/45" dir="ltr">
-                    {localTime(r.startsAt)}
-                  </span>
-                  <Thumb src={r.imageUrl} size="sm" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-ink">
-                      {pick(r.serviceName, lang)}
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    onClick={() => onOpen(r.id)}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-start transition-colors hover:bg-black/[0.02]"
+                  >
+                    <span className="w-12 shrink-0 text-xs tabular-nums text-ink/45" dir="ltr">
+                      {localTime(r.startsAt)}
                     </span>
-                    <span className="block truncate text-xs text-ink/50">
-                      {[r.designName ? pick(r.designName, lang) : null, r.customerName]
-                        .filter(Boolean)
-                        .join(" · ")}
+                    <Thumb src={r.imageUrl} size="sm" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-ink">
+                        {pick(r.serviceName, lang)}
+                      </span>
+                      <span className="block truncate text-xs text-ink/50">
+                        {[r.designName ? pick(r.designName, lang) : null, r.customerName]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
                     </span>
-                  </span>
-                  <span className="shrink-0 text-end">
-                    <span className="block text-xs font-medium tabular-nums text-ink">
-                      {took} {formatDuration(r.tookMin * 60_000, lang)}
+                    <span className="shrink-0 text-end">
+                      <span className="block text-xs font-medium tabular-nums text-ink">
+                        {took} {formatDuration(r.tookMin * 60_000, lang)}
+                      </span>
+                      <span className="block text-[11px] text-ink/40">{r.ticketNo ?? "—"}</span>
                     </span>
-                    <span className="block text-[11px] text-ink/40">{r.ticketNo ?? "—"}</span>
-                  </span>
+                  </button>
                 </li>
               ))}
             </ul>
@@ -212,7 +221,8 @@ export default function MyDayView({
   const hero = live.find((b) => b.status === "in_progress") ?? live[0] ?? null;
   const later = live.filter((b) => b.id !== hero?.id);
   const done = bookings.filter((b) => b.status === "completed" || !!b.finishedAt);
-  const open = bookings.find((b) => b.id === openId) ?? null;
+  const open: MyDayBooking | MyPastService | null =
+    bookings.find((b) => b.id === openId) ?? history.find((b) => b.id === openId) ?? null;
 
   const tabs: [PeriodKey, string][] = [
     ["today", p.periodToday],
@@ -306,7 +316,14 @@ export default function MyDayView({
           Finish on them. Seven and thirty days are a record of work already
           done — there is nothing left to press, so they read as a list. */}
       {period !== "today" ? (
-        <HistoryList rows={history} lang={lang} title={m.historyTitle} empty={m.historyEmpty} took={m.took} />
+        <HistoryList
+          rows={history}
+          lang={lang}
+          title={m.historyTitle}
+          empty={m.historyEmpty}
+          took={m.took}
+          onOpen={setOpenId}
+        />
       ) : bookings.length === 0 ? (
         <Card>
           <EmptyState title={m.empty} />
@@ -349,7 +366,7 @@ export default function MyDayView({
               <SectionLabel>{m.finishedCount(done.length)}</SectionLabel>
               <div className="flex flex-wrap gap-2.5">
                 {done.map((b) => (
-                  <DoneChip key={b.id} b={b} m={m} p={p} lang={lang} />
+                  <DoneChip key={b.id} b={b} m={m} p={p} lang={lang} onOpen={() => setOpenId(b.id)} />
                 ))}
               </div>
             </section>
@@ -357,8 +374,8 @@ export default function MyDayView({
         </div>
       )}
 
-      {/* The picture at a size she can work from. Everything on it is already
-          on the card behind — this dialog adds no facts, only room. */}
+      {/* The picture at a size she can work from, with the whole booking beside
+          it — today's cards and the history rows both open it. */}
       <DetailDialog
         b={open}
         now={now}
@@ -468,15 +485,7 @@ function NextCard({
           ) : null}
         </div>
 
-        {b.addons.length > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {b.addons.map((a, i) => (
-              <span key={i} className="rounded-full bg-black/[0.05] px-3 py-1 text-xs text-ink/70">
-                {pick(a, lang)}
-              </span>
-            ))}
-          </div>
-        ) : null}
+        <WorkLines b={b} />
 
         <TreatStrip treats={b.treats} />
 
@@ -605,17 +614,19 @@ function LaterRow({
   );
 }
 
-/** Done, and out of the way. A chip, because there is nothing left to press. */
+/** Done, and out of the way. A chip that opens the details, and nothing else to press. */
 function DoneChip({
   b,
   m,
   p,
   lang,
+  onOpen,
 }: {
   b: MyDayBooking;
   m: Copy["myDay"];
   p: Copy["performance"];
   lang: "ar" | "en";
+  onOpen: () => void;
 }) {
   const took =
     b.startedAt && b.finishedAt
@@ -623,11 +634,15 @@ function DoneChip({
       : null;
 
   return (
-    <span className="inline-flex items-center gap-2.5 rounded-2xl border border-black/[0.06] bg-white/60 p-2 pe-3.5 text-start text-[13px] tabular-nums text-ink/55">
+    <button
+      type="button"
+      onClick={onOpen}
+      className="inline-flex items-center gap-2.5 rounded-2xl border border-black/[0.06] bg-white/60 p-2 pe-3.5 text-start text-[13px] tabular-nums text-ink/55 transition-colors hover:border-black/15"
+    >
       <Thumb src={b.imageUrl} size="sm" className="h-7 w-7 rounded-lg" />
       {localTime(b.startsAt)} {pick(b.serviceName, lang)}
       {took !== null ? ` · ${m.took} ${took} ${p.minutes}` : ""}
-    </span>
+    </button>
   );
 }
 
@@ -643,7 +658,7 @@ function DetailDialog({
   onStart,
   onFinish,
 }: {
-  b: MyDayBooking | null;
+  b: MyDayBooking | MyPastService | null;
   now: number;
   busy: boolean;
   m: Copy["myDay"];
@@ -662,7 +677,8 @@ function DetailDialog({
     <Dialog
       open
       onClose={onClose}
-      title={`${localTime(b.startsAt)} · ${pick(b.serviceName, lang)}`}
+      // A past service says which day; today's goes without.
+      title={`${"day" in b ? `${b.day} ` : ""}${localTime(b.startsAt)} · ${pick(b.serviceName, lang)}`}
       className="max-w-2xl"
       footer={
         control === "start" ? (
@@ -697,21 +713,19 @@ function DetailDialog({
           </p>
         ) : null}
 
-        {b.addons.length > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {b.addons.map((a, i) => (
-              <span key={i} className="rounded-full bg-black/[0.05] px-3 py-1 text-xs text-ink/70">
-                {pick(a, lang)}
-              </span>
-            ))}
-          </div>
-        ) : null}
+        <WorkLines b={b} />
 
         <TreatStrip treats={b.treats} />
 
         <div className="grid gap-2 rounded-xl bg-white p-4 text-sm sm:grid-cols-2">
           <p className="text-ink/55">
             {m.ticket}: <span className="font-medium tabular-nums text-ink">{b.ticketNo ?? "—"}</span>
+          </p>
+          <p className="text-ink/55">
+            {m.booked}:{" "}
+            <span className="font-medium tabular-nums text-ink" dir="ltr">
+              {localTime(b.startsAt)} – {localTime(b.endsAt)}
+            </span>
           </p>
           {b.stationLabel ? (
             <p className="text-ink/55">
@@ -737,6 +751,60 @@ function DetailDialog({
         ) : null}
       </div>
     </Dialog>
+  );
+}
+
+/**
+ * The work on top of the service, each kind on its own labelled row: the
+ * removal first, because it comes off before anything goes on, then the
+ * add-ons. Unlabelled grey pills read as decoration and she missed them.
+ * Card and dialog both show it.
+ */
+function WorkLines({ b }: { b: MyDayBooking }) {
+  const { t, lang } = useAdminI18n();
+  if (!b.removal && b.addons.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {b.removal ? (
+        <WorkRow label={t.myDay.removal} tone="removal">
+          {pick(b.removal, lang)}
+        </WorkRow>
+      ) : null}
+      {b.addons.length > 0 ? (
+        <WorkRow label={t.bookings.addons} tone="addon">
+          {b.addons.map((a) => pick(a, lang)).join(" · ")}
+        </WorkRow>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkRow({
+  label,
+  tone,
+  children,
+}: {
+  label: string;
+  tone: "removal" | "addon";
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-xl px-3 py-2 ring-1",
+        tone === "removal" ? "bg-red/[0.06] ring-red/20" : "bg-sky/[0.08] ring-sky/25",
+      )}
+    >
+      <span
+        className={cn(
+          "text-xs font-semibold uppercase tracking-wide",
+          tone === "removal" ? "text-red" : "text-ink/60",
+        )}
+      >
+        {label}
+      </span>
+      <span className="text-sm font-semibold text-ink">{children}</span>
+    </div>
   );
 }
 

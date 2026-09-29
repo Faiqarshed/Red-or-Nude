@@ -236,6 +236,12 @@ CRUD and folding an aggregate query into it tangles two unrelated things.
 "Each employee gets a unique code (e.g. 'Sara'), around 90%, once a month,
 auto-renews, expires if unused."
 
+Receptionists and technicians only (capability `staff.discount`). The owner and
+admins get none, by the salon's decision in Sep 2026: `issueMonthlyCode` refuses
+them, and `quotePromo` refuses any staff code whose owner's role no longer holds
+the capability — which also kills an old owner/admin code, and a code of
+someone promoted to admin mid-month, without switching rows off.
+
 Every one of those rules is already enforced by the promo engine — `percent`,
 `max_uses = 1`, and a `starts_at`/`ends_at` window that lapses on its own. So a
 staff code **is** a promo code. The only fact it adds is whose it is:
@@ -258,8 +264,9 @@ midnight on the 1st.
 
 Codes are random — `STF` and eight hex characters, e.g. `STF7A3F09C2` — not
 her first name, which anyone who knows the staff could guess (migration 0026
-re-issued the old name codes). She sees her own at the top of her home screen,
-with whether it is used this month and the date it renews.
+re-issued the old name codes). She sees her own on **For you → Staff discount**
+(`/admin/my-code`), with whether it is used this month, the date it renews, how
+to use it and a link to book.
 
 Renewal keeps the **same code**: her existing row gets the new month's window
 and `uses` back to 0, so the code she memorised stays hers. Last month's bookings still point at that row
@@ -342,9 +349,9 @@ Sign in as the CEO (the seeded `SEED_OWNER_EMAIL` account; its role is now
 - one **Technician**
 
 Check as you go: the role dropdown now reads CEO / Admin / Receptionist /
-Technician. Creating each one should also mint a 90% `STF…` code — confirm it beside their
-name on **Staff**, and at the top of their own home screen when signed in as
-them.
+Technician. Creating the receptionist and the technician should also mint a 90%
+`STF…` code — confirm it beside their name on **Staff**, and on their **Staff
+discount** page when signed in as them. The admin gets none.
 
 > In `next dev` the login screen is skipped and `lib/auth/guard.ts` signs you in
 > as the CEO. To test the other two roles you need a production-mode run

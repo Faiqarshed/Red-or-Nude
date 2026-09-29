@@ -293,7 +293,10 @@ export default function GiftCardsView({
                 ) : null
               }
             />
-            <ul className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3">
+            {designs.length === 0 ? (
+              <p className="px-5 py-4 text-start text-xs text-ink/45">{t.giftCards.noDesigns}</p>
+            ) : null}
+            <ul className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 empty:hidden">
               {designs.map((d) => (
                 <li key={d.id}>
                   <button
@@ -444,7 +447,7 @@ function IssueDrawer({
             <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
               {t.common.cancel}
             </Button>
-            <Button size="sm" onClick={submit} disabled={pending}>
+            <Button size="sm" onClick={submit} pending={pending}>
               {pending ? t.common.saving : t.giftCards.issue}
             </Button>
           </>
@@ -682,7 +685,7 @@ function CardDrawer({
               />
             </div>
             <div className="flex gap-2">
-              <Button size="sm" onClick={apply} disabled={pending}>
+              <Button size="sm" onClick={apply} pending={pending}>
                 {t.giftCards.adjust}
               </Button>
               <Button
@@ -818,7 +821,7 @@ function DesignDrawer({
           <Button variant="secondary" size="sm" onClick={onClose}>
             {t.common.cancel}
           </Button>
-          <Button size="sm" disabled={pending} onClick={save}>
+          <Button size="sm" pending={pending} onClick={save}>
             {pending ? t.common.saving : t.common.save}
           </Button>
         </>

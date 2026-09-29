@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { Ticket } from "lucide-react";
 import { Badge, Button, Card, EmptyState, Field, FormErrors, Input, PageHeader } from "@/components/admin/ui";
 import { Drawer } from "@/components/admin/overlays";
 import { AdminTable } from "@/components/admin/Table";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { NumberField } from "@/components/admin/TextField";
 import { collect, focusFirstInvalid, hasErrors, rules } from "@/lib/admin/validate";
 import { formatDateTime } from "@/lib/time";
@@ -73,7 +74,11 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
   const [editing, setEditing] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
-  const [pending, startTransition] = useTransition();
+  // Busy from the click until the server answers. A bare useTransition ended
+  // at the first await (React 18), so the button came back mid-save.
+  const { pending, run } = usePendingAction();
+  // Which row's switch was pressed, so only that one spins.
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const open = (draft: Draft) => {
     setError(null);
@@ -119,10 +124,13 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
 
   const save = () => {
     if (!editing) return;
-    startTransition(async () => {
+    void run(async () => {
       setError(null);
       setTried(true);
-      if (hasErrors(check())) return focusFirstInvalid();
+      if (hasErrors(check())) {
+        focusFirstInvalid();
+        return false;
+      }
       const res = await savePromoCode({
         id: editing.id || undefined,
         code: editing.code,
@@ -134,19 +142,27 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
         maxUses: editing.maxUses ? Number(editing.maxUses) : null,
         active: editing.active,
       });
-      if (res.ok) setEditing(null);
-      else setError(p.errors[res.error as keyof typeof p.errors] ?? t.common.error);
+      if (res.ok) {
+        setEditing(null);
+        return;
+      }
+      setError(p.errors[res.error as keyof typeof p.errors] ?? t.common.error);
+      return false;
     });
   };
 
   // Its refusal used to vanish; now it says why, above the list.
   const [listError, setListError] = useState<string | null>(null);
-  const toggle = (row: PromoRow) =>
-    startTransition(async () => {
+  const toggle = (row: PromoRow) => {
+    setTogglingId(row.id);
+    void run(async () => {
       setListError(null);
       const res = await setPromoActive(row.id, !row.active);
-      if (!res.ok) setListError(p.errors[res.error as keyof typeof p.errors] ?? t.common.error);
+      if (res.ok) return;
+      setListError(p.errors[res.error as keyof typeof p.errors] ?? t.common.error);
+      return false;
     });
+  };
 
   return (
     <>
@@ -250,7 +266,13 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
                     {/* An ended code is brought back by giving it a new end
                         date in Edit, not by a switch that can't hold. */}
                     {past(row.endsAt) ? null : (
-                      <Button size="sm" variant="ghost" disabled={pending} onClick={() => toggle(row)}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        pending={pending && togglingId === row.id}
+                        disabled={pending}
+                        onClick={() => toggle(row)}
+                      >
                         {row.active ? p.deactivate : p.activate}
                       </Button>
                     )}
@@ -271,7 +293,7 @@ export default function PromoCodesView({ rows }: { rows: PromoRow[] }) {
             <Button variant="secondary" onClick={() => setEditing(null)}>
               {t.common.cancel}
             </Button>
-            <Button onClick={save} disabled={pending}>
+            <Button onClick={save} pending={pending}>
               {pending ? t.common.saving : t.common.save}
             </Button>
           </>

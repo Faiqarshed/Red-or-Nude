@@ -1,22 +1,21 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookings, customers, loyaltyTxns, packTxns, payments, reviews } from "@/lib/db/schema";
+import { bookings, loyaltyTxns, packTxns, payments, reviews } from "@/lib/db/schema";
 import { requireCan } from "@/lib/auth/guard";
 import { inBranchScope } from "@/lib/admin/branch-scope";
 import { can } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
 import { returnPackCredits } from "@/lib/packs";
-import { createBooking, rescheduleBooking as moveBooking } from "@/lib/bookings";
+import { rescheduleBooking as moveBooking } from "@/lib/bookings";
 import { inviteReview } from "@/lib/reviews/invite";
 import { assignIfToday, notifyTechnician, pickTechnician } from "@/lib/assign";
 import { getSettings } from "@/lib/settings";
 import { adminStrings } from "@/lib/admin/strings";
-import { CANCEL_REASON_MAX, checkEmail, checkNote, checkPersonName, NO_SHOW_NOTE_MAX } from "@/lib/admin/validate";
-import { validateSaudiMobile } from "@/lib/phone";
+import { CANCEL_REASON_MAX, checkNote, NO_SHOW_NOTE_MAX } from "@/lib/admin/validate";
 
 export type Result = { ok: true } | { ok: false; error: string };
 
@@ -54,10 +53,18 @@ export async function setBookingStatus(
   // other status is a correction to the record — cancelling, marking someone
   // absent, completing out of order — and that is the owner's call.
   //
+  // Cancelling is the desk's too, on its own capability: it is who a customer
+  // rings to call an appointment off.
+  //
   // Guarded here rather than in the drawer that offers the buttons: this is
   // the single write path for a status, and a check in the one caller that
   // renders controls is a check the next caller forgets.
-  if (status !== "checked_in" && status !== "completed" && !can(actor.role, "bookings.status")) {
+  if (
+    status !== "checked_in" &&
+    status !== "completed" &&
+    !(status === "cancelled" && can(actor.role, "bookings.cancel")) &&
+    !can(actor.role, "bookings.status")
+  ) {
     return { ok: false, error: "forbidden" };
   }
   if (!STATUSES.includes(status)) return { ok: false, error: "invalid-status" };
@@ -303,76 +310,6 @@ export async function resolveNoShow(input: {
 
   revalidate();
   return { ok: true };
-}
-
-const walkInSchema = z.object({
-  branchId: z.string().uuid(),
-  serviceId: z.string().uuid(),
-  addonIds: z.array(z.string().uuid()).default([]),
-  removalTypeId: z.string().uuid().nullable().optional(),
-  startsAt: z.string().datetime(),
-  name: z.string().trim().max(120).optional(),
-  phone: z.string().trim().min(6).max(20),
-  email: z.string().trim().optional(),
-  notes: z.string().max(500).optional(),
-});
-
-export type WalkInInput = z.input<typeof walkInSchema>;
-
-export async function createWalkIn(input: WalkInInput): Promise<Result & { code?: string }> {
-  const actor = await requireCan("bookings.manage");
-
-  const parsed = walkInSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.path.join(".") ?? "invalid" };
-
-  const data = parsed.data;
-
-  // The branch to seat her at came out of the request. A pinned receptionist
-  // may only seat someone at her own front desk.
-  if (!inBranchScope(actor, data.branchId)) return { ok: false, error: "wrong-branch" };
-  // The same name and mobile rules as the drawer: a person's name if one is
-  // given, and a Saudi mobile, which is what a returning customer is matched on.
-  if (data.name && checkPersonName(adminStrings.en.validation, "Name", data.name, { required: false })) {
-    return { ok: false, error: "name" };
-  }
-  if (validateSaudiMobile(data.phone)) return { ok: false, error: "phone" };
-  const email = data.email?.toLowerCase() || null;
-  if (email && checkEmail(adminStrings.en.validation, "Email", email)) return { ok: false, error: "email" };
-
-  // An account is found by its email, never its phone (see customers_guest_phone_unique).
-  // She is standing at the desk, so the visit and its points go to her account;
-  // with no match it is a guest booking that keeps the address on file.
-  const [account] = email
-    ? await db
-        .select({ id: customers.id })
-        .from(customers)
-        .where(and(sql`lower(${customers.email}) = ${email}`, isNotNull(customers.emailVerifiedAt)))
-        .limit(1)
-    : [];
-
-  const result = await createBooking({
-    branchId: data.branchId,
-    serviceId: data.serviceId,
-    addonIds: data.addonIds,
-    removalTypeId: data.removalTypeId ?? null,
-    startsAt: data.startsAt,
-    customer: { name: data.name, phone: data.phone, email },
-    customerId: account?.id,
-    source: "walk_in",
-    notes: data.notes,
-  });
-
-  if (!result.ok) return { ok: false, error: result.error };
-
-  await recordAudit(actor, {
-    action: "create",
-    entity: "bookings",
-    entityId: result.id,
-    diff: { source: { from: null, to: "walk_in" } },
-  });
-
-  revalidate();
-  return { ok: true, code: result.code };
 }
 
 /**

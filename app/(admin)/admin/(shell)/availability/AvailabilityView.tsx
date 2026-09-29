@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, QrCode, Trash2 } from "lucide-react";
 import { Badge, Button, Card, CardHeader, Field, Input, invalidRing, PageHeader, touchTargetSm, touchTargetSwitch } from "@/components/admin/ui";
 import { useAdminI18n } from "@/lib/admin/i18n";
+import { usePendingAction } from "@/components/admin/use-pending-action";
 import { ConfirmDialog } from "@/components/admin/overlays";
 import TextField from "@/components/admin/TextField";
 import {
@@ -58,11 +59,18 @@ export default function AvailabilityView({
   const { t, lang } = useAdminI18n();
   const router = useRouter();
   const params = useSearchParams();
+  // Busy from the click until the fresh screen is back, and which control
+  // started it, so that one shows it. A bare useTransition ended at the first
+  // await (React 18), and this one's busy flag was thrown away, so adding a
+  // chair or a closure gave no sign it had been pressed.
+  const { pending, run: busy } = usePendingAction();
+  const [busyWith, setBusyWith] = useState<string | null>(null);
+  // Switching branch is a navigation, not a save.
   const [, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   // A chair or closure waiting on "are you sure": both delete for good.
   const [doomed, setDoomed] = useState<{ kind: "station" | "closure"; id: string; name: string } | null>(null);
-  const [deleting, startDelete] = useTransition();
+  const { pending: deleting, run: busyDeleting } = usePendingAction();
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [draft, setDraft] = useState<Hours[]>(hours);
@@ -84,22 +92,28 @@ export default function AvailabilityView({
           ? a.stationInUse
           : t.common.error;
 
-  const run = (fn: () => Promise<{ ok: boolean; error?: string }>) =>
-    startTransition(async () => {
+  const run = (fn: () => Promise<{ ok: boolean; error?: string }>, key = "hours") => {
+    setBusyWith(key);
+    void busy(async () => {
       setError(null);
       const res = await fn();
-      if (!res.ok) setError(messageFor(res.error));
-      router.refresh();
+      if (res.ok) return;
+      setError(messageFor(res.error));
+      return false;
     });
+  };
+  const busyOn = (key: string) => pending && busyWith === key;
 
   const confirmDelete = () =>
-    startDelete(async () => {
-      if (!doomed) return;
+    busyDeleting(async () => {
+      if (!doomed) return false;
       setDeleteError(null);
       const res = doomed.kind === "station" ? await deleteStation(doomed.id) : await deleteClosure(doomed.id);
-      if (!res.ok) return setDeleteError(messageFor(res.error));
+      if (!res.ok) {
+        setDeleteError(messageFor(res.error));
+        return false;
+      }
       setDoomed(null);
-      router.refresh();
     });
   const askDelete = (d: NonNullable<typeof doomed>) => {
     setDeleteError(null);
@@ -251,6 +265,9 @@ export default function AvailabilityView({
         {/* Chairs */}
         <Card>
           <CardHeader title={t.availability.stations} subtitle={`${stations.filter((s) => s.active).length}`} />
+          {stations.length === 0 ? (
+            <p className="px-5 py-4 text-start text-xs text-ink/45">{t.availability.noStations}</p>
+          ) : null}
           <ul className="divide-y divide-black/[0.05]">
             {stations.map((s) => (
               <li key={s.id} className="flex items-center gap-3 px-5 py-3">
@@ -261,9 +278,11 @@ export default function AvailabilityView({
                 <button
                   role="switch"
                   aria-checked={s.active}
-                  onClick={() => run(() => setStationActive(s.id, !s.active))}
+                  onClick={() => run(() => setStationActive(s.id, !s.active), `station:${s.id}`)}
+                  disabled={busyOn(`station:${s.id}`)}
+                  aria-busy={busyOn(`station:${s.id}`) || undefined}
                   className={cn(
-                    "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+                    "relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50",
                       touchTargetSwitch,
                     s.active ? "bg-[#1f7a4d]" : "bg-black/15",
                   )}
@@ -299,10 +318,11 @@ export default function AvailabilityView({
             <Button
               size="md"
               className="mt-6"
+              pending={busyOn("add-station")}
               onClick={() => {
                 setStationTried(true);
                 if (checkStation()) return focusFirstInvalid();
-                run(() => addStation(branchId, newStation.trim()));
+                run(() => addStation(branchId, newStation.trim()), "add-station");
                 setNewStation("");
                 setStationTried(false);
               }}
@@ -393,10 +413,11 @@ export default function AvailabilityView({
             />
             <Button
               size="sm"
+              pending={busyOn("add-closure")}
               onClick={() => {
                 setClosureTried(true);
                 if (hasErrors(checkClosureForm())) return focusFirstInvalid();
-                run(() => addClosure({ branchId, ...closure, reasonAr: closure.reasonAr.trim() }));
+                run(() => addClosure({ branchId, ...closure, reasonAr: closure.reasonAr.trim() }), "add-closure");
                 setClosure({ from: "", to: "", reasonAr: "", reasonEn: "" });
                 setClosureTried(false);
               }}

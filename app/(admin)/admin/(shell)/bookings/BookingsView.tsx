@@ -9,7 +9,6 @@ import {
   ChevronLeft,
   ChevronRight,
   List,
-  Plus,
   RefreshCw,
   Users,
 } from "lucide-react";
@@ -31,7 +30,6 @@ import { UTC_OFFSET_HOURS, localTime, riyadhDateKey } from "@/lib/time";
 import { pick } from "@/lib/localized";
 import type { Localized } from "@/lib/db/schema";
 import BookingDrawer from "./BookingDrawer";
-import WalkInDrawer from "./WalkInDrawer";
 import type { PartnerElsewhere } from "./partners";
 
 export type BookingStatus =
@@ -73,6 +71,8 @@ export type BookingRow = {
   addons: Localized[];
   /** Coffee and treats — an errand, not part of the work. */
   treats: Treat[];
+  /** The removal before the service, when she booked one. */
+  removal?: Localized | null;
   totalSar: number;
   notes: string | null;
   customerName: string | null;
@@ -106,18 +106,6 @@ export type BookingRow = {
   checkedInAt?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
-};
-
-/**
- * A booking whose chair was released because nobody checked the customer in, and
- * which nobody has dealt with yet. Not date-scoped: a Friday no-show is still
- * waiting on Monday, which is the whole point of calling it unresolved.
- */
-export type CatalogOption = {
-  id: string;
-  name: Localized;
-  priceSar: number;
-  durationMin: number;
 };
 
 /** Status colours are their own scale — a cancelled booking must not read as "on brand". */
@@ -382,9 +370,8 @@ export default function BookingsView({
   stations,
   bookings,
   noShowCount,
-  catalog,
   canManage,
-  canSetStatus,
+  statuses,
   canReschedule,
   canDelete,
   checkinEarlyMin,
@@ -403,17 +390,10 @@ export default function BookingsView({
   /** Unresolved no-shows across every date, not just the one being viewed. */
   /** Unresolved no-show flags for this role's branches, on any date. */
   noShowCount: number;
-  catalog: {
-    services: CatalogOption[];
-    addons: CatalogOption[];
-    /** at_checkout rows — the coffee and the cookie, kept out of the add-ons. */
-    treats: CatalogOption[];
-    removals: CatalogOption[];
-  };
-  /** Walk-ins and the no-show backlog — everyone but a technician. */
+  /** The no-show backlog — everyone but a technician. */
   canManage: boolean;
-  /** `bookings.status`: rewriting a booking by hand. The owner only. */
-  canSetStatus: boolean;
+  /** The status buttons the drawer offers — drawerStatuses() in lib/auth/rbac.ts. */
+  statuses: BookingStatus[];
   /** `bookings.reschedule`. Separate from canManage — a technician has neither,
    *  but the two came apart so admin could hold one without the other. */
   canReschedule: boolean;
@@ -431,7 +411,6 @@ export default function BookingsView({
   const [tab, setTab] = useState<"booked" | "dropped">("booked");
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<BookingRow | null>(null);
-  const [walkIn, setWalkIn] = useState(false);
 
   // The salon's today, not the browser's: a receptionist on a laptop still set
   // to another timezone must not be sent to yesterday's board.
@@ -551,14 +530,6 @@ export default function BookingsView({
       <PageHeader
         title={t.bookings.title}
         subtitle={`${active.length} ${t.bookings.onThisDay}`}
-        action={
-          canManage ? (
-            <Button onClick={() => setWalkIn(true)}>
-              <Plus className="h-4 w-4" strokeWidth={2} />
-              {t.bookings.walkIn}
-            </Button>
-          ) : null
-        }
       />
 
       {/* A pointer, not the queue itself. Eighteen unresolved flags used to be
@@ -859,7 +830,7 @@ export default function BookingsView({
           selected?.groupId ? partnersElsewhere.filter((p) => p.groupId === selected.groupId) : []
         }
         branchName={branchName}
-        canSetStatus={canSetStatus}
+        statuses={statuses}
         canReschedule={canReschedule}
         canDelete={canDelete}
         checkinEarlyMin={checkinEarlyMin}
@@ -868,18 +839,6 @@ export default function BookingsView({
         onOpenPartner={setSelected}
         onChanged={() => {
           setSelected(null);
-          router.refresh();
-        }}
-      />
-
-      <WalkInDrawer
-        open={walkIn}
-        branchId={branchId}
-        date={date}
-        catalog={catalog}
-        onClose={() => setWalkIn(false)}
-        onCreated={() => {
-          setWalkIn(false);
           router.refresh();
         }}
       />

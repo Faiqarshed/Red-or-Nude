@@ -31,6 +31,7 @@ import {
   myStaffCode,
 } from "@/lib/staff-codes";
 
+const { quotePromo } = await import("@/lib/promo");
 const { savePromoCode, setPromoActive } = await import(
   "@/app/(admin)/admin/(shell)/promo-codes/actions"
 );
@@ -233,5 +234,28 @@ describe("describeStaffCode", () => {
     // Local midnight on 1 October is 21:00 UTC on 30 September. A UTC date
     // would tell her the 30th.
     expect(describeStaffCode(row, now).renewsOn).toBe("2026-10-01");
+  });
+});
+
+describe("the owner and admins hold no code", () => {
+  it("issues none to an admin", async () => {
+    const [row] = await db
+      .insert(staff)
+      .values({ name: WHO, email: EMAIL, role: "admin" })
+      .returning({ id: staff.id });
+
+    expect(await issueMonthlyCode(row.id)).toEqual({ ok: false, reason: "not-eligible" });
+    expect(await myStaffCode(row.id)).toBeNull();
+  });
+
+  it("refuses a code at checkout once its owner is promoted to admin", async () => {
+    // Also what kills the codes the owner and admins were issued before the
+    // rule: the row is left as it was, and the price check says no.
+    const m = await member();
+    expect((await quotePromo(m.code, 100_00)).ok).toBe(true);
+
+    await db.update(staff).set({ role: "admin" }).where(eq(staff.id, m.staffId));
+
+    expect(await quotePromo(m.code, 100_00)).toEqual({ ok: false, reason: "inactive" });
   });
 });

@@ -1,7 +1,6 @@
 import { and, asc, count, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
-  addons,
   bookingAddons,
   bookings,
   branches,
@@ -12,14 +11,13 @@ import {
   services,
   staff,
   stations,
-  type Localized,
 } from "@/lib/db/schema";
 import { addonLineQuery, NO_LINES, splitAddonLines } from "@/lib/admin/addon-lines";
 import { mediaUrl } from "@/lib/storage";
 import { getSettings } from "@/lib/settings";
 import { requirePage } from "@/lib/auth/guard";
 import { sweepNoShows } from "@/lib/bookings";
-import { can, scopedBranchId } from "@/lib/auth/rbac";
+import { can, drawerStatuses, scopedBranchId } from "@/lib/auth/rbac";
 import { halalasToSar } from "@/lib/money";
 import { localToUtc, utcToLocalDate } from "@/lib/availability";
 import { riyadhDayRange } from "@/lib/time";
@@ -27,14 +25,6 @@ import BookingsView, { type BookingRow } from "./BookingsView";
 import { partnersElsewhere } from "./partners";
 
 export const dynamic = "force-dynamic";
-
-/** Any priced catalogue row, as the walk-in drawer offers it. */
-const toOption = (r: { id: string; name: Localized; priceHalalas: number; durationMin: number }) => ({
-  id: r.id,
-  name: r.name,
-  priceSar: halalasToSar(r.priceHalalas),
-  durationMin: r.durationMin,
-});
 
 export default async function BookingsPage({
   searchParams,
@@ -57,7 +47,7 @@ export default async function BookingsPage({
     : utcToLocalDate(riyadhDayRange().start);
 
   if (!branchId) {
-    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} catalog={{ services: [], addons: [], treats: [], removals: [] }} canManage={false} canSetStatus={false} canReschedule={false} canDelete={false} checkinEarlyMin={0} branchId="" />;
+    return <BookingsView date={date} branches={[]} stations={[]} bookings={[]} noShowCount={0} canManage={false} statuses={[]} canReschedule={false} canDelete={false} checkinEarlyMin={0} branchId="" />;
   }
 
   // Release chairs nobody checked in to, before reading the day back — otherwise
@@ -78,9 +68,6 @@ export default async function BookingsPage({
     rows,
     [noShowCount],
     addonLinks,
-    serviceRows,
-    addonRows,
-    removalRows,
   ] = await Promise.all([
     getSettings(["checkin_early_min"]),
     db
@@ -101,6 +88,9 @@ export default async function BookingsPage({
         source: bookings.source,
         stationId: bookings.stationId,
         serviceName: bookings.serviceName,
+        // The removal she has to do first. Named from the catalogue: bookings
+        // snapshot its price but not its name.
+        removal: removalTypes.name,
         totalHalalas: bookings.totalHalalas,
         notes: bookings.notes,
         customerName: sql<string | null>`coalesce(${bookings.customerName}, ${customers.name})`,
@@ -134,6 +124,7 @@ export default async function BookingsPage({
       .leftJoin(designs, eq(designs.id, bookings.designId))
       .leftJoin(services, eq(services.id, bookings.serviceId))
       .leftJoin(staff, eq(staff.id, bookings.technicianId))
+      .leftJoin(removalTypes, eq(removalTypes.id, bookings.removalTypeId))
       .where(
         and(eq(bookings.branchId, branchId), gte(bookings.startsAt, dayStart), lt(bookings.startsAt, dayEnd)),
       )
@@ -161,9 +152,6 @@ export default async function BookingsPage({
       .where(
         and(eq(bookings.branchId, branchId), gte(bookings.startsAt, dayStart), lt(bookings.startsAt, dayEnd)),
       ),
-    db.select().from(services).where(eq(services.active, true)).orderBy(asc(services.sort)),
-    db.select().from(addons).where(eq(addons.active, true)).orderBy(asc(addons.sort)),
-    db.select().from(removalTypes).where(eq(removalTypes.active, true)).orderBy(asc(removalTypes.sort)),
   ]);
 
   // Guests of this day's parties who chose another branch. Not in `rows`, which
@@ -181,9 +169,9 @@ export default async function BookingsPage({
       branches={pinned ? [] : branchRows.map((b) => ({ id: b.id, name: b.name }))}
       stations={stationRows.map((s) => ({ id: s.id, label: s.label }))}
       canManage={user.role !== "technician"}
-      // Rewriting a status by hand is the owner's, and so is moving a booking.
-      // Both read the matrix rather than a role list, so they only move once.
-      canSetStatus={can(user.role, "bookings.status")}
+      // Which status buttons the drawer draws. Read from the matrix rather than
+      // a role list, so a capability only has to move once.
+      statuses={drawerStatuses(user.role)}
       // Read from the matrix rather than another role list: this is the one
       // capability the salon has moved, and it should only have to move once.
       canReschedule={can(user.role, "bookings.reschedule")}
@@ -192,15 +180,6 @@ export default async function BookingsPage({
       // that it hasn't. The setting is the salon's, not the row's, so it travels
       // once instead of on every booking.
       checkinEarlyMin={checkinEarlyMin}
-      catalog={{
-        services: serviceRows.map(toOption),
-        // Split, because to the receptionist a coffee is not an add-on. It is
-        // the same `addons` table and the same `addonIds` on the way out —
-        // `at_checkout` is the only thing that moves it to its own group.
-        addons: addonRows.filter((a) => !a.atCheckout).map(toOption),
-        treats: addonRows.filter((a) => a.atCheckout).map(toOption),
-        removals: removalRows.map(toOption),
-      }}
       noShowCount={noShowCount?.n ?? 0}
       partnersElsewhere={elsewhere}
       branchName={branchRows.find((b) => b.id === branchId)?.name ?? null}
@@ -216,6 +195,7 @@ export default async function BookingsPage({
           source: r.source,
           stationId: r.stationId,
           serviceName: r.serviceName,
+          removal: r.removal,
           ...(lines.get(r.id) ?? NO_LINES),
           totalSar: halalasToSar(r.totalHalalas),
           notes: r.notes,

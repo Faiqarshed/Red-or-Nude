@@ -11,7 +11,7 @@ export default function NotFoundView() {
     <Card>
       <EmptyState
         title="404"
-        body={t.common.comingSoon}
+        body={t.common.notFound}
         icon={<Compass className="h-8 w-8" strokeWidth={1.25} />}
       />
       <div className="flex justify-center pb-6">

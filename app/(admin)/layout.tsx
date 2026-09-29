@@ -3,9 +3,11 @@
 // LanguageProvider — the two never mount together.
 
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Almarai, IBM_Plex_Sans_Arabic } from "next/font/google";
 import "../globals.css";
 import { AdminLangProvider } from "@/lib/admin/i18n";
+import { ADMIN_LANG_COOKIE } from "@/lib/localized";
 
 // Headings keep the brand display face; body and tables use Plex Arabic for its
 // tabular numerals and bilingual coverage.
@@ -29,10 +31,12 @@ export const metadata: Metadata = {
 };
 
 export default function AdminRootLayout({ children }: { children: React.ReactNode }) {
+  // Her language, from the first byte. See lib/admin/i18n.tsx.
+  const lang = cookies().get(ADMIN_LANG_COOKIE)?.value === "en" ? "en" : "ar";
   return (
-    <html lang="ar" dir="rtl" className={`${almarai.variable} ${plexArabic.variable}`}>
+    <html lang={lang} dir={lang === "ar" ? "rtl" : "ltr"} className={`${almarai.variable} ${plexArabic.variable}`}>
       <body className="bg-cream font-ui text-ink antialiased">
-        <AdminLangProvider>{children}</AdminLangProvider>
+        <AdminLangProvider initialLang={lang}>{children}</AdminLangProvider>
       </body>
     </html>
   );
