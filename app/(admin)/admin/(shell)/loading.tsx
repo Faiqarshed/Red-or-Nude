@@ -1,3 +1,5 @@
+"use client";
+
 // What the panel shows while the next screen is being rendered on the server.
 //
 // Every page under here is `force-dynamic`, so navigating means waiting on a
@@ -13,10 +15,13 @@
 // and interactive the whole time, so the panel never looks like it reloaded.
 //
 // The bar idiom is the one RescheduleDialog.tsx already uses for its slot grid.
+import { useAdminI18n } from "@/lib/admin/i18n";
+
 export default function Loading() {
+  const { t } = useAdminI18n();
   return (
     <div className="space-y-4 p-4 sm:p-6" aria-busy="true" aria-live="polite">
-      <span className="sr-only">Loading</span>
+      <span className="sr-only">{t.common.loading}</span>
       <div className="h-8 w-48 animate-pulse rounded-xl bg-black/[0.05]" />
       <div className="space-y-2">
         {Array.from({ length: 8 }, (_, i) => (
