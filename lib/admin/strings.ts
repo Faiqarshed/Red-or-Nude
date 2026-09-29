@@ -447,6 +447,7 @@ const ar = {
   },
 
   availability: {
+    noStations: "لا توجد كراسٍ بعد. أضيفي واحداً في الأسفل.",
     title: "أوقات العمل",
     subtitle: "ساعات الدوام والكراسي والإغلاقات — هذه تحدد المواعيد المتاحة",
     hours: "ساعات العمل",
@@ -522,6 +523,7 @@ const ar = {
     adjustAmount: "المبلغ (سالب للخصم)",
     adjustReason: "السبب",
     noTxns: "لا توجد حركات",
+    noDesigns: "لا توجد تصاميم بعد.",
     message: "الرسالة",
     cancelCard: "إلغاء البطاقة",
     insufficient: "الرصيد غير كافٍ",
@@ -1222,6 +1224,7 @@ const en: AdminStrings = {
   },
 
   availability: {
+    noStations: "No chairs yet. Add one below.",
     title: "Availability",
     subtitle: "Opening hours, chairs and closures — these determine what can be booked",
     hours: "Opening hours",
@@ -1297,6 +1300,7 @@ const en: AdminStrings = {
     adjustAmount: "Amount (negative to deduct)",
     adjustReason: "Reason",
     noTxns: "No transactions",
+    noDesigns: "No card designs yet.",
     message: "Message",
     cancelCard: "Cancel card",
     insufficient: "Insufficient balance",

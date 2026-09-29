@@ -293,7 +293,10 @@ export default function GiftCardsView({
                 ) : null
               }
             />
-            <ul className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3">
+            {designs.length === 0 ? (
+              <p className="px-5 py-4 text-start text-xs text-ink/45">{t.giftCards.noDesigns}</p>
+            ) : null}
+            <ul className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 empty:hidden">
               {designs.map((d) => (
                 <li key={d.id}>
                   <button

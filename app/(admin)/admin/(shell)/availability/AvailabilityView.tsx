@@ -265,6 +265,9 @@ export default function AvailabilityView({
         {/* Chairs */}
         <Card>
           <CardHeader title={t.availability.stations} subtitle={`${stations.filter((s) => s.active).length}`} />
+          {stations.length === 0 ? (
+            <p className="px-5 py-4 text-start text-xs text-ink/45">{t.availability.noStations}</p>
+          ) : null}
           <ul className="divide-y divide-black/[0.05]">
             {stations.map((s) => (
               <li key={s.id} className="flex items-center gap-3 px-5 py-3">
