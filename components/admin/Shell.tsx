@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import AdminSkeleton from "./AdminSkeleton";
-import { GoingToContext } from "./going-to";
 import MobileNav from "./MobileNav";
 import Sidebar from "./Sidebar";
 import Topbar, { type BranchOption } from "./Topbar";
@@ -68,10 +67,9 @@ export default function Shell({
   };
 
   return (
-    <GoingToContext.Provider value={goingTo}>
     <div className="flex min-h-screen bg-cream" onClickCapture={noticeNavigation}>
-      <Sidebar role={user.role} collapsed={collapsed} onToggle={toggle} />
-      <MobileNav role={user.role} open={navOpen} onClose={() => setNavOpen(false)} />
+      <Sidebar role={user.role} collapsed={collapsed} onToggle={toggle} goingTo={goingTo} />
+      <MobileNav role={user.role} open={navOpen} onClose={() => setNavOpen(false)} goingTo={goingTo} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar
           user={user}
@@ -86,6 +84,5 @@ export default function Shell({
         </main>
       </div>
     </div>
-    </GoingToContext.Provider>
   );
 }

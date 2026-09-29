@@ -21,10 +21,12 @@ export default function MobileNav({
   role,
   open,
   onClose,
+  goingTo,
 }: {
   role: StaffRole;
   open: boolean;
   onClose: () => void;
+  goingTo: string | null;
 }) {
   const { t } = useAdminI18n();
   const pathname = usePathname();
@@ -92,7 +94,7 @@ export default function MobileNav({
             </button>
           }
         />
-        <SidebarNav role={role} onNavigate={onClose} />
+        <SidebarNav role={role} onNavigate={onClose} goingTo={goingTo} />
       </div>
     </div>
   );

@@ -27,7 +27,6 @@ import { useAdminI18n } from "@/lib/admin/i18n";
 import { can } from "@/lib/auth/rbac";
 import type { StaffRole } from "@/lib/db/schema";
 import { NAV } from "./nav";
-import { useGoingTo } from "./going-to";
 import { cn } from "@/lib/cn";
 
 const ICONS: Record<string, LucideIcon> = {
@@ -87,15 +86,16 @@ export function SidebarNav({
   role,
   collapsed = false,
   onNavigate,
+  goingTo,
 }: {
   role: StaffRole;
   collapsed?: boolean;
   /** Called when an item is followed — the drawer closes itself on it. */
   onNavigate?: () => void;
+  /** The page a click is on its way to, which lights up at once (see Shell). */
+  goingTo: string | null;
 }) {
   const { t } = useAdminI18n();
-  // The page a click is on its way to lights up at once (see Shell).
-  const goingTo = useGoingTo();
   const current = usePathname();
   const pathname = goingTo ?? current;
 
@@ -170,10 +170,12 @@ export default function Sidebar({
   role,
   collapsed,
   onToggle,
+  goingTo,
 }: {
   role: StaffRole;
   collapsed: boolean;
   onToggle: () => void;
+  goingTo: string | null;
 }) {
   const { t } = useAdminI18n();
 
@@ -185,7 +187,7 @@ export default function Sidebar({
       )}
     >
       <SidebarBrand collapsed={collapsed} />
-      <SidebarNav role={role} collapsed={collapsed} />
+      <SidebarNav role={role} collapsed={collapsed} goingTo={goingTo} />
 
       <button
         onClick={onToggle}
