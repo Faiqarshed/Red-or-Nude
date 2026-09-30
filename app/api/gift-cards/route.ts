@@ -19,6 +19,7 @@ import { giftCardDesigns, giftCardValues, payments } from "@/lib/db/schema";
 import { clientIp, throttled } from "@/lib/throttle";
 import { startPurchase } from "@/lib/payments/purchase";
 import { giftCardLine } from "@/lib/payments/lines";
+import { currentCustomer } from "@/lib/account/guard";
 
 export const dynamic = "force-dynamic";
 // The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
@@ -37,6 +38,8 @@ const body = z.object({
   lang: z.enum(["ar", "en"]).optional(),
   /** This attempt, made by the page (lib/giftcard-selection.ts); see GiftIntent. */
   attemptId: z.string().uuid().optional(),
+  /** What her wallet credit pays, as the screen showed. Signed in only; worked out again, refused if it differs. */
+  walletHalalas: z.number().int().nonnegative().max(100_000_000).optional(),
   /** Dev-only, to exercise the decline path. Stripped in production. */
   simulate: z.literal("decline").optional(),
 });
@@ -73,6 +76,10 @@ export async function POST(request: Request) {
     );
   }
   const d = parsed.data;
+
+  // Credit is hers only when she is signed in: whose wallet is the session's.
+  const customer = d.walletHalalas ? await currentCustomer() : null;
+  if (d.walletHalalas && !customer) return NextResponse.json({ error: "signed-out" }, { status: 401 });
 
   // Counted in the database, so it holds across server instances.
   const email = d.buyerEmail?.trim().toLowerCase() || null;
@@ -127,12 +134,20 @@ export async function POST(request: Request) {
     back: "/gift-card/payment",
     ip,
     payer: { name: d.buyerName || null, email: d.buyerEmail || null },
+    wallet: customer && d.walletHalalas ? { customerId: customer.id, email: customer.email, halalas: d.walletHalalas } : undefined,
     simulate: d.simulate,
   });
 
   if (!result.ok) {
-    const status = result.error === "payment-declined" ? 402 : 500;
-    return NextResponse.json({ error: result.error }, { status });
+    const status =
+      result.error === "payment-declined"
+        ? 402
+        : result.error === "wallet-changed"
+          ? 409
+          : result.error === "wallet-unavailable"
+            ? 400
+            : 500;
+    return NextResponse.json({ error: result.error, walletBalance: result.walletBalance }, { status });
   }
   if ("checkout" in result) return NextResponse.json({ checkout: result.checkout });
   if (result.delivered.kind !== "gift_card") return NextResponse.json({ error: "failed" }, { status: 500 });

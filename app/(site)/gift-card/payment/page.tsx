@@ -11,6 +11,8 @@ import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { showPaidOn } from "@/lib/paid-handoff";
 import { clearGiftSelection, loadGiftSelection, saveGiftSelection, type GiftSelection } from "@/lib/giftcard-selection";
+import { useWalletCredit } from "@/components/WalletCredit";
+import { formatSAR } from "@/lib/money";
 
 // Figma: Desktop-2 gift-card payment step (325:7705) + success modal (325:8088).
 //
@@ -49,6 +51,9 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
   }, []);
 
   const total = selection?.amountSar ?? 0;
+  /** Her wallet credit, signed in and switched on: what it pays, and the rest for the card. */
+  const credit = useWalletCredit(total * 100);
+  const toPayHalalas = total * 100 - credit.halalas;
 
   // Paid: back to the builder, which shows the card over itself.
   const issued = (giftCode: string) => {
@@ -95,6 +100,7 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
           message: selection.message || undefined,
           lang,
           attemptId: selection.attemptId,
+          walletHalalas: credit.halalas || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -108,6 +114,12 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
       }
 
       // Nothing was issued on a decline, so retrying is safe and cheap.
+      // Her credit moved since this page showed it: nothing was charged.
+      if (data.error === "wallet-changed") {
+        credit.refused(data.walletBalance);
+        setError(p.walletChanged);
+        return;
+      }
       setError(
         data.error === "payment-declined"
           ? c.payDecline.declined
@@ -141,8 +153,11 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
       <div className="mx-auto grid max-w-page gap-6 px-4 pb-24 pt-6 sm:px-6 md:px-12 lg:grid-cols-[1fr_440px] lg:gap-8 lg:px-16">
         {checkout ? (
           <PayStep checkout={checkout} onDone={onPaid} notice={payNotice} sub={gp.paySub} />
-        ) : (
+        ) : toPayHalalas > 0 ? (
           <PaymentMethods checkout={null} onDone={onPaid} heading={false} />
+        ) : (
+          // Credit that covers it all leaves nothing for a card.
+          <p className="h-fit rounded-[20px] bg-white p-5 text-start text-sm font-semibold text-ink/70">{p.nothingLeft}</p>
         )}
 
         {/* The card she is buying: above the checkout on a phone, beside it on
@@ -185,6 +200,20 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
 
           {!paying && (
             <>
+              {credit.toggle && (
+                <div className="mt-4 space-y-2">
+                  {credit.toggle}
+                  {credit.halalas > 0 && (
+                    <p className="flex items-center justify-between px-1 text-[13px] font-semibold text-ink">
+                      <span>{p.toPayNow}</span>
+                      <span className="flex items-center gap-1">
+                        <Riyal className="h-3.5 w-3.5" />
+                        {formatSAR(toPayHalalas)}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              )}
               {(error ?? payNotice) && (
                 <p role="alert" className="mt-3 rounded-[12px] bg-red/[0.08] px-4 py-3 text-start text-xs text-red">
                   {error ?? payNotice}

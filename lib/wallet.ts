@@ -10,7 +10,7 @@
 // index on that table rather than by a read before it.
 
 import "server-only";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
 import { bookings, customers, giftCards, giftCardTxns, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
 import { getSettings } from "@/lib/settings";
@@ -271,6 +271,45 @@ export async function releaseBookingSpends(tx: Tx, bookingIds: string[]): Promis
     .from(walletTxns)
     .where(and(eq(walletTxns.reason, "spend"), inArray(walletTxns.bookingId, bookingIds)));
   for (const s of spends) await releaseSpend(tx, s.id);
+}
+
+/**
+ * Give back what these purchase payments spent from the wallet: declined,
+ * abandoned, or paid for and not delivered. Call in the transaction that says
+ * so. Safe to repeat, and a re-spend (a revived payment) is given back too.
+ */
+export async function releasePaymentSpends(tx: Tx, paymentIds: string[]): Promise<void> {
+  if (paymentIds.length === 0) return;
+  const spends = await tx
+    .select({ id: walletTxns.id })
+    .from(walletTxns)
+    .where(and(eq(walletTxns.reason, "spend"), inArray(walletTxns.paymentId, paymentIds)));
+  for (const s of spends) await releaseSpend(tx, s.id);
+}
+
+/**
+ * A purchase payment written off (its spend given back) and then found paid:
+ * take the credit again before it is delivered. True when the credit is in
+ * place (never released, already taken again, or taken now); false when she no
+ * longer has it, and the purchase must not be delivered.
+ */
+export async function reSpendReleased(paymentId: string): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [spend] = await tx
+      .select()
+      .from(walletTxns)
+      .where(and(eq(walletTxns.paymentId, paymentId), eq(walletTxns.reason, "spend"), isNull(walletTxns.reversesId)));
+    if (!spend) return true;
+    const answers = await tx.select().from(walletTxns).where(eq(walletTxns.paymentId, paymentId));
+    // Released, and not taken again since: the last word on it is a release.
+    const release = answers.find((r) => r.reason === "release" && r.reversesId === spend.id);
+    if (!release || answers.some((r) => r.reason === "spend" && r.reversesId === release.id)) return true;
+    const again = await spendWallet(tx, spend.customerId, spend.ownerEmail, -spend.deltaHalalas, {
+      paymentId,
+      reSpendOf: release.id,
+    });
+    return again !== null;
+  });
 }
 
 /**

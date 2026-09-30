@@ -45,6 +45,10 @@ export type TreatRefusal =
   | "already-added"
   /** The add-ons need more time than the chair is free after her. */
   | "no-time"
+  /** Her credit is not what the screen showed (another tab spent it). */
+  | "wallet-changed"
+  /** Credit asked for before the wallet launched. */
+  | "wallet-unavailable"
   /** The gateway said no. Her card, not our problem to retry for her. */
   | "declined"
   /** Charged, and then it could not be added. See lib/payments/purchase.ts. */
@@ -96,6 +100,8 @@ async function currentVisit(token: string, now: Date) {
 export async function buyStationItems(input: {
   token: string;
   addonIds: string[];
+  /** Her wallet paying part of it: signed in only, from the session (the sticker proves presence, not who). */
+  wallet?: { customerId: string; email: string; halalas: number };
   simulate?: "decline";
   now?: Date;
 }): Promise<TreatResult> {
@@ -148,10 +154,14 @@ export async function buyStationItems(input: {
     // Nobody to prefill: the sticker proves presence, not identity.
     payer: {},
     back: `/station/${input.token}`,
+    wallet: input.wallet,
     simulate: input.simulate,
   });
 
   if (!result.ok) {
+    if (result.error === "wallet-changed" || result.error === "wallet-unavailable") {
+      return { ok: false, reason: result.error };
+    }
     // `declined` tells the screen a retry is safe. Once money has moved, it is not.
     return { ok: false, reason: result.error === "not-delivered" ? "paid-not-added" : "declined" };
   }

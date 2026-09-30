@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { buyStationItems, type TreatRefusal } from "@/lib/station-treat";
+import { currentCustomer } from "@/lib/account/guard";
 
 export const dynamic = "force-dynamic";
 // The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
@@ -19,6 +20,8 @@ const body = z.object({
   token: z.string().uuid(),
   /** A basket: treats and add-ons for the visit in progress, paid once. */
   addonIds: z.array(z.string().uuid()).min(1).max(20),
+  /** What her wallet credit pays, as the screen showed. Signed in only. */
+  walletHalalas: z.number().int().nonnegative().max(100_000_000).optional(),
   /** Dev-only, to exercise the decline path. Stripped in production below. */
   simulate: z.literal("decline").optional(),
 });
@@ -30,6 +33,8 @@ const STATUS: Record<TreatRefusal, number> = {
   "unknown-treat": 404,
   "already-added": 409,
   "no-time": 409,
+  "wallet-changed": 409,
+  "wallet-unavailable": 400,
   declined: 402,
   // Charged and not delivered. A 500 so nothing treats it as retryable.
   "paid-not-added": 500,
@@ -47,9 +52,15 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: "invalid" }, { status: 400 });
   const d = parsed.data;
 
+  // Credit is hers only when the session says who she is: the sticker proves
+  // someone is at the table, not which wallet is theirs.
+  const customer = d.walletHalalas ? await currentCustomer() : null;
+  if (d.walletHalalas && !customer) return NextResponse.json({ error: "signed-out" }, { status: 401 });
+
   const result = await buyStationItems({
     token: d.token,
     addonIds: d.addonIds,
+    wallet: customer && d.walletHalalas ? { customerId: customer.id, email: customer.email, halalas: d.walletHalalas } : undefined,
     simulate: d.simulate,
   });
 

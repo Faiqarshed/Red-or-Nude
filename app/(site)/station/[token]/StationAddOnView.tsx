@@ -9,6 +9,8 @@ import { declineMessage, usePaymentReturn, type PaymentOutcome } from "@/compone
 import { CheckingModal, PayNoticeModal, PayStep } from "@/components/PayFlow";
 import GuestPicker, { emptyGuest, guestTotals, toMemberSelection, type GuestState } from "@/components/booking/GuestPicker";
 import { Riyal } from "@/components/icons";
+import { useWalletCredit } from "@/components/WalletCredit";
+import { formatSAR } from "@/lib/money";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
 import { saveBooking, formatDateLabel, formatTime } from "@/lib/booking";
@@ -112,6 +114,8 @@ export default function StationAddOnView({
 
   const inBasket = all.filter((i) => basket.includes(i.id));
   const basketTotal = inBasket.reduce((n, i) => n + i.price, 0);
+  /** Her wallet credit, when she is signed in on this phone and switches it on. */
+  const credit = useWalletCredit(Math.round(basketTotal * 100));
   const basketMin = inBasket.reduce((n, i) => n + i.durationMin, 0);
   const toggle = (id: string) => {
     setBasket((b) => (b.includes(id) ? b.filter((x) => x !== id) : [...b, id]));
@@ -152,9 +156,10 @@ export default function StationAddOnView({
       const res = await fetch("/api/station/treat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: scannedToken, addonIds: basket }),
+        body: JSON.stringify({ token: scannedToken, addonIds: basket, walletHalalas: credit.halalas || undefined }),
       });
       const data = await res.json().catch(() => null);
+      if (data?.error === "wallet-changed") return notify(p.walletChanged);
       if (!res.ok || !data?.ok) return notify(refusal(data?.error));
       if (data.checkout) {
         setCheckout(data.checkout);
@@ -413,6 +418,7 @@ export default function StationAddOnView({
           className="fixed inset-x-0 bottom-0 z-40 border-t border-black/[0.06] bg-white/95 px-4 pt-3 backdrop-blur"
           style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 12px)" }}
         >
+          {tab === "now" && credit.toggle && <div className="mx-auto mb-3 max-w-[620px]">{credit.toggle}</div>}
           <div className="mx-auto flex max-w-[620px] items-center justify-between gap-3">
             <div className="min-w-0">
               {tab === "now" ? (
@@ -426,7 +432,7 @@ export default function StationAddOnView({
               )}
               <p className="flex items-center gap-1 font-display text-xl font-extrabold text-red">
                 <Riyal className="h-4 w-4" />
-                {tab === "now" ? basketTotal : totals.price}
+                {tab === "now" ? formatSAR(Math.round(basketTotal * 100) - credit.halalas) : totals.price}
               </p>
             </div>
             <button

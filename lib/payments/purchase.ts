@@ -25,7 +25,15 @@ import { sendMembershipEmail } from "@/lib/membership-email";
 import { sendVisitEmail } from "@/lib/visit-email";
 import { returnOrigin } from "@/lib/site";
 import { afterResponse } from "@/lib/after-response";
-import { creditChair, walletLaunched } from "@/lib/wallet";
+import {
+  creditChair,
+  lockedBalance,
+  releasePaymentSpends,
+  reSpendReleased,
+  spendWallet,
+  walletLaunched,
+} from "@/lib/wallet";
+import { walletCovers } from "@/lib/money";
 import { sendChairCreditEmail } from "@/lib/wallet-email";
 import { refundRef } from "./refund";
 import { errorText, logPaymentEvent } from "./events";
@@ -84,8 +92,25 @@ export type PurchaseResult =
        * second tap already added, a pack withdrawn mid-checkout. The money has
        * been sent back (or the log says REFUND OWED); a retry is a new purchase.
        */
-      error: "payment-declined" | "failed" | "not-delivered" | "not-found" | "unverified";
+      error:
+        | "payment-declined"
+        | "failed"
+        | "not-delivered"
+        | "not-found"
+        | "unverified"
+        /** Credit was asked for before the wallet launched. */
+        | "wallet-unavailable"
+        /** The credit she was shown is not what she can spend now; `walletBalance` is. */
+        | "wallet-changed";
+      walletBalance?: number;
     };
+
+/** Refusal from inside the payment's transaction: she no longer has what she was shown. */
+class WalletChanged extends Error {
+  constructor(readonly available: number) {
+    super("wallet-changed");
+  }
+}
 
 export async function startPurchase(input: {
   intent: Intent;
@@ -97,8 +122,19 @@ export async function startPurchase(input: {
   back: string;
   /** Who asked, for the gift card limit (app/api/gift-cards). */
   ip?: string;
+  /**
+   * Her wallet paying `halalas` of it, as the screen showed. Signed in only: the
+   * caller passes her session's customer and email, never the request's. Worked
+   * out again here, under the wallet's lock, and refused if it differs.
+   */
+  wallet?: { customerId: string; email: string; halalas: number };
   simulate?: "decline";
 }): Promise<PurchaseResult> {
+  const walletHalalas = input.wallet?.halalas ?? 0;
+  if (walletHalalas > 0 && !(await walletLaunched())) return { ok: false, error: "wallet-unavailable" };
+  // What the card is asked for: the rest, after her credit.
+  const cardHalalas = input.amountHalalas - walletHalalas;
+
   // The same purchase already has a live checkout: Pay pressed again, a reload,
   // Back. Resumed, not doubled — a second link is a second way to pay for one
   // thing. Paid meanwhile, it is delivered and shown; only one that is over
@@ -127,22 +163,47 @@ export async function startPurchase(input: {
   const driver = getDriver();
   const ref = randomUUID();
 
-  await db.insert(payments).values({
-    provider: driver.name,
-    providerRef: ref,
-    method: "card",
-    amountHalalas: input.amountHalalas,
-    status: "pending",
-    raw: { intent: input.intent, ...(input.ip ? { ip: input.ip } : {}) },
-  });
+  // The pending payment and her credit's spend are one write, under the wallet's
+  // lock: two purchases at once cannot both spend one balance, and a checkout
+  // that never opens leaves no spend behind.
+  try {
+    await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(payments)
+        .values({
+          provider: driver.name,
+          providerRef: ref,
+          method: "card",
+          amountHalalas: cardHalalas,
+          status: "pending",
+          raw: { intent: input.intent, ...(input.ip ? { ip: input.ip } : {}) },
+        })
+        .returning({ id: payments.id });
+      if (!input.wallet || walletHalalas <= 0) return;
+      const { available } = await lockedBalance(tx, input.wallet.email);
+      if (walletCovers(input.amountHalalas, available) !== walletHalalas) throw new WalletChanged(available);
+      const spent = await spendWallet(tx, input.wallet.customerId, input.wallet.email, walletHalalas, { paymentId: row.id });
+      if (!spent) throw new WalletChanged(available);
+    });
+  } catch (err) {
+    if (err instanceof WalletChanged) return { ok: false, error: "wallet-changed", walletBalance: err.available };
+    throw err;
+  }
+
+  // Her credit covers it all: nothing for a gateway to take, so none is asked,
+  // the same as a zero bill at the booking checkout.
+  if (cardHalalas === 0) {
+    return settlePurchase(ref, { status: "paid", amountHalalas: 0, method: "card", raw: { free: true, reason: "wallet" } });
+  }
 
   let charge;
   try {
     charge = await driver.charge({
       ref,
-      amountHalalas: input.amountHalalas,
+      amountHalalas: cardHalalas,
       lines: input.lines,
-      discounts: [],
+      // Her credit, as a coupon off the full price, so StreamPay's invoice shows it.
+      discounts: walletHalalas > 0 ? [{ label: "Wallet credit", halalas: walletHalalas }] : [],
       title: input.title,
       payer: input.payer,
       expiresAt: new Date(Date.now() + PAY_WINDOW_MIN * 60_000),
@@ -166,7 +227,7 @@ export async function startPurchase(input: {
   }
   return settlePurchase(ref, {
     status: "paid",
-    amountHalalas: input.amountHalalas,
+    amountHalalas: cardHalalas,
     method: "card",
     raw: (charge.raw ?? {}) as Record<string, unknown>,
   });
@@ -246,10 +307,19 @@ export async function settlePurchase(ref: string, known?: Verdict): Promise<Purc
     return { ok: false, error: "not-delivered" };
   }
 
+  // Written off earlier and found paid now (revivePayment): the credit it spent
+  // was given back then, so it is taken again before anything is handed over.
+  // Spent meanwhile, the purchase is not hers: the card's part goes back.
+  if (!(await reSpendReleased(row.id))) {
+    const back = row.amountHalalas > 0 ? (await refundRef(ref, "late-payment")).ok : true;
+    console.error(`[purchase] ${ref}: paid after its credit was spent elsewhere; not delivered, ${back ? "refunded" : "refund to retry"}`);
+    return { ok: false, error: "not-delivered" };
+  }
+
   const delivered = await deliverOnce(row.id, intent, row.amountHalalas, paidLate(row));
 
   if (!delivered) {
-    const back = row.amountHalalas > 0 ? await refundOrCredit(ref, row.amountHalalas, intent) : true;
+    const back = await refundOrCredit(ref, row.amountHalalas, intent);
     console.error(`[purchase] ${ref}: ${back ? "refunded or owed as credit" : "REFUND OWED — settle by hand"}`);
     return { ok: false, error: "not-delivered" };
   }
@@ -268,6 +338,21 @@ export const CHAIR_CREDIT_MAX_HALALAS = 1000;
  * True when it is settled one way or the other.
  */
 export async function refundOrCredit(ref: string, amountHalalas: number, intent: Intent): Promise<boolean> {
+  // What her wallet paid goes back to her wallet, whatever becomes of the card's
+  // part. Paid by credit alone, there is no card part: recorded as refunded,
+  // since no gateway can refund a charge of nothing (refundPaid refuses one).
+  await db.transaction(async (tx) => {
+    const rows = await tx.select({ id: payments.id }).from(payments).where(eq(payments.providerRef, ref));
+    await releasePaymentSpends(tx, rows.map((r) => r.id));
+    if (amountHalalas === 0) {
+      await tx
+        .update(payments)
+        .set({ status: "refunded", updatedAt: new Date() })
+        .where(and(eq(payments.providerRef, ref), eq(payments.status, "paid")));
+    }
+  });
+  if (amountHalalas === 0) return true;
+
   if (intent.kind === "treat" && amountHalalas <= CHAIR_CREDIT_MAX_HALALAS) {
     // Marked `owedCredit` either way, which is what tells the settle job it is
     // handled. Once the wallet is live the credit is written with the mark;
@@ -324,7 +409,8 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number,
   if (intent.kind === "gift_card") {
     const card = await issueGiftCard({
       paymentId,
-      amountHalalas,
+      // The card's value, not what the card paid: her credit may have paid part.
+      amountHalalas: intent.amountSar * 100,
       designId: intent.designId,
       buyerName: intent.buyerName,
       buyerEmail: intent.buyerEmail,
@@ -443,10 +529,15 @@ async function deliveredOf(row: typeof payments.$inferSelect, intent: Intent): P
 }
 
 async function markFailed(ref: string) {
-  await db
-    .update(payments)
-    .set({ status: "failed", updatedAt: new Date() })
-    .where(and(eq(payments.providerRef, ref), eq(payments.status, "pending")));
+  // Declined or abandoned: her credit comes back in the same write.
+  await db.transaction(async (tx) => {
+    const failed = await tx
+      .update(payments)
+      .set({ status: "failed", updatedAt: new Date() })
+      .where(and(eq(payments.providerRef, ref), eq(payments.status, "pending")))
+      .returning({ id: payments.id });
+    await releasePaymentSpends(tx, failed.map((r) => r.id));
+  });
 }
 
 async function saveCheckout(ref: string, raw: unknown) {

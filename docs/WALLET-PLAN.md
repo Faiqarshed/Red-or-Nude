@@ -156,13 +156,15 @@ Examples:
   - **A card's leftover.** A guest's spend is tagged with her card (`gift_card_id`), and its release carries the tag back, so typing the code again with the same email brings what is left of that card: after going back to change her service, or on her next visit. Never more than that, so a used card's code and email reach nothing else on that email. Once an account exists for the email, its credit is spent signed in, untagged, so a guest typing the code is told to sign in (`gift-card-claimed`). Any other refusal reads the same (`gift-card-invalid`), and no email is shown.
 - **Preview. Built:** `/api/wallet/quote`. GET: live or not, and her balance when signed in. POST `{ code, email }`: what a card brings, without claiming; signed in, the email is always her account's. Throttled per IP like the promo route.
 - **UI. Built:** a "Wallet and gift cards" panel on `app/(site)/booking/payment/page.tsx`, shown only once live: a "Use my credit (X SAR)" switch when signed in, and a gift card field. A "Wallet credit" line in the summary, and `payableTotal` after it. Choices kept across a reload for display; the hold is worked out again server side.
-- **Purchases** (`startPurchase`, `lib/payments/purchase.ts:88`):
-  - takes `wallet?: { customerId, halalas }`, **signed-in only**; the pending payment insert and `spendWallet` run in **one transaction**;
-  - passes `discounts: [{ label: "Wallet credit", halalas }]`;
-  - adds a zero-bill path.
-  - Routes: the membership/pack route, the chair treat route (QR alone is not identity), and `app/api/gift-cards` (the client allows credit there). A gift card code is not taken on the gift card route: a card doesn't buy a card.
-- **Revive** (`revivePayment`, `lib/payments/settle.ts:74`): before a revived payment confirms or delivers, its released spend is taken again through `spendWallet(..., { reSpendOf })`. If the balance no longer covers it, nothing is confirmed or delivered, and the card part is refunded under the late-payment rule.
-- **Purchase pages (step 5):** the same switch on the membership, chair and gift card pay pages. All of it hidden until `wallet_launched_at` is set.
+- **Purchases. Built (step 5)** (`startPurchase`, `lib/payments/purchase.ts`):
+  - takes `wallet?: { customerId, email, halalas }`, **signed-in only**: every route passes her session's customer and email, never the request's (the chair QR proves presence, not who). The pending payment and `spendWallet` are one transaction under the wallet's lock; `walletCovers` is worked out again there and a difference is refused (`wallet-changed`, with her real figure), which also keeps the card's part at 1 SAR or more;
+  - the card is asked for the rest, with `discounts: [{ label: "Wallet credit", halalas }]` off the full price;
+  - a purchase the credit covers never reaches StreamPay: it settles on the spot as a zero payment (gap 6);
+  - `markFailed` (declined, abandoned) gives the credit back in the same write; `refundOrCredit` (paid, not delivered, at checkout or by the daily job) gives it back too, and a zero card part is marked `refunded` without StreamPay (gap 7);
+  - a gift card is issued for its full value, not for what the card paid;
+  - routes: `app/api/packs`, `app/api/gift-cards` (the client allows credit there) and `app/api/station/treat`. A gift card code is not taken on the gift card route: a card doesn't buy a card.
+- **Revive. Built:** before a written-off payment that turns up paid is delivered (`settlePurchase`), `reSpendReleased` takes its released credit again (`reSpendOf`). She no longer has it: nothing is delivered, and the card's part is refunded as a late payment. A booking's credit is never released while its hold stands, so only purchases need this.
+- **Purchase pages. Built (step 5):** the same switch (`components/WalletCredit.tsx`, one hook for the three) on the membership, gift card and chair pages, with what is left to pay; a purchase the credit covers shows no card form. All of it hidden until `wallet_launched_at` is set.
 
 ### Cancellation
 - **Customer** (`app/api/my-bookings/cancel/route.ts`), **built (step 2c):** after launch, `creditCancelled(..., "cancel-customer")` replaces `refundBookings`, in one transaction with the guarded status update and the pack credit return. Before launch the old path runs unchanged. Copy in `lib/dictionary.ts` (`cancelConfirm`, `cancelConfirmGroup`, `cancelled`, `cancelledNoRefund`) changes from "back to your card" to "to your wallet". **Built (step 2d):** the `*Wallet` strings show when `BookingSummary.cancelToWallet` is true, which the server sets from `wallet_launched_at`. Until then the card refund and its copy stay.
@@ -225,7 +227,7 @@ One commit per step, docs in the same commit. Nothing reaches customers until st
 2. **Built**, except what is held (see Launch blockers). Cancellation: customer, and salon (switched off; one transaction, guarded status, reason, no un-cancel), no-show points, the cancel email. Behind `wallet_launched_at`. A group cancels as one (the client): there is no dropping guests.
 3. **Built.** Account screen: the wallet card and its history.
 4. **Built.** Booking checkout: gift card and wallet, quote route, UI.
-5. Purchase checkouts: `startPurchase` wallet in one transaction and zero path, two routes, releases, revive re-spend, UI.
+5. **Built.** Purchase checkouts: `startPurchase` wallet in one transaction and zero path, three routes, releases, revive re-spend, UI.
 6. Gift cards: required recipient email, the email lock, delivery claim, `createAccount` claim/merge, inline image, emails.
 7. **Built:** `reverseCredit` in `refundedOutside`, and chair credit after launch. Left for launch: converting `owedCredit` marks made before it. The gift card case of `reverseCredit` waits for step 6.
 8. "Needs your decision" page, owner correction (**built**), and changing a gift card's email.

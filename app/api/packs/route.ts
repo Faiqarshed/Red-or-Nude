@@ -22,6 +22,8 @@ export const maxDuration = 60;
 
 const body = z.object({
   packId: z.string().uuid(),
+  /** What her wallet credit pays, as the screen showed. Worked out again, and refused if it differs. */
+  walletHalalas: z.number().int().nonnegative().max(100_000_000).optional(),
   /** Dev-only, to exercise the decline path. Stripped in production. */
   simulate: z.literal("decline").optional(),
 });
@@ -57,14 +59,18 @@ export async function POST(request: Request) {
     title: "Membership",
     payer: { name: customer.name, phone: customer.phone, email: customer.email, customerId: customer.id },
     back: `/memberships/payment?pack=${pack.id}`,
+    wallet: d.walletHalalas ? { customerId: customer.id, email: customer.email, halalas: d.walletHalalas } : undefined,
     simulate: d.simulate,
   });
 
+  if (!result.ok && result.error === "wallet-changed") {
+    return NextResponse.json({ error: result.error, walletBalance: result.walletBalance }, { status: 409 });
+  }
   if (!result.ok) {
     // `not-delivered` is paid-and-refunded; kept as its own code because the
     // screen must not offer a retry that reads like nothing happened.
     const error = result.error === "not-delivered" ? "paid-not-granted" : result.error;
-    const status = result.error === "payment-declined" ? 402 : 500;
+    const status = result.error === "payment-declined" ? 402 : result.error === "wallet-unavailable" ? 400 : 500;
     return NextResponse.json({ error }, { status });
   }
   if ("checkout" in result) return NextResponse.json({ checkout: result.checkout });

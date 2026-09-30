@@ -955,6 +955,38 @@ const mutations = [
     expect: "tests/wallet-checkout.test.ts",
     apply: () => mutate(WALLET, "inArray(walletTxns.reason, [\"spend\", \"release\"])));\n    const left", "eq(walletTxns.reason, \"spend\")));\n    const left"),
   },
+
+  // ---- credit on a purchase -------------------------------------------------
+  {
+    name: "purchase: charge what the balance allows, not what the screen showed",
+    expect: "tests/wallet-purchase.test.ts",
+    apply: () => mutate(PURCHASE, "      if (walletCovers(input.amountHalalas, available) !== walletHalalas) throw new WalletChanged(available);\n", ""),
+  },
+  {
+    name: "purchase: keep the credit of a declined checkout",
+    expect: "tests/wallet-purchase.test.ts",
+    apply: () => mutate(PURCHASE, "    await releasePaymentSpends(tx, failed.map((r) => r.id));\n", ""),
+  },
+  {
+    name: "purchase: keep the credit of a purchase never delivered",
+    expect: "tests/wallet-purchase.test.ts",
+    apply: () => mutate(PURCHASE, "    await releasePaymentSpends(tx, rows.map((r) => r.id));\n", ""),
+  },
+  {
+    name: "purchase: deliver a revived payment whose credit was spent elsewhere",
+    expect: "tests/wallet-purchase.test.ts",
+    apply: () => mutate(PURCHASE, "  if (!(await reSpendReleased(row.id))) {", "  if (false) {"),
+  },
+  {
+    name: "purchase: issue a gift card for only what the card paid",
+    expect: "tests/wallet-purchase.test.ts",
+    apply: () => mutate(PURCHASE, "      amountHalalas: intent.amountSar * 100,", "      amountHalalas,"),
+  },
+  {
+    name: "purchase: send a purchase credit covers to StreamPay",
+    expect: "tests/wallet-purchase.test.ts",
+    apply: () => mutate(PURCHASE, "  if (cardHalalas === 0) {", "  if (false) {"),
+  },
 ];
 
 const touched = [

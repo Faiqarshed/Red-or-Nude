@@ -23,6 +23,8 @@ import { pick } from "@/lib/localized";
 import { showPaidOn } from "@/lib/paid-handoff";
 import type { PublicPack } from "@/lib/catalog";
 import PackLines from "../PackLines";
+import { useWalletCredit } from "@/components/WalletCredit";
+import { formatSAR } from "@/lib/money";
 
 export default function MembershipPaymentView({
   pack,
@@ -39,6 +41,10 @@ export default function MembershipPaymentView({
   const k = c.packs;
 
   const [submitting, setSubmitting] = useState(false);
+  /** Her wallet credit, if she switches it on: what it pays, and the rest for the card. */
+  const priceHalalas = Math.round(pack.priceSar * 100);
+  const credit = useWalletCredit(priceHalalas);
+  const toPayHalalas = priceHalalas - credit.halalas;
   const [error, setError] = useState<string | null>(null);
   const [checkout, setCheckout] = useState<{ ref: string; url: string } | null>(null);
   /**
@@ -83,13 +89,17 @@ export default function MembershipPaymentView({
       const res = await fetch("/api/packs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ packId: pack.id }),
+        body: JSON.stringify({ packId: pack.id, walletHalalas: credit.halalas || undefined }),
       });
 
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.checkout) setCheckout(data.checkout);
       else if (res.ok) bought();
-      else showError(data.error);
+      // Her credit moved since this page showed it: nothing was charged.
+      else if (data.error === "wallet-changed") {
+        credit.refused(data.walletBalance);
+        setError(p.walletChanged);
+      } else showError(data.error);
     } catch {
       setError(k.failed);
     } finally {
@@ -178,7 +188,26 @@ export default function MembershipPaymentView({
             </div>
           ) : (
             <>
-              <PaymentMethods checkout={checkout} onDone={onPaid} />
+              {credit.toggle && (
+                <div className="mb-4 space-y-2">
+                  {credit.toggle}
+                  {credit.halalas > 0 && (
+                    <p className="flex items-center justify-between px-1 text-[13px] font-semibold text-ink">
+                      <span>{p.toPayNow}</span>
+                      <span className="flex items-center gap-1">
+                        <Riyal className="h-3.5 w-3.5" />
+                        {formatSAR(toPayHalalas)}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              )}
+              {/* Credit that covers it all leaves nothing for a card. */}
+              {toPayHalalas > 0 ? (
+                <PaymentMethods checkout={checkout} onDone={onPaid} />
+              ) : (
+                <p className="rounded-[14px] bg-cream/70 p-4 text-sm font-semibold text-ink/70">{p.nothingLeft}</p>
+              )}
 
               {error && (
                 <p
