@@ -267,18 +267,57 @@ describe("settling a payment", () => {
       .set({ status: "cancelled", cancelReason: "payment-timeout" })
       .where(inArray(bookings.id, members.map((m) => m.id)));
 
+    // Charged and refunded, not "expired": the page must not tell her nothing was charged.
     const res = await settleBookingPayment(ref, paidVerdict(held.totalHalalas));
-    expect(res.ok ? "" : res.error).toBe("expired");
+    expect(res.ok ? "" : res.error).toBe("not-delivered");
 
     const rows = await db.select().from(payments).where(eq(payments.providerRef, ref));
     expect(rows.every((r) => r.status === "refunded")).toBe(true);
     const back = await db.select().from(refunds).where(inArray(refunds.paymentId, rows.map((r) => r.id)));
     expect(back.reduce((s, r) => s + r.amountHalalas, 0)).toBe(held.totalHalalas);
 
-    // And a second arrival — the webhook retrying — refunds nothing more.
-    await settleBookingPayment(ref, paidVerdict(held.totalHalalas));
+    // And a second arrival — the webhook retrying, or her page polling after the
+    // webhook refunded — refunds nothing more and says the same.
+    const later = await settleBookingPayment(ref, paidVerdict(held.totalHalalas));
+    expect(later.ok ? "" : later.error).toBe("not-delivered");
     const again = await db.select().from(refunds).where(inArray(refunds.paymentId, rows.map((r) => r.id)));
     expect(again).toHaveLength(back.length);
+  });
+
+  it("says she was charged while her late payment's refund is still to be retried", async () => {
+    const { held, members } = await holdDiscountedPair();
+    const ref = await pendingAttempt(members);
+    await db
+      .update(bookings)
+      .set({ status: "cancelled", cancelReason: "payment-timeout" })
+      .where(inArray(bookings.id, members.map((m) => m.id)));
+    vi.spyOn(fakeDriver, "refund").mockRejectedValue(new Error("gateway down"));
+
+    try {
+      const res = await settleBookingPayment(ref, paidVerdict(held.totalHalalas));
+      expect(res.ok ? "" : res.error).toBe("not-delivered");
+    } finally {
+      vi.restoreAllMocks();
+    }
+
+    // Paid, no ticket, refund owed: her next poll lands on the stored row.
+    const rows = await db.select().from(payments).where(eq(payments.providerRef, ref));
+    expect(rows.every((r) => r.status === "paid")).toBe(true);
+    const later = await settleBookingPayment(ref);
+    expect(later.ok ? "" : later.error).toBe("not-delivered");
+  });
+
+  it("still says nothing was charged when a swept hold was never paid", async () => {
+    const { members } = await holdDiscountedPair();
+    const ref = await pendingAttempt(members);
+    await db
+      .update(bookings)
+      .set({ status: "cancelled", cancelReason: "payment-timeout" })
+      .where(inArray(bookings.id, members.map((m) => m.id)));
+    await db.update(payments).set({ status: "failed" }).where(eq(payments.providerRef, ref));
+
+    const res = await settleBookingPayment(ref);
+    expect(res.ok ? "" : res.error).toBe("payment-declined");
   });
 
   it("will not confirm on a payment for a different amount", async () => {
@@ -286,7 +325,7 @@ describe("settling a payment", () => {
     const ref = await pendingAttempt(members);
 
     const res = await settleBookingPayment(ref, paidVerdict(held.totalHalalas - 100));
-    expect(res.ok).toBe(false);
+    expect(res.ok ? "" : res.error).toBe("not-delivered");
 
     const rows = await db.select().from(bookings).where(inArray(bookings.id, members.map((m) => m.id)));
     expect(rows.every((r) => r.status === "pending" && r.ticketNo === null)).toBe(true);

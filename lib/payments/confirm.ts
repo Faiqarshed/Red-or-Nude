@@ -60,8 +60,18 @@ export type ConfirmedTicket = {
 /**
  * `unverified`: StreamPay did not answer "was it paid?". Nothing is known, so
  * nothing is changed — it reads as still pending, and the next check asks again.
+ * `not-delivered`: she was charged and there is no booking to give for it (a late
+ * payment, a wrong amount), so it is refunded — the same code as a purchase's.
+ * Never `expired`, which the page reads as "nothing was charged".
  */
-export type ConfirmError = "not-found" | "expired" | "in-progress" | "payment-declined" | "failed" | "unverified";
+export type ConfirmError =
+  | "not-found"
+  | "expired"
+  | "in-progress"
+  | "payment-declined"
+  | "failed"
+  | "unverified"
+  | "not-delivered";
 
 export type ConfirmResult =
   | { ok: true; tickets: ConfirmedTicket[]; totalHalalas: number }
@@ -330,9 +340,11 @@ export async function settleBookingPayment(ref: string, known?: Verdict): Promis
   // Somebody else got here first. Tickets if it confirmed, otherwise whatever
   // became of it — a late payment refunded, a declined card.
   if (rows.every((r) => r.status === "paid")) {
-    return members.every((m) => m.ticketNo)
-      ? { ok: true, tickets: await ticketsOf(members), totalHalalas: sum(members) }
-      : { ok: false, error: "expired" };
+    // Paid with no tickets is a late payment whose refund is still to be retried.
+    if (members.every((m) => m.ticketNo)) {
+      return { ok: true, tickets: await ticketsOf(members), totalHalalas: sum(members) };
+    }
+    return { ok: false, error: rows.some((r) => r.amountHalalas > 0) ? "not-delivered" : "expired" };
   }
   if (rows.some((r) => r.status !== "pending")) {
     // Confirmed by another payment for the same booking (a late one, revived,
@@ -340,6 +352,7 @@ export async function settleBookingPayment(ref: string, known?: Verdict): Promis
     if (members.every((m) => m.ticketNo && m.status !== "cancelled" && m.status !== "no_show")) {
       return { ok: true, tickets: await ticketsOf(members), totalHalalas: sum(members) };
     }
+    if (rows.some((r) => r.status === "refunded")) return { ok: false, error: "not-delivered" };
     return { ok: false, error: rows.some((r) => r.status === "failed") ? "payment-declined" : "expired" };
   }
 
@@ -455,7 +468,8 @@ export async function settleBookingPayment(ref: string, known?: Verdict): Promis
       const back = await refundRef(ref, wrongAmount ? "wrong-amount" : "late-payment");
       console.error(`[payments] ${ref} paid ${verdict.amountHalalas} but not confirmed (${why}); ${back.ok ? "refunded" : "refund to retry"}`);
     }
-    return { ok: false, error: "expired" };
+    // Whoever claimed the rows owes the refund; either way she was charged.
+    return { ok: false, error: verdict.amountHalalas > 0 ? "not-delivered" : "expired" };
   }
 
   const anchor = members[0];

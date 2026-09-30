@@ -119,7 +119,10 @@ on the spot.
 
 **Late payment.** The hold sweeper spares a booking with a checkout younger than
 `PAY_WINDOW_MIN`. If money still arrives for a hold that is gone, settle refunds it
-in full automatically and logs `late payment auto-refunded`.
+in full automatically and logs `late payment auto-refunded`. Every later arrival for
+it (her page polling, the webhook retrying) answers `not-delivered`, and the checkout
+says her payment is being refunded — never "nothing was charged", which is what
+`expired` shows.
 
 **Refunds** go through `POST /payments/{payment_id}/refund`; the StreamPay
 payment id is kept on `payments.raw.paymentId` when the payment settles. Every

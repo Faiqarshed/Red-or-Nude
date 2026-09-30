@@ -227,6 +227,9 @@ const ar = {
     declined: "لم تتم عملية الدفع. حاولي مرة أخرى أو استخدمي بطاقة أخرى.",
     checkingPayment: "جارٍ التحقق من الدفع…",
     expired: "انتهت مهلة الحجز المؤقت. اختاري الموعد مرة أخرى من صفحة الحجز.",
+    refundedTitle: "يتم استرداد مبلغك",
+    refunded:
+      "لم نتمكن من تأكيد حجزك في الوقت المحدد، لذلك يتم استرداد مبلغك بالكامل. يصل عادةً إلى بطاقتك خلال ٥–١٤ يوم عمل حسب البنك. اختاري الموعد مرة أخرى من صفحة الحجز.",
     payFirstNote: "لا يتم تأكيد الحجز إلا بعد إتمام الدفع.",
     subtotal: "المجموع قبل الخصم",
     groupDiscount: "خصم الحجز الجماعي ١٠٪",
@@ -823,6 +826,9 @@ const en: Content = {
     declined: "Payment didn't go through. Try again or use another card.",
     checkingPayment: "Checking your payment…",
     expired: "Your held slot has expired. Please pick a time again from the booking page.",
+    refundedTitle: "Your payment is being refunded",
+    refunded:
+      "We couldn't confirm your booking in time, so your payment is being refunded in full. It usually reaches your card within 5–14 working days, depending on your bank. Please pick a time again from the booking page.",
     payFirstNote: "Your booking is confirmed only once payment completes.",
     subtotal: "Subtotal",
     groupDiscount: "Group discount 10%",

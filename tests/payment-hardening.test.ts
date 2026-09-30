@@ -465,6 +465,84 @@ describe("#4 her chair is not given away while her payment is in", () => {
   });
 });
 
+// The orderings the sandbox showed can happen (2026-09-30): StreamPay finishes a
+// payment already at the bank even after its link is switched off, so money can
+// land on a hold we let go. Each must end in exactly one full refund, and every
+// later arrival must tell her page she was charged (`not-delivered`).
+describe("races around a hold let go while she was at her bank", () => {
+  const refundsOf = async (ref: string) =>
+    db.select().from(refunds).where(inArray(refunds.paymentId, (await rowsOf(ref)).map((r) => r.id)));
+
+  async function expectOneFullRefund(ref: string, bookingId: string, totalHalalas: number) {
+    const back = await refundsOf(ref);
+    expect(back.map((r) => [r.reason, r.amountHalalas])).toEqual([["late-payment", totalHalalas]]);
+    expect((await rowsOf(ref)).every((r) => r.status === "refunded")).toBe(true);
+    const after = await bookingOf(bookingId);
+    expect([after.status, after.ticketNo]).toEqual(["cancelled", null]);
+  }
+
+  it("a poll writes the payment off, her page lets the hold go, then the money lands", async () => {
+    const { booking, ref } = await heldWithCheckout();
+    // The poll finds the link switched off before StreamPay records her payment.
+    vi.spyOn(fakeDriver, "verify").mockResolvedValue({ status: "failed" });
+    expect(await settlePayment(ref)).toEqual({ status: "failed", error: "payment-declined" });
+    // Leaving for the bank's page, her page asks to let the hold go: nothing is in flight now.
+    expect(await releaseWebHold(booking.code, "hardening@example.com")).toBe(true);
+
+    // The bank finishes. The webhook revives the written-off payment...
+    vi.spyOn(fakeDriver, "verify").mockResolvedValue(paid(booking.totalHalalas));
+    expect(await revivePayment(ref)).toBe(true);
+    // ...and her page, still polling, is told she was charged.
+    expect(await settlePayment(ref)).toEqual({ status: "failed", error: "not-delivered" });
+    await expectOneFullRefund(ref, booking.id, booking.totalHalalas);
+  });
+
+  it("the sweep asks while her bank is still processing, lets the chair go, then the money lands", async () => {
+    const { booking, ref } = await heldWithCheckout();
+    await db.update(bookings).set({ createdAt: ago(20) }).where(eq(bookings.id, booking.id));
+    await db.update(payments).set({ createdAt: ago(12) }).where(eq(payments.providerRef, ref));
+    vi.spyOn(fakeDriver, "verify").mockResolvedValue({ status: "pending" });
+
+    // Someone else books at the branch: the sweep asks StreamPay, hears
+    // "processing", and lets the lapsed hold go all the same.
+    const other = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE + 4 * 3_600_000).toISOString(),
+      customer: { phone: "0500000095" },
+      source: "web",
+      status: "pending",
+      members: [{ serviceId: f.svcB.id, addonIds: [] }],
+    });
+    expect(other.ok).toBe(true);
+    expect((await bookingOf(booking.id)).status).toBe("cancelled");
+
+    // Paid a moment later. The webhook: nothing to revive (never written off), then settle.
+    vi.spyOn(fakeDriver, "verify").mockResolvedValue(paid(booking.totalHalalas));
+    expect(await revivePayment(ref)).toBe(false);
+    expect(await settlePayment(ref)).toEqual({ status: "failed", error: "not-delivered" });
+    await expectOneFullRefund(ref, booking.id, booking.totalHalalas);
+  });
+
+  it("the webhook, the return page and a poll all arrive at once for money on a released hold", async () => {
+    const { booking, ref } = await heldWithCheckout();
+    await db.update(bookings).set({ status: "cancelled", cancelReason: "payment-timeout" }).where(eq(bookings.id, booking.id));
+    vi.spyOn(fakeDriver, "verify").mockResolvedValue(paid(booking.totalHalalas));
+    // A slow gateway: the first refund is still on its way while the other two
+    // arrive, which is exactly when a second refund could be sent.
+    const refund = vi.spyOn(fakeDriver, "refund").mockImplementation(async (input) => {
+      await new Promise((r) => setTimeout(r, 300));
+      return { status: "refunded", raw: { driver: "fake", refundedHalalas: input.amountHalalas } };
+    });
+
+    const answers = await Promise.all([settlePayment(ref), settlePayment(ref), settlePayment(ref)]);
+
+    expect(answers).toEqual(Array(3).fill({ status: "failed", error: "not-delivered" }));
+    // One refund sent to StreamPay, one recorded: never her money back twice.
+    expect(refund).toHaveBeenCalledTimes(1);
+    await expectOneFullRefund(ref, booking.id, booking.totalHalalas);
+  });
+});
+
 describe("H1 a lapsed hold frees its slot", () => {
   it("shows the chair free once the hold has lapsed with no checkout open", async () => {
     const held = await createBookings({

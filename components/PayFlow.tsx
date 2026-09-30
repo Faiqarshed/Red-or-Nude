@@ -178,9 +178,20 @@ export function CheckingModal({ loading = false }: { loading?: boolean }) {
 /**
  * A payment that did not complete, and why. In front of everything, because it
  * is the answer to the one thing she just did; the same words stay above the
- * checkout once this closes.
+ * checkout once this closes. `title` for the one case where she was charged
+ * (and refunded): the default says nothing was.
  */
-export function PayNoticeModal({ message, retry, onClose }: { message: string; retry: boolean; onClose: () => void }) {
+export function PayNoticeModal({
+  message,
+  retry,
+  onClose,
+  title,
+}: {
+  message: string;
+  retry: boolean;
+  onClose: () => void;
+  title?: string;
+}) {
   const { c } = useI18n();
   const p = c.payment;
   useEffect(() => {
@@ -209,7 +220,7 @@ export function PayNoticeModal({ message, retry, onClose }: { message: string; r
           !
         </span>
         <h3 id="pay-notice-title" className="font-display text-xl font-extrabold text-ink">
-          {p.payFailedTitle}
+          {title ?? p.payFailedTitle}
         </h3>
         <p id="pay-notice-body" className="mt-3 text-sm leading-relaxed text-ink/65">
           {message}

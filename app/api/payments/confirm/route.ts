@@ -33,6 +33,9 @@ const STATUS = {
   // waiting out rather than starting again.
   "in-progress": 409,
   "payment-declined": 402,
+  // Charged after the hold was gone, and refunded: gone like `expired`, but the
+  // page must not say nothing was charged.
+  "not-delivered": 409,
   failed: 500,
   // StreamPay did not answer: she may well have paid. The page says "don't pay again".
   unverified: 503,

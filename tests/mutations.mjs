@@ -610,6 +610,34 @@ const mutations = [
         "    active: row.active && !(row.endsAt && row.endsAt < now),",
       ),
   },
+
+  // ---- a late payment says it was refunded, not "nothing was charged" --------
+  {
+    name: "late payment: call it expired on the arrival that refunds it",
+    expect: "tests/streampay.test.ts",
+    apply: () =>
+      mutate(
+        CONFIRM,
+        '    return { ok: false, error: verdict.amountHalalas > 0 ? "not-delivered" : "expired" };',
+        '    return { ok: false, error: "expired" };',
+      ),
+  },
+  {
+    name: "late payment: call it expired once the webhook has refunded it",
+    expect: "tests/streampay.test.ts",
+    apply: () =>
+      mutate(CONFIRM, '    if (rows.some((r) => r.status === "refunded")) return { ok: false, error: "not-delivered" };\n', ""),
+  },
+  {
+    name: "late payment: call it expired while its refund waits to be retried",
+    expect: "tests/streampay.test.ts",
+    apply: () =>
+      mutate(
+        CONFIRM,
+        '    return { ok: false, error: rows.some((r) => r.amountHalalas > 0) ? "not-delivered" : "expired" };',
+        '    return { ok: false, error: "expired" };',
+      ),
+  },
 ];
 
 const touched = [

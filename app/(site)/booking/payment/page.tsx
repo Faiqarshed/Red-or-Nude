@@ -62,11 +62,14 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
    * closes, above the checkout, so the reason is still there when she retries.
    */
   const [payNotice, setPayNotice] = useState<string | null>(null);
+  /** Set only when she was charged and refunded; otherwise the modal says nothing was. */
+  const [noticeTitle, setNoticeTitle] = useState<string | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
   /** Back on a checkout she had open (a reload): said calmly above it, never as a failure. */
   const [resumed, setResumed] = useState(false);
-  const notifyPay = (message: string) => {
+  const notifyPay = (message: string, title: string | null = null) => {
     setPayNotice(message);
+    setNoticeTitle(title);
     setNoticeOpen(true);
   };
   /** Set once the hold exists, so a retry after a decline doesn't re-book. */
@@ -618,6 +621,10 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       // The hold is gone; a retry would confirm nothing, so send them back.
       setHeldCode(null);
       notifyPay(p.expired);
+    } else if (code === "not-delivered") {
+      // Charged after the hold was gone (or the wrong amount), and refunded.
+      setHeldCode(null);
+      notifyPay(p.refunded, p.refundedTitle);
     } else if (code === "unconfirmed" || code === "in-progress" || code === "unverified") notifyPay(p.unconfirmed);
     else notifyPay(p.bookingFailed);
   };
@@ -1322,7 +1329,12 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
           details in, and any payment she had going found. */}
       {(checkingPayment || resuming) ? <CheckingModal /> : (!loaded || !accountChecked || reopening) && <CheckingModal loading />}
       {noticeOpen && payNotice && !checkingPayment && !reopening && (
-        <PayNoticeModal message={payNotice} retry={paying} onClose={() => setNoticeOpen(false)} />
+        <PayNoticeModal
+          message={payNotice}
+          title={noticeTitle ?? undefined}
+          retry={paying}
+          onClose={() => setNoticeOpen(false)}
+        />
       )}
     </main>
   );
