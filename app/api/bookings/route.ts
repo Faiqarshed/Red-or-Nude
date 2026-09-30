@@ -73,6 +73,14 @@ const body = z.object({
    */
   redeemPoints: z.number().int().positive().nullable().optional(),
   /**
+   * What wallet credit the screen showed paying, in halalas. A preview: worked
+   * out again in createBookings, under the wallet's lock, and refused if it
+   * differs. Whose wallet is the session's, never this body's.
+   */
+  walletHalalas: z.number().int().nonnegative().max(100_000_000).nullable().optional(),
+  /** A gift card typed at checkout. */
+  giftCardCode: z.string().trim().max(40).nullable().optional(),
+  /**
    * Set only by the station QR flow (brief §2.7), pinning the booking to the
    * chair the customer is already sitting in.
    *
@@ -155,6 +163,8 @@ export async function POST(request: Request) {
     const status =
       result.error === "slot-taken" ||
       result.error === "refill-expired" ||
+      // Her balance moved since the screen showed it: stale, not wrong.
+      result.error === "wallet-changed" ||
       // Same shape again: the credit was hers when the page quoted it and is
       // not any more, so what she is looking at is stale rather than wrong.
       result.error === "pack-credit-gone"
@@ -174,6 +184,8 @@ export async function POST(request: Request) {
         // a stale one can correct itself instead of offering the rung again.
         rewardReason: result.rewardReason,
         pointsBalance: result.pointsBalance,
+        // What credit she can spend now, so the checkout can correct itself.
+        walletBalance: result.walletBalance,
         // Which guest lost her chair, so the checkout can name her instead of
         // refusing a party of four without saying whose time went.
         guestIndex: result.guestIndex,
@@ -187,6 +199,7 @@ export async function POST(request: Request) {
       groupId: result.groupId,
       totalHalalas: result.totalHalalas,
       pointsSpent: result.pointsSpent,
+      walletSpent: result.walletSpent,
       bookings: result.bookings.map((b) => ({ id: b.id, code: b.code })),
     },
     { status: 201 },

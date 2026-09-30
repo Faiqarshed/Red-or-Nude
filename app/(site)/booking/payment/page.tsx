@@ -10,6 +10,7 @@ import { declineMessage, usePaymentReturn, type PaymentOutcome } from "@/compone
 import { CheckingModal, PayNoticeModal, PayStep, Steps } from "@/components/PayFlow";
 import PhoneField from "@/components/PhoneField";
 import { Riyal, Lock } from "@/components/icons";
+import { formatSAR, walletCovers } from "@/lib/money";
 import { useI18n } from "@/lib/i18n";
 import {
   clearBooking,
@@ -110,6 +111,19 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
   const [redeemDiscountSar, setRedeemDiscountSar] = useState(0);
   const [redeemError, setRedeemError] = useState<string | null>(null);
   /**
+   * The wallet (docs/WALLET-PLAN.md): shown only once it is live. Her balance
+   * when signed in, in halalas; a guest spends only a gift card she types, and
+   * only one sent to the email she books with.
+   */
+  const [walletLive, setWalletLive] = useState(false);
+  const [walletAvailable, setWalletAvailable] = useState(0);
+  const [useCredit, setUseCredit] = useState(false);
+  const [giftInput, setGiftInput] = useState("");
+  /** A card the server said brings `halalas` to this checkout. */
+  const [gift, setGift] = useState<{ code: string; halalas: number } | null>(null);
+  const [giftError, setGiftError] = useState<string | null>(null);
+  const [giftChecking, setGiftChecking] = useState(false);
+  /**
    * Checkout upsells taken, as `"<member index>:<add-on id>"` — one guest can
    * take the coffee and another skip it. Nothing new is priced here: the ids go
    * onto that guest's `addonIds` and the server bills them like any add-on.
@@ -179,6 +193,11 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       void applyPromo(saved.promo);
     }
     if (saved.redeemPoints !== null) void pickReward(saved.redeemPoints);
+    if (saved.wallet) {
+      setUseCredit(saved.wallet.use);
+      setGift(saved.wallet.gift);
+      setGiftInput(saved.wallet.gift?.code ?? "");
+    }
     // Once, when the selection has loaded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded]);
@@ -229,6 +248,27 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       });
   }, []);
 
+  // The wallet, once it is live: her balance when signed in. Nothing of it
+  // shows before launch, and a checkout must still work without it.
+  useEffect(() => {
+    void fetch("/api/wallet/quote")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d?.live) return;
+        setWalletLive(true);
+        setWalletAvailable(d.available ?? 0);
+      })
+      .catch(() => {
+        /* an extra; the checkout works without it */
+      });
+  }, []);
+
+  // A gift card works only with the email it was sent to, so a guest who changes
+  // the email takes it off rather than being refused at Pay.
+  useEffect(() => {
+    if (!signedIn) setGift(null);
+  }, [email, signedIn]);
+
   // A direct visit with nothing selected has nothing to pay for.
   // The booking pages save as she goes, so what arrives can be half-picked. The
   // party's time is only filled in once every guest has one of her own.
@@ -269,7 +309,18 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
    * else here would show a number the charge disagrees with. Then the treats,
    * which no discount touches.
    */
-  const payableTotal = booking.total - promoDiscountSar - redeemDiscountSar + treatsTotal;
+  const beforeCredit = booking.total - promoDiscountSar - redeemDiscountSar + treatsTotal;
+
+  /**
+   * Then her credit, last, as lib/bookings.ts takes it, and by the same rule
+   * (walletCovers): all it can, but never leaving the card under 1 SAR. Signed
+   * in, her balance plus a card she typed; a guest, the card alone. Sent with
+   * the booking, which works it out again and refuses if the two differ.
+   */
+  const walletSpendable = signedIn ? (useCredit ? walletAvailable + (gift?.halalas ?? 0) : 0) : (gift?.halalas ?? 0);
+  const walletHalalas = walletLive ? walletCovers(Math.round(beforeCredit * 100), walletSpendable) : 0;
+  const walletSar = walletHalalas / 100;
+  const payableTotal = Math.round((beforeCredit - walletSar) * 100) / 100;
 
   /**
    * What her memberships took off, across the party.
@@ -373,6 +424,41 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
     }
   };
 
+  /**
+   * What a typed gift card brings — display only. The booking claims it, and
+   * only with the email it was sent to: a guest's typed email, or her account's.
+   */
+  const applyGift = async () => {
+    const code = giftInput.trim();
+    if (!code || giftChecking) return;
+    setGiftChecking(true);
+    setGiftError(null);
+    try {
+      const res = await fetch("/api/wallet/quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, email: email.trim() || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 429) {
+        setGiftError(p.giftErrors.tooMany);
+        return;
+      }
+      if (!data.ok) {
+        setGift(null);
+        setGiftError(data.error === "gift-card-claimed" ? p.giftErrors.claimed : p.giftErrors.invalid);
+        return;
+      }
+      setGift({ code, halalas: data.halalas });
+      // Signed in, a card joins her credit, so spending it is spending that.
+      if (signedIn) setUseCredit(true);
+    } catch {
+      setGiftError(p.giftErrors.invalid);
+    } finally {
+      setGiftChecking(false);
+    }
+  };
+
   const clearPromo = () => {
     setPromoApplied(null);
     setPromoDiscountSar(0);
@@ -452,11 +538,12 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       treats,
       promo: promoApplied,
       redeemPoints,
+      wallet: { use: useCredit, gift },
       held: heldCode ? { code: heldCode, email: email.trim() } : null,
     });
     // `email` is read only alongside a new hold; typing does not need a write.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, treats, promoApplied, redeemPoints, heldCode]);
+  }, [loaded, treats, promoApplied, redeemPoints, useCredit, gift, heldCode]);
 
   const confirm = async () => {
     if (!hasSelection || submitting) return;
@@ -509,6 +596,10 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
             // Which rung, not whose points — the server reads that from the
             // session cookie. See app/api/bookings/route.ts.
             redeemPoints,
+            // What the screen shows her credit paying, and the card she typed.
+            // Whose wallet is the session's; the server refuses if it differs.
+            walletHalalas: walletHalalas || null,
+            giftCardCode: gift?.code ?? null,
           }),
         });
 
@@ -540,6 +631,18 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
             setRedeemError(rewardReasonText(data.rewardReason ?? "unknown"));
             if (typeof data.pointsBalance === "number") setBalance(data.pointsBalance);
             setError(p.promoRejected);
+          }
+          // Her credit moved since the screen showed it (another tab spent it):
+          // the hold was refused rather than charged more. Show what is there.
+          else if (data.error === "wallet-changed") {
+            if (signedIn && typeof data.walletBalance === "number") setWalletAvailable(data.walletBalance);
+            else setGift(null);
+            setError(p.walletChanged);
+          }
+          else if (data.error === "gift-card-invalid" || data.error === "gift-card-claimed") {
+            setGift(null);
+            setGiftError(data.error === "gift-card-claimed" ? p.giftErrors.claimed : p.giftErrors.invalid);
+            setError(p.giftRejected);
           }
           // Name her. The party is refused as a whole — that part is right —
           // but with four guests at four hours, "that time has gone" does not
@@ -916,6 +1019,83 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
               </section>
             );
           })()}
+
+          {/* Her wallet and gift cards, once the wallet is live. A way of paying,
+              so beside the others; outside the card-form branch for the same
+              reason the points are: credit that clears the bill hides the card
+              form, and the way to turn it off must not go with it. */}
+          {walletLive && hasSelection && (
+            <section className="rounded-[20px] bg-white p-5 text-start ring-1 ring-black/[0.04]">
+              <p className="font-display text-base font-extrabold text-ink">{p.walletTitle}</p>
+
+              {signedIn && walletAvailable > 0 && (
+                <label className="mt-3 flex cursor-pointer items-center justify-between gap-3 rounded-[12px] border border-black/[0.08] px-3.5 py-3 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-red/30">
+                  <span className="text-[13px] font-semibold text-ink">
+                    {p.walletUse.replace("{sar}", formatSAR(walletAvailable))}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={useCredit}
+                    onChange={(e) => {
+                      setUseCredit(e.target.checked);
+                      // Signed in, a card is part of her credit: off takes it off too.
+                      if (!e.target.checked) setGift(null);
+                    }}
+                    className="h-4 w-4 accent-red"
+                  />
+                </label>
+              )}
+
+              {gift ? (
+                <div className="mt-3 flex items-center justify-between gap-3 rounded-[12px] bg-red/[0.04] px-3.5 py-3 text-[13px]">
+                  <span className="font-semibold text-red">
+                    {p.giftApplied.replace("{sar}", formatSAR(gift.halalas))}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGift(null);
+                      setGiftInput("");
+                    }}
+                    className="shrink-0 text-[12px] font-semibold text-ink/50 hover:text-red"
+                  >
+                    {p.giftRemove}
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-3 flex gap-2">
+                  <input
+                    value={giftInput}
+                    onChange={(e) => setGiftInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void applyGift();
+                      }
+                    }}
+                    placeholder={p.giftPlaceholder}
+                    dir="ltr"
+                    autoCapitalize="characters"
+                    className="min-w-0 flex-1 rounded-[12px] border border-black/[0.08] px-3.5 py-2.5 text-[13px] uppercase tracking-wider text-ink outline-none focus:border-red/40"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void applyGift()}
+                    disabled={!giftInput.trim() || giftChecking}
+                    className="shrink-0 rounded-[12px] border border-red/30 px-4 text-[13px] font-bold text-red transition-colors hover:bg-red/[0.04] disabled:opacity-40"
+                  >
+                    {p.giftApply}
+                  </button>
+                </div>
+              )}
+              {giftError && (
+                <p role="alert" className="mt-1.5 text-[11px] text-red">
+                  {giftError}
+                </p>
+              )}
+              {!signedIn && <p className="mt-2 text-[11px] text-ink/45">{p.giftGuestNote}</p>}
+            </section>
+          )}
         </div>
 
         {/* Summary */}
@@ -1160,7 +1340,8 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
 
               {(booking.total < booking.grossTotal ||
                 promoDiscountSar > 0 ||
-                redeemDiscountSar > 0) && (
+                redeemDiscountSar > 0 ||
+                walletSar > 0) && (
                 <div className="mt-4 space-y-1.5 rounded-[14px] bg-cream/60 p-4 text-[13px]">
                   <div className="flex items-center justify-between text-ink/55">
                     <span className="flex items-center gap-1">
@@ -1209,6 +1390,15 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
                           .replace("{sar}", String(redeemValueSar))
                           .replace("{points}", String(redeemPoints ?? 0))}
                       </span>
+                    </div>
+                  )}
+                  {walletSar > 0 && (
+                    <div className="flex items-center justify-between font-semibold text-red">
+                      <span className="flex items-center gap-1">
+                        −<Riyal className="h-3 w-3" />
+                        {formatSAR(walletHalalas)}
+                      </span>
+                      <span>{p.walletLine}</span>
                     </div>
                   )}
                 </div>

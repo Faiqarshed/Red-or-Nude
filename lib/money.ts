@@ -35,6 +35,18 @@ export function vatIncludedIn(totalHalalas: number, percent = DEFAULT_VAT_PERCEN
 }
 
 /**
+ * What wallet credit pays of a bill: as much as it can, except that what is
+ * left for the card is never under 1 SAR, StreamPay's smallest charge. Either
+ * the credit covers the whole bill (a zero bill never reaches StreamPay) or it
+ * leaves at least 1 SAR. One rule, for the checkout's preview and the charge.
+ */
+export function walletCovers(billHalalas: number, availableHalalas: number): number {
+  const spend = Math.max(0, Math.min(billHalalas, availableHalalas));
+  const left = billHalalas - spend;
+  return left > 0 && left < HALALAS_PER_SAR ? Math.max(0, billHalalas - HALALAS_PER_SAR) : spend;
+}
+
+/**
  * Share `amount` across `weights` in proportion, by largest remainder.
  *
  * The returned shares sum to `amount` exactly — that is the whole point. Working

@@ -32,7 +32,7 @@ import { reserveStations, utcToLocalDate } from "@/lib/availability";
 import { canCancel, cancelDeadline } from "@/lib/cancellation";
 import { refillDaysLeft, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
-import { halalasToSar, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
+import { halalasToSar, shareAmount, splitGroupPrice, vatIncludedIn, walletCovers } from "@/lib/money";
 import { quotePromo, type PromoRefusal } from "@/lib/promo";
 import { loyaltyBalance, quoteReward, spendPoints } from "@/lib/loyalty";
 import { quotePackCredit, spendPackCredit } from "@/lib/packs";
@@ -41,7 +41,7 @@ import { formatTicketNo } from "@/lib/tickets";
 import { assignIfToday } from "@/lib/assign";
 import { mediaUrl } from "@/lib/storage";
 import { checkoutOpen, PAY_WINDOW_MIN } from "@/lib/payments";
-import { walletLaunched } from "@/lib/wallet";
+import { claimGiftCard, lockedBalance, releaseBookingSpends, spendWallet, walletLaunched } from "@/lib/wallet";
 import type { BookingSummary } from "@/lib/booking";
 
 /** What one guest is booking. */
@@ -136,6 +136,17 @@ export type CreateBookingsInput = {
    * Ignored entirely without a `customerId` — there is no wallet to spend.
    */
   redeemPoints?: number | null;
+  /**
+   * What wallet credit the checkout showed paying (docs/WALLET-PLAN.md, step 4).
+   * Worked out again here, under the wallet's lock, and refused when it differs:
+   * the screen was a preview and the balance may have moved since.
+   *
+   * Signed in, from her whole balance. A guest has proved no wallet, so she can
+   * spend only what `giftCardCode` just brought in.
+   */
+  walletHalalas?: number | null;
+  /** A gift card typed at checkout. Works only with the checkout's email when the card is locked to one. */
+  giftCardCode?: string | null;
   notes?: string | null;
   technicianId?: string | null;
   /**
@@ -182,6 +193,14 @@ export type CreateBookingError =
    * moved between the preview and the charge. `rewardReason` says which.
    */
   | "reward-invalid"
+  /** Credit or a gift card was asked for before the wallet launched. */
+  | "wallet-unavailable"
+  /** The credit she was shown is not what she can spend now. `walletBalance` says what she has. */
+  | "wallet-changed"
+  /** The same words for a wrong code, a wrong email, a used or expired card. */
+  | "gift-card-invalid"
+  /** The right code and email, but its value is in that email's wallet already: sign in. */
+  | "gift-card-claimed"
   | "failed";
 
 export type CreateBookingsResult =
@@ -192,6 +211,8 @@ export type CreateBookingsResult =
       bookings: CreatedBooking[];
       /** Points actually spent on this bill, so the success screen can say so. */
       pointsSpent: number;
+      /** Wallet credit actually spent on this bill, in halalas. */
+      walletSpent: number;
     }
   | {
       ok: false;
@@ -203,6 +224,8 @@ export type CreateBookingsResult =
       rewardReason?: RewardRefusal;
       /** The balance as it actually is, so the checkout can correct itself. */
       pointsBalance?: number;
+      /** Set only with `wallet-changed`: what she can spend now, in halalas. */
+      walletBalance?: number;
       /**
        * Which guest the refusal is about, zero-based — set with `slot-taken`
        * from the per-guest reservation loop. Four chairs at one branch at one
@@ -243,6 +266,8 @@ class BookingAbort extends Error {
     readonly reason: CreateBookingError,
     /** Which guest it was about, when the refusal is about one of them. */
     readonly guestIndex?: number,
+    /** With `wallet-changed`, what she can spend now. */
+    readonly walletBalance?: number,
   ) {
     super(reason);
   }
@@ -668,14 +693,18 @@ export async function allocateTickets(
  * money for a chair that has just been given away. See checkoutOpen.
  */
 async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Promise<void> {
-  await tx.execute(sql`
+  const swept = await tx.execute<{ id: string }>(sql`
     update ${bookings} set status = 'cancelled', cancel_reason = 'payment-timeout', updated_at = now()
     where branch_id = ${branchId}
       and status = 'pending'
       and source = 'web'
       and created_at < now() - make_interval(mins => ${holdMin})
       and not ${checkoutOpen(bookings.id)}
+    returning id
   `);
+  // Wallet credit a lapsed hold spent goes back in the same transaction. Pack
+  // credits and points need no write: their rules already skip a payment-timeout.
+  await releaseBookingSpends(tx, [...swept].map((r) => r.id));
   // ponytail: sweeps only when someone tries to book. A branch with no booking
   // attempts keeps stale holds visible until the next one. Add a cron only if
   // that ever becomes visible to staff.
@@ -764,18 +793,23 @@ export async function releaseWebHold(code: string, email: string): Promise<boole
     .limit(1);
   if (!anchor) return false;
 
-  const released = await db
-    .update(bookings)
-    .set({ status: "cancelled", cancelReason: "payment-timeout", updatedAt: new Date() })
-    .where(
-      and(
-        anchor.groupId ? eq(bookings.groupId, anchor.groupId) : eq(bookings.id, anchor.id),
-        eq(bookings.status, "pending"),
-        eq(bookings.source, "web"),
-        sql`not exists (select 1 from ${payments} p where p.booking_id = ${bookings.id} and p.status = 'pending')`,
-      ),
-    )
-    .returning({ id: bookings.id });
+  // With the wallet credit it spent given back, in one transaction.
+  const released = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(bookings)
+      .set({ status: "cancelled", cancelReason: "payment-timeout", updatedAt: new Date() })
+      .where(
+        and(
+          anchor.groupId ? eq(bookings.groupId, anchor.groupId) : eq(bookings.id, anchor.id),
+          eq(bookings.status, "pending"),
+          eq(bookings.source, "web"),
+          sql`not exists (select 1 from ${payments} p where p.booking_id = ${bookings.id} and p.status = 'pending')`,
+        ),
+      )
+      .returning({ id: bookings.id });
+    await releaseBookingSpends(tx, rows.map((r) => r.id));
+    return rows;
+  });
   return released.length > 0;
 }
 
@@ -1136,6 +1170,11 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     rewardShares = shareAmount(afterPromo, quote.discountHalalas);
   }
 
+  // Credit and gift cards are the wallet's, and none of it works before launch.
+  // Refused rather than ignored, as a bad promo code is.
+  const wantsWallet = Boolean(input.giftCardCode?.trim()) || (input.walletHalalas ?? 0) > 0;
+  if (wantsWallet && !(await walletLaunched())) return { ok: false, error: "wallet-unavailable" };
+
   const status = input.status ?? "confirmed";
   const groupId = isGroup ? randomUUID() : null;
   // The treats go back on last, after every discount has been taken — that is
@@ -1146,6 +1185,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     0,
   );
 
+  let walletSpent = 0;
   try {
     // Before the sweep inside lets any lapsed hold go: one with a checkout may
     // have been paid a moment ago, its webhook still on the way. Asked here,
@@ -1227,6 +1267,37 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
       // Rolls the upsert back too, so a blocked caller leaves nothing behind.
       if (customer.blocked) throw new BookingAbort("blocked");
 
+      // Wallet credit comes off last, after every discount, with the treats back
+      // on: it is her money paying the bill, not an offer. Worked out here, under
+      // the wallet's lock, which is held to commit, so two tabs cannot both
+      // spend one balance: the second waits, sees the first's spend and is
+      // refused, rather than charged at full price in silence.
+      //
+      // The wallet is the checkout's email: her account's when signed in, the
+      // one she typed otherwise. A typed email proves nothing, so a guest spends
+      // only what the gift card she typed just brought in.
+      const payable = afterPromo.map((t, i) => t - rewardShares[i] + guests[i].treatHalalas);
+      let walletShares = guests.map(() => 0);
+      // A guest's spend is tagged with her card, so the code brings back only what
+      // is left of that card (usableCard, lib/wallet.ts).
+      let guestCardId: string | null = null;
+      const walletEmail = input.customerId ? (customer.email?.toLowerCase() ?? null) : email;
+      if (wantsWallet) {
+        if (!walletEmail) throw new BookingAbort("gift-card-invalid");
+        let brought = 0;
+        if (input.giftCardCode?.trim()) {
+          const claim = await claimGiftCard(tx, input.giftCardCode, walletEmail, customer.id, Boolean(input.customerId));
+          if (!claim.ok) throw new BookingAbort(claim.error);
+          brought = claim.halalas;
+          guestCardId = input.customerId ? null : claim.giftCardId;
+        }
+        const { available } = await lockedBalance(tx, walletEmail);
+        const spendable = input.customerId ? available : Math.min(brought, available);
+        walletSpent = walletCovers(billTotal, spendable);
+        if (walletSpent !== (input.walletHalalas ?? 0)) throw new BookingAbort("wallet-changed", undefined, spendable);
+        walletShares = shareAmount(payable, walletSpent);
+      }
+
       // A pending booking has not been paid for and gets no number — the ticket
       // is issued at confirmation. Walk-ins are confirmed on the spot.
       //
@@ -1249,13 +1320,15 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
       for (const [i, guest] of guests.entries()) {
         const promoShare = promoShares[i];
         const rewardShare = rewardShares[i];
+        const walletShare = walletShares[i];
         // Every discount lands in one column: what this guest was let off, in
         // total. `promo_code_id` records which code produced part of it, and the
         // loyalty_txns row written below records the rest.
-        const discountHalalas = split[i].discountHalalas + promoShare + rewardShare;
-        // The treat is added after the discounts, never inside them.
+        const discountHalalas = split[i].discountHalalas + promoShare + rewardShare + walletShare;
+        // The treat is added after the discounts, never inside them. Her credit
+        // pays for it like the rest of the bill.
         const totalHalalas =
-          split[i].totalHalalas - promoShare - rewardShare + guest.treatHalalas;
+          split[i].totalHalalas - promoShare - rewardShare + guest.treatHalalas - walletShare;
         // Prices are VAT-inclusive, so VAT comes back out of the discounted total
         // rather than being added on. The customer pays exactly what was shown.
         const vat = vatIncludedIn(totalHalalas, settings.vat_percent);
@@ -1293,6 +1366,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
             discountHalalas,
             promoDiscountHalalas: promoShare,
             pointsDiscountHalalas: rewardShare,
+            walletDiscountHalalas: walletShare,
             promoCodeId,
             subtotalHalalas: totalHalalas - vat,
             vatHalalas: vat,
@@ -1364,13 +1438,30 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
         await spendPoints(tx, customer.id, out[0].id, pointsSpent);
       }
 
+      // Tied to the first booking on the bill, so a party is one spend. The lock
+      // taken above is still held, so the balance it read still stands.
+      if (walletSpent > 0 && walletEmail) {
+        const spent = await spendWallet(tx, customer.id, walletEmail, walletSpent, {
+          bookingId: out[0].id,
+          giftCardId: guestCardId ?? undefined,
+        });
+        if (!spent) throw new BookingAbort("wallet-changed", undefined, 0);
+      }
+
       return out;
     });
 
-    return { ok: true, groupId, totalHalalas: billTotal, bookings: created, pointsSpent };
+    return {
+      ok: true,
+      groupId,
+      totalHalalas: billTotal - walletSpent,
+      bookings: created,
+      pointsSpent,
+      walletSpent,
+    };
   } catch (err) {
     if (err instanceof BookingAbort) {
-      return { ok: false, error: err.reason, guestIndex: err.guestIndex };
+      return { ok: false, error: err.reason, guestIndex: err.guestIndex, walletBalance: err.walletBalance };
     }
     // Kept as a cheap backstop even though reserveStations now locks: a bug that
     // bypasses the lock should still fail loudly rather than double-book a chair.

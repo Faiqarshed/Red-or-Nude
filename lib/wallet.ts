@@ -12,7 +12,7 @@
 import "server-only";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
-import { bookings, customers, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
+import { bookings, customers, giftCards, giftCardTxns, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
 import { getSettings } from "@/lib/settings";
 
 /** Whether the wallet is live (`wallet_launched_at`). */
@@ -73,6 +73,122 @@ async function lockWallet(tx: Tx, ownerEmail: string) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"wallet:" + ownerEmail}))`);
 }
 
+/** Her balance, read under the wallet's lock, which is held to the end of `tx`. */
+export async function lockedBalance(tx: Tx, ownerEmail: string) {
+  const email = ownerEmail.trim().toLowerCase();
+  await lockWallet(tx, email);
+  return walletBalance(email, tx);
+}
+
+/** What she typed, as a card code is stored: `XXXX-XXXX-XXXX-XXXX`, upper case. */
+export function giftCardCode(typed: string): string {
+  const c = typed.toUpperCase().replace(/[^0-9A-Z]/g, "");
+  return c.length === 16 ? c.match(/.{4}/g)!.join("-") : c;
+}
+
+export type GiftCardClaim =
+  | { ok: true; halalas: number; giftCardId: string }
+  /**
+   * `gift-card-claimed`: the right code and the right email, but its value is
+   * already in that email's wallet (her own checkout she left). She has proved
+   * both, so she is told to sign in. Anything else is `gift-card-invalid`, the
+   * same words for every reason, so a stranger learns nothing from trying.
+   */
+  | { ok: false; error: "gift-card-invalid" | "gift-card-claimed" };
+
+/**
+ * The card this code names, if the checkout's email may use it now. A card sold
+ * after launch is locked to its recipient's email and works with no other; a
+ * card sold before it was sold as "the code is the card" and works with any
+ * (docs/WALLET-PLAN.md). One rule for the preview and the claim.
+ */
+async function usableCard(
+  ex: Pick<typeof db, "select">,
+  typed: string,
+  owner: string,
+  { forUpdate, signedIn }: { forUpdate: boolean; signedIn: boolean },
+) {
+  const invalid = { ok: false, error: "gift-card-invalid" } as const;
+  const found = ex.select().from(giftCards).where(eq(giftCards.code, giftCardCode(typed))).limit(1);
+  const [card] = forUpdate ? await found.for("update") : await found;
+  if (!card) return invalid;
+
+  const { wallet_launched_at: launchedAt } = await getSettings(["wallet_launched_at"]);
+  const lock =
+    launchedAt && card.createdAt >= new Date(launchedAt) ? card.recipientEmail?.trim().toLowerCase() || null : null;
+  if (lock && lock !== owner) return invalid;
+
+  // Already in the wallet of the email that claimed it. The code still brings
+  // what is left of the card, and nothing else of that wallet.
+  if (card.status === "redeemed") {
+    const [claim] = await ex
+      .select({ ownerEmail: walletTxns.ownerEmail, halalas: walletTxns.deltaHalalas })
+      .from(walletTxns)
+      .where(and(eq(walletTxns.giftCardId, card.id), eq(walletTxns.reason, "gift-card")));
+    if (!claim || claim.ownerEmail !== owner) return invalid;
+    if (signedIn) return { ok: true, card, halalas: 0, claimed: true } as const;
+    // Once the email has an account, its credit is spent signed in, where a
+    // spend is not tagged with the card; what is left of the card can no longer
+    // be told from the rest. So a guest is sent to sign in.
+    const [account] = await ex
+      .select({ id: customers.id })
+      .from(customers)
+      .where(and(sql`lower(${customers.email}) = ${owner}`, sql`${customers.emailVerifiedAt} is not null`))
+      .limit(1);
+    if (account) return { ok: false, error: "gift-card-claimed" } as const;
+    const [{ moved }] = await ex
+      .select({ moved: sql<number>`coalesce(sum(${walletTxns.deltaHalalas}), 0)::int` })
+      .from(walletTxns)
+      .where(and(eq(walletTxns.giftCardId, card.id), inArray(walletTxns.reason, ["spend", "release"])));
+    const left = claim.halalas + moved;
+    return left > 0 ? ({ ok: true, card, halalas: left, claimed: true } as const) : invalid;
+  }
+  if (card.status !== "active" || card.balanceHalalas <= 0 || (card.expiresAt && card.expiresAt <= new Date())) {
+    return invalid;
+  }
+  return { ok: true, card, halalas: card.balanceHalalas, claimed: false } as const;
+}
+
+/** What a card would bring to the checkout of `email`, for the preview. Claims nothing. */
+export async function giftCardValue(
+  typed: string,
+  email: string,
+  signedIn = false,
+): Promise<{ ok: true; halalas: number } | Extract<GiftCardClaim, { ok: false }>> {
+  const r = await usableCard(db, typed, email.trim().toLowerCase(), { forUpdate: false, signedIn });
+  return r.ok ? { ok: true, halalas: r.halalas } : r;
+}
+
+/**
+ * Move a gift card's whole balance into the wallet of `email`, the email of
+ * the checkout (usableCard says which cards it may). Call inside the checkout's
+ * transaction: the card is locked, and a checkout that fails leaves it unclaimed.
+ */
+export async function claimGiftCard(
+  tx: Tx,
+  typed: string,
+  email: string,
+  customerId: string,
+  signedIn: boolean,
+): Promise<GiftCardClaim> {
+  const owner = email.trim().toLowerCase();
+  const r = await usableCard(tx, typed, owner, { forUpdate: true, signedIn });
+  if (!r.ok) return r;
+  const { card, halalas } = r;
+  if (r.claimed) return { ok: true, halalas, giftCardId: card.id };
+
+  await tx
+    .update(giftCards)
+    .set({ balanceHalalas: 0, status: "redeemed", updatedAt: new Date() })
+    .where(eq(giftCards.id, card.id));
+  await tx.insert(giftCardTxns).values({ giftCardId: card.id, deltaHalalas: -halalas, reason: "to-wallet" });
+  await lockWallet(tx, owner);
+  await tx
+    .insert(walletTxns)
+    .values({ customerId, ownerEmail: owner, deltaHalalas: halalas, reason: "gift-card", giftCardId: card.id });
+  return { ok: true, halalas, giftCardId: card.id };
+}
+
 /**
  * The only way to spend. Locks the wallet (its email, not a customer row: one
  * email can book as an account and as a guest) and reads the balance inside
@@ -91,7 +207,7 @@ export async function spendWallet(
   customerId: string,
   ownerEmail: string,
   halalas: number,
-  on: { bookingId?: string; paymentId?: string; reSpendOf?: string },
+  on: { bookingId?: string; paymentId?: string; reSpendOf?: string; giftCardId?: string },
 ): Promise<string | null> {
   if (!Number.isInteger(halalas) || halalas <= 0) return null;
   const email = ownerEmail.trim().toLowerCase();
@@ -109,6 +225,7 @@ export async function spendWallet(
       bookingId: on.bookingId,
       paymentId: on.paymentId,
       reversesId: on.reSpendOf,
+      giftCardId: on.giftCardId,
     })
     .returning({ id: walletTxns.id });
   return row.id;
@@ -136,9 +253,24 @@ export async function releaseSpend(tx: Tx, spendId: string): Promise<void> {
       reason: "release",
       bookingId: spend.bookingId,
       paymentId: spend.paymentId,
+      giftCardId: spend.giftCardId,
       reversesId: spend.id,
     })
     .onConflictDoNothing();
+}
+
+/**
+ * Give back what these bookings spent from the wallet: their hold lapsed or
+ * was let go unpaid (`payment-timeout`). Call in the transaction that cancels
+ * them. Safe to repeat (releaseSpend).
+ */
+export async function releaseBookingSpends(tx: Tx, bookingIds: string[]): Promise<void> {
+  if (bookingIds.length === 0) return;
+  const spends = await tx
+    .select({ id: walletTxns.id })
+    .from(walletTxns)
+    .where(and(eq(walletTxns.reason, "spend"), inArray(walletTxns.bookingId, bookingIds)));
+  for (const s of spends) await releaseSpend(tx, s.id);
 }
 
 /**

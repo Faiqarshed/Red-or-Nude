@@ -918,6 +918,43 @@ const mutations = [
     expect: "tests/account-wallet.test.ts",
     apply: () => mutate(WALLET, "  if (!(await walletLaunched())) return null;\n  const email = ownerEmail", "  const email = ownerEmail"),
   },
+
+  // ---- credit and gift cards at the booking checkout ------------------------
+  {
+    name: "wallet: let credit leave a card charge under 1 SAR",
+    expect: "tests/wallet-checkout.test.ts",
+    apply: () => mutate(MONEY, "  return left > 0 && left < HALALAS_PER_SAR ? Math.max(0, billHalalas - HALALAS_PER_SAR) : spend;", "  return spend;"),
+  },
+  {
+    name: "wallet: charge what the balance allows, not what the screen showed",
+    expect: "tests/wallet-checkout.test.ts",
+    apply: () => mutate(ENGINE, "        if (walletSpent !== (input.walletHalalas ?? 0)) throw new BookingAbort(\"wallet-changed\", undefined, spendable);\n", ""),
+  },
+  {
+    name: "wallet: let a guest spend the wallet of an email she only typed",
+    expect: "tests/wallet-checkout.test.ts",
+    apply: () => mutate(ENGINE, "        const spendable = input.customerId ? available : Math.min(brought, available);", "        const spendable = available;"),
+  },
+  {
+    name: "gift card: let any email use a card locked to its recipient",
+    expect: "tests/wallet-checkout.test.ts",
+    apply: () => mutate(WALLET, "  if (lock && lock !== owner) return invalid;\n", ""),
+  },
+  {
+    name: "wallet: keep the credit a lapsed hold spent",
+    expect: "tests/wallet-checkout.test.ts",
+    apply: () => mutate(ENGINE, "  await releaseBookingSpends(tx, [...swept].map((r) => r.id));", ""),
+  },
+  {
+    name: "subtle: let a guest spend a card an account holds",
+    expect: "tests/wallet-checkout.test.ts",
+    apply: () => mutate(WALLET, "    if (account) return { ok: false, error: \"gift-card-claimed\" } as const;\n", ""),
+  },
+  {
+    name: "subtle: forget a card's released spend when working out what is left",
+    expect: "tests/wallet-checkout.test.ts",
+    apply: () => mutate(WALLET, "inArray(walletTxns.reason, [\"spend\", \"release\"])));\n    const left", "eq(walletTxns.reason, \"spend\")));\n    const left"),
+  },
 ];
 
 const touched = [
