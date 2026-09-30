@@ -599,7 +599,7 @@ describe("#9 strangers buying the same gift card", () => {
     const mine = await startPurchase({
       intent: { ...intent, attemptId: randomUUID() },
       amountHalalas: 7500,
-      lines: [giftCardLine(75)],
+      lines: [giftCardLine(75, false)],
       title: "Gift card",
       payer: {},
       back: "/gift-card/payment",
@@ -757,7 +757,12 @@ describe("#1 gift card limits", () => {
         new Request("http://x/api/gift-cards", {
           method: "POST",
           headers: { "x-forwarded-for": `${ip}:${1000 + Math.floor(Math.random() * 9000)}` },
-          body: JSON.stringify({ amountSar: value.amountHalalas / 100, recipientName: "Sarah", buyerName: TAG }),
+          body: JSON.stringify({
+            amountSar: value.amountHalalas / 100,
+            recipientName: "Sarah",
+            recipientEmail: "sarah@example.com",
+            buyerName: TAG,
+          }),
         }),
       );
     for (let i = 0; i < 5; i++) expect((await post()).ok).toBe(true);

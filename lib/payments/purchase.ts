@@ -26,6 +26,7 @@ import { sendVisitEmail } from "@/lib/visit-email";
 import { returnOrigin } from "@/lib/site";
 import { afterResponse } from "@/lib/after-response";
 import {
+  claimCardsFor,
   creditChair,
   lockedBalance,
   releasePaymentSpends,
@@ -421,6 +422,18 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number,
     });
     if (!card.ok) return null;
 
+    // Sent to an email with an account: straight into her wallet (from launch).
+    // The card is hers either way; a claim that fails leaves it a working code.
+    let inWallet = false;
+    const locked = await walletLaunched();
+    if (locked && intent.recipientEmail) {
+      try {
+        inWallet = (await claimCardsFor(intent.recipientEmail)) > 0;
+      } catch (err) {
+        console.error(`[purchase] gift card ${card.id} could not go into ${intent.recipientEmail}'s wallet`, err);
+      }
+    }
+
     // The emails: the card to the recipient's address, if she gave one, and
     // the buyer's receipt. The WhatsApp share is the buyer's own, on the
     // success screen. Neither can fail the sale.
@@ -434,6 +447,8 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number,
       message: intent.message,
       expiresAt: card.expiresAt,
       lang: intent.lang,
+      inWallet,
+      locked,
     }));
     return { kind: "gift_card", code: card.code };
   }

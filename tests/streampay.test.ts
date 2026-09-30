@@ -218,7 +218,7 @@ describe("buying something twice by accident", () => {
       const again = await startPurchase({
         intent: { ...intent },
         amountHalalas: 7500,
-        lines: [giftCardLine(75)],
+        lines: [giftCardLine(75, false)],
         title: "Gift card",
         payer: { name: null, email: null },
         back: "/gift-card/payment",
@@ -507,7 +507,8 @@ describe("the payment driver", () => {
 describe("buying a gift card", () => {
   const post = (body: object) =>
     giftCards(new Request("http://x/api/gift-cards", { method: "POST", body: JSON.stringify(body) }));
-  const ok = { amountSar: 100, recipientName: "Sarah" };
+  // A recipient email is required: a card sold after launch works only with it.
+  const ok = { amountSar: 100, recipientName: "Sarah", recipientEmail: "sarah@example.com" };
 
   it("refuses what the builder refuses, before anything is charged", async () => {
     for (const bad of [

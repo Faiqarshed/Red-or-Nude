@@ -47,6 +47,9 @@ const RBAC = "lib/auth/rbac.ts";
 const PURCHASE = "lib/payments/purchase.ts";
 const LOYALTY = "lib/loyalty.ts";
 const MONEY = "lib/money.ts";
+const PAYLINES = "lib/payments/lines.ts";
+const GIFTADMIN = "app/(admin)/admin/(shell)/gift-cards/actions.ts";
+const GIFTROUTE = "app/api/gift-cards/route.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -987,11 +990,44 @@ const mutations = [
     expect: "tests/wallet-purchase.test.ts",
     apply: () => mutate(PURCHASE, "  if (cardHalalas === 0) {", "  if (false) {"),
   },
+
+  // ---- gift cards and the wallet --------------------------------------------
+  {
+    name: "gift card: keep selling it tax-free after launch",
+    expect: "tests/gift-card-wallet.test.ts",
+    apply: () => mutate(PAYLINES, "  vatExempt: !taxed,", "  vatExempt: true,"),
+  },
+  {
+    name: "gift card: pull a card sold before launch into a wallet",
+    expect: "tests/gift-card-wallet.test.ts",
+    apply: () => mutate(WALLET, "        gte(giftCards.createdAt, new Date(launchedAt)),\n", ""),
+  },
+  {
+    name: "gift card: put the recipient in debt for the buyer's chargeback",
+    expect: "tests/gift-card-wallet.test.ts",
+    apply: () => mutate(WALLET, "    const take = own ? due : Math.min(due, (await walletBalance(c.ownerEmail, tx)).available);", "    const take = due;"),
+  },
+  {
+    name: "subtle: record the salon's loss again on a repeated refund total",
+    expect: "tests/gift-card-wallet.test.ts",
+    apply: () => mutate(WALLET, "    const due = Math.min(refundedSoFarHalalas, c.halalas) - taken - lost;", "    const due = Math.min(refundedSoFarHalalas, c.halalas) - taken;"),
+  },
+  {
+    name: "gift card: let the owner move a card already in a wallet",
+    expect: "tests/gift-card-wallet.test.ts",
+    apply: () => mutate(GIFTADMIN, "    .where(and(eq(giftCards.id, id), eq(giftCards.status, \"active\")))", "    .where(eq(giftCards.id, id))"),
+  },
+  {
+    name: "gift card: sell one with no recipient email",
+    expect: "tests/gift-card-wallet.test.ts",
+    apply: () => mutate(GIFTROUTE, "  recipientEmail: emailField,", "  recipientEmail: emailField.optional().or(z.literal(\"\")),"),
+  },
 ];
 
 const touched = [
   CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, LINES, TREAT,
   DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS, DECIDE, RBAC, PURCHASE, LOYALTY, MONEY,
+  PAYLINES, GIFTADMIN, GIFTROUTE,
 ];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));

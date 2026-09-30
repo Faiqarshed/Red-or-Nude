@@ -10,7 +10,7 @@
 // index on that table rather than by a read before it.
 
 import "server-only";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
 import { bookings, customers, giftCards, giftCardTxns, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
 import { getSettings } from "@/lib/settings";
@@ -187,6 +187,43 @@ export async function claimGiftCard(
     .insert(walletTxns)
     .values({ customerId, ownerEmail: owner, deltaHalalas: halalas, reason: "gift-card", giftCardId: card.id });
   return { ok: true, halalas, giftCardId: card.id };
+}
+
+/**
+ * Every card sent to `email` still waiting as a code, into the wallet of the
+ * account with that email: on delivery when she has one, and when she signs
+ * up otherwise. Only cards sold after launch (locked to her email) and still
+ * spendable. Nothing before launch, or without an account. Returns what came in.
+ */
+export async function claimCardsFor(email: string): Promise<number> {
+  const { wallet_launched_at: launchedAt } = await getSettings(["wallet_launched_at"]);
+  if (!launchedAt) return 0;
+  const owner = email.trim().toLowerCase();
+  const [account] = await db
+    .select({ id: customers.id })
+    .from(customers)
+    .where(and(sql`lower(${customers.email}) = ${owner}`, sql`${customers.emailVerifiedAt} is not null`))
+    .limit(1);
+  if (!account) return 0;
+
+  const waiting = await db
+    .select({ code: giftCards.code })
+    .from(giftCards)
+    .where(
+      and(
+        sql`lower(${giftCards.recipientEmail}) = ${owner}`,
+        eq(giftCards.status, "active"),
+        sql`${giftCards.balanceHalalas} > 0`,
+        gte(giftCards.createdAt, new Date(launchedAt)),
+        sql`(${giftCards.expiresAt} is null or ${giftCards.expiresAt} > now())`,
+      ),
+    );
+  let came = 0;
+  for (const card of waiting) {
+    const claim = await db.transaction((tx) => claimGiftCard(tx, card.code, owner, account.id, true));
+    if (claim.ok) came += claim.halalas;
+  }
+  return came;
 }
 
 /**
@@ -452,6 +489,91 @@ export async function reverseCredit(
     });
   }
   return { tookHalalas: due, owedHalalas: Math.max(0, -total) };
+}
+
+/**
+ * Take back a claimed gift card whose payment went back to the buyer's card: a
+ * dashboard refund or a chargeback. Called from refundedOutside beside
+ * reverseCredit, with StreamPay's running refunded total, per payment.
+ *
+ * The recipient did nothing wrong: she was given a card and used it. So only
+ * what is left in her wallet is taken, never below zero, and the rest is the
+ * salon's loss, sent to the owner (`gift-card-loss`). Only a buyer who got her
+ * own money back can owe the wallet: a card bought for her own email is taken
+ * back in full, as her cancel credit would be. A repeat of the same total takes
+ * and loses nothing more.
+ */
+export async function reverseGiftCards(
+  tx: Tx,
+  paymentIds: string[],
+  refundedSoFarHalalas: number,
+): Promise<{ tookHalalas: number; owedHalalas: number; lostHalalas: number }> {
+  const out = { tookHalalas: 0, owedHalalas: 0, lostHalalas: 0 };
+  if (paymentIds.length === 0 || refundedSoFarHalalas <= 0) return out;
+
+  const claims = await tx
+    .select({
+      customerId: walletTxns.customerId,
+      ownerEmail: walletTxns.ownerEmail,
+      halalas: walletTxns.deltaHalalas,
+      giftCardId: walletTxns.giftCardId,
+      paymentId: payments.id,
+      buyerEmail: giftCards.buyerEmail,
+    })
+    .from(payments)
+    .innerJoin(giftCards, eq(giftCards.id, payments.giftCardId))
+    .innerJoin(walletTxns, and(eq(walletTxns.giftCardId, giftCards.id), eq(walletTxns.reason, "gift-card")))
+    .where(inArray(payments.id, paymentIds));
+
+  for (const c of claims) {
+    await lockWallet(tx, c.ownerEmail);
+    const [{ taken }] = await tx
+      .select({ taken: sql<number>`coalesce(-sum(${walletTxns.deltaHalalas}), 0)::int` })
+      .from(walletTxns)
+      .where(and(eq(walletTxns.reason, "reversal"), eq(walletTxns.paymentId, c.paymentId), eq(walletTxns.giftCardId, c.giftCardId!)));
+    const [{ lost }] = await tx
+      .select({ lost: sql<number>`coalesce(sum(${walletDecisions.amountHalalas}), 0)::int` })
+      .from(walletDecisions)
+      .where(and(eq(walletDecisions.kind, "gift-card-loss"), eq(walletDecisions.paymentId, c.paymentId)));
+    const due = Math.min(refundedSoFarHalalas, c.halalas) - taken - lost;
+    if (due <= 0) continue;
+
+    const own = c.buyerEmail?.trim().toLowerCase() === c.ownerEmail;
+    const take = own ? due : Math.min(due, (await walletBalance(c.ownerEmail, tx)).available);
+    if (take > 0) {
+      await tx.insert(walletTxns).values({
+        customerId: c.customerId,
+        ownerEmail: c.ownerEmail,
+        deltaHalalas: -take,
+        reason: "reversal",
+        paymentId: c.paymentId,
+        giftCardId: c.giftCardId,
+      });
+      out.tookHalalas += take;
+    }
+    if (due > take) {
+      await tx.insert(walletDecisions).values({
+        kind: "gift-card-loss",
+        customerId: c.customerId,
+        paymentId: c.paymentId,
+        amountHalalas: due - take,
+        detail: { ownerEmail: c.ownerEmail, giftCardId: c.giftCardId },
+      });
+      out.lostHalalas += due - take;
+    }
+    const { total } = await walletBalance(c.ownerEmail, tx);
+    if (own && total < 0) {
+      await tx.insert(walletDecisions).values({
+        kind: "negative-balance",
+        customerId: c.customerId,
+        paymentId: c.paymentId,
+        amountHalalas: -total,
+        detail: { ownerEmail: c.ownerEmail, reversedHalalas: take },
+      });
+      out.owedHalalas += -total;
+    }
+  }
+  return out;
 }
 
 /**

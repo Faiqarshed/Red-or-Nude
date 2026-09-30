@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { giftCardDesigns, giftCardValues, giftCards, media, type Localized } from "@/lib/db/schema";
@@ -9,6 +9,8 @@ import { requireCan } from "@/lib/auth/guard";
 import { diffOf, recordAudit } from "@/lib/audit";
 import { halalasToSar, sarToHalalas } from "@/lib/money";
 import { adjustGiftCardBalance, issueGiftCard } from "@/lib/giftcards";
+import { claimCardsFor } from "@/lib/wallet";
+import { sendGiftCardEmails } from "@/lib/giftcard/email";
 import { adminStrings } from "@/lib/admin/strings";
 import {
   ADJUST_MAX,
@@ -243,6 +245,65 @@ export async function deleteGiftDesign(id: string): Promise<Result> {
     return { ok: false, error: "in-use" };
   }
   await recordAudit(actor, { action: "delete", entity: "gift_card_designs", entityId: id, label: gone?.name });
+  revalidate();
+  return { ok: true };
+}
+
+const changeEmailSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().trim().toLowerCase(),
+  reason: z.string(),
+});
+
+/**
+ * Fix a recipient's email the buyer typed wrong (docs/WALLET-PLAN.md): a card
+ * sold after launch works only with that email, so a typo would lock it away.
+ *
+ * The owner's alone, with a reason, audited. Only while the card is still a
+ * code nobody has used: once its value is in a wallet it is that wallet's, and
+ * a correction there is "Needs your decision". Guarded on the card still being
+ * active, so a claim racing this cannot be overwritten. The new address is sent
+ * the card, and it goes straight into her wallet if she has an account.
+ */
+export async function changeGiftCardEmail(raw: z.input<typeof changeEmailSchema>): Promise<Result> {
+  const actor = await requireCan("wallet.decide");
+  const parsed = changeEmailSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "invalid" };
+  const { id, email } = parsed.data;
+  const reason = parsed.data.reason.trim();
+  if (checkNote(v, "Reason", reason, { max: ADJUST_REASON_MAX })) return { ok: false, error: "reason" };
+  if (!EMAIL_RE.test(email)) return { ok: false, error: "email" };
+
+  const [before] = await db.select().from(giftCards).where(eq(giftCards.id, id)).limit(1);
+  if (!before) return { ok: false, error: "not-found" };
+  const [card] = await db
+    .update(giftCards)
+    .set({ recipientEmail: email, updatedAt: new Date() })
+    .where(and(eq(giftCards.id, id), eq(giftCards.status, "active")))
+    .returning();
+  if (!card) return { ok: false, error: "claimed" };
+
+  await recordAudit(actor, {
+    action: "change-email",
+    entity: "gift_cards",
+    entityId: id,
+    diff: { recipientEmail: { from: before.recipientEmail, to: email }, reason: { from: null, to: reason } },
+  });
+
+  const inWallet = (await claimCardsFor(email)) > 0;
+  await sendGiftCardEmails({
+    code: card.code,
+    amountSar: card.balanceHalalas / 100,
+    recipientName: card.recipientName,
+    recipientEmail: email,
+    senderName: card.buyerName,
+    message: card.message,
+    expiresAt: card.expiresAt,
+    lang: "ar",
+    locked: true,
+    inWallet,
+  });
+
   revalidate();
   return { ok: true };
 }

@@ -34,6 +34,10 @@ export type GiftCardEmailInput = {
   message?: string | null;
   lang: Lang;
   expiresAt?: Date | null;
+  /** Sold after the wallet's launch: it works only with the recipient's email. */
+  locked?: boolean;
+  /** Already moved into the wallet of the recipient's account on delivery. */
+  inWallet?: boolean;
 };
 
 const T = {
@@ -50,6 +54,11 @@ const T = {
     valueLabel: "قيمة البطاقة",
     codeLabel: "رقم البطاقة",
     howTo: "اذكري رقم البطاقة عند الحجز أو في الفرع لاستخدام الرصيد.",
+    howToLocked:
+      "أدخلي رقم البطاقة عند الدفع واحجزي بهذا البريد الإلكتروني، وما يتبقى منها يبقى لكِ. أو سجّلي الدخول بهذا البريد فتُضاف إلى محفظتك الآن.",
+    howToInWallet: "البطاقة في محفظتك في ريد أور نيود. سجّلي الدخول بهذا البريد وفعّلي «استخدمي رصيدي» عند الدفع.",
+    buyerLocked: (to: string) => `تعمل البطاقة مع ${to} فقط: برقمها مع هذا البريد، أو بتسجيل الدخول به.`,
+    buyerInWallet: (to: string) => `أُضيفت البطاقة مباشرة إلى محفظة ${to}.`,
     expires: "صالحة حتى",
     messageTitle: "رسالة لكِ",
     sar: "ر.س",
@@ -67,6 +76,11 @@ const T = {
     valueLabel: "Card value",
     codeLabel: "Card number",
     howTo: "Quote the card number when booking, or at the branch, to spend the balance.",
+    howToLocked:
+      "Enter the card number at checkout, booking with this email, and what's left of it stays yours. Or sign in with this email and it goes into your wallet now.",
+    howToInWallet: "It's already in your Red or Nude wallet. Sign in with this email and switch on \"Use my credit\" at checkout.",
+    buyerLocked: (to: string) => `It works only with ${to}: the card number with that email, or signed in with it.`,
+    buyerInWallet: (to: string) => `It went straight into the wallet of ${to}.`,
     expires: "Valid until",
     messageTitle: "Your message",
     sar: "SAR",
@@ -75,7 +89,7 @@ const T = {
 } satisfies Record<Lang, Record<string, unknown>>;
 
 /** Exported so scripts/preview-giftcard.ts can render it without sending. */
-export function renderGiftCardEmail(input: GiftCardEmailInput, forBuyer = false) {
+export function renderGiftCardEmail(input: GiftCardEmailInput, forBuyer = false, imageSrc?: string) {
   const lang = input.lang;
   const t = T[lang];
   const rtl = lang === "ar";
@@ -103,7 +117,23 @@ export function renderGiftCardEmail(input: GiftCardEmailInput, forBuyer = false)
       </div>`
       : "";
 
-  const cardImage = `${siteOrigin()}/api/gift-card-image?amount=${encodeURIComponent(input.amountSar)}`;
+  const cardImage = imageSrc ?? cardImageUrl(input.amountSar);
+
+  // How to spend it, which is what changed with the wallet: before its launch
+  // the code is the card; after it, the code goes with her email, or it is in
+  // her wallet already. The buyer is told which.
+  const to = input.recipientEmail?.trim() || "";
+  const howTo = forBuyer
+    ? input.inWallet && to
+      ? t.buyerInWallet(to)
+      : input.locked && to
+        ? t.buyerLocked(to)
+        : t.howTo
+    : input.inWallet
+      ? t.howToInWallet
+      : input.locked
+        ? t.howToLocked
+        : t.howTo;
 
   const html = `<!DOCTYPE html>
 <html lang="${lang}" dir="${dir}">
@@ -149,7 +179,7 @@ export function renderGiftCardEmail(input: GiftCardEmailInput, forBuyer = false)
 
       <tr><td style="padding:20px 28px 0;">
         ${messageBlock}
-        <p style="margin:0 0 6px;font-size:13px;line-height:1.6;color:rgba(26,26,26,0.6);text-align:${start};">${esc(t.howTo)}</p>
+        <p style="margin:0 0 6px;font-size:13px;line-height:1.6;color:rgba(26,26,26,0.6);text-align:${start};">${esc(howTo)}</p>
         ${expiry ? `<p style="margin:0;font-size:12px;color:rgba(26,26,26,0.45);text-align:${start};">${esc(t.expires)}: <span dir="ltr">${esc(expiry)}</span></p>` : ""}
       </td></tr>
 
@@ -173,13 +203,28 @@ export function renderGiftCardEmail(input: GiftCardEmailInput, forBuyer = false)
     `${t.codeLabel}: ${input.code}`,
     ...(!forBuyer && input.message?.trim() ? ["", `${t.messageTitle}: "${input.message.trim()}"`] : []),
     "",
-    t.howTo,
+    howTo,
     ...(expiry ? [`${t.expires}: ${expiry}`] : []),
     "",
     t.footer,
   ].join("\n");
 
   return { subject, html, text };
+}
+
+const IMAGE_CID = "gift-card";
+
+const cardImageUrl = (amountSar: number) =>
+  `${siteOrigin()}/api/gift-card-image?amount=${encodeURIComponent(amountSar)}`;
+
+/** The card as a PNG from /api/gift-card-image, or null: a few seconds at most. */
+async function cardImagePng(amountSar: number): Promise<Buffer | null> {
+  try {
+    const res = await fetch(cardImageUrl(amountSar), { signal: AbortSignal.timeout(5_000) });
+    return res.ok ? Buffer.from(await res.arrayBuffer()) : null;
+  } catch {
+    return null;
+  }
 }
 
 export type GiftCardEmailOutcome = {
@@ -198,8 +243,12 @@ export async function sendGiftCardEmails(
 ): Promise<GiftCardEmailOutcome> {
   const out: GiftCardEmailOutcome = { recipient: "skipped", buyer: "skipped" };
 
+  // The card's picture inside the message, so it shows with images off; the
+  // remote one if it can't be fetched. Best effort: the code is text below it.
+  const image = await cardImagePng(input.amountSar);
+
   const send = async (to: string, forBuyer: boolean) => {
-    const { subject, html, text } = renderGiftCardEmail(input, forBuyer);
+    const { subject, html, text } = renderGiftCardEmail(input, forBuyer, image ? `cid:${IMAGE_CID}` : undefined);
     const result = await sendMail({
       to,
       toName: forBuyer ? input.senderName : input.recipientName,
@@ -208,6 +257,7 @@ export async function sendGiftCardEmails(
       text,
       replyTo: process.env.MAIL_REPLY_TO?.trim() || null,
       tags: [forBuyer ? "gift-card-receipt" : "gift-card"],
+      attachments: image ? [{ filename: "gift-card.png", content: image, cid: IMAGE_CID }] : undefined,
     });
     if (!result.ok) {
       // Loud: someone paid for a gift that did not arrive.

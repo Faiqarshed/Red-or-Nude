@@ -14,7 +14,7 @@ import { bookings, customers, giftCards, payments, refunds } from "@/lib/db/sche
 import { sendMail } from "@/lib/email";
 import { esc } from "@/lib/email/html";
 import { formatSAR } from "@/lib/money";
-import { reverseCredit } from "@/lib/wallet";
+import { reverseCredit, reverseGiftCards } from "@/lib/wallet";
 import { alertOwner } from "./alert";
 import { errorText, logPaymentEvent } from "./events";
 import { getDriver, mergeRaw } from "./index";
@@ -263,7 +263,13 @@ export async function refundedOutside(ref: string): Promise<void> {
     if (back <= 0) return;
     const full = back >= total;
 
-    const wallet = await db.transaction((tx) => reverseCredit(tx, rows.map((r) => r.id), back));
+    const ids = rows.map((r) => r.id);
+    const [wallet, gift] = await db.transaction(async (tx) => [
+      await reverseCredit(tx, ids, back),
+      // A gift card already in someone's wallet: freezing it does nothing, so
+      // what is left of it there is taken back instead.
+      await reverseGiftCards(tx, ids, back),
+    ]);
 
     if (full) {
       await db.transaction(async (tx) => {
@@ -319,6 +325,13 @@ export async function refundedOutside(ref: string): Promise<void> {
           : "") +
         (wallet.owedHalalas
           ? ` She had already spent it: her wallet is ${formatSAR(wallet.owedHalalas)} SAR below zero (shown to her as 0). See "Needs your decision".`
+          : "") +
+        (gift.tookHalalas ? `\n${formatSAR(gift.tookHalalas)} SAR of the gift card was taken back from the wallet it was in.` : "") +
+        (gift.owedHalalas
+          ? ` The buyer had bought it for herself and spent it: her wallet is ${formatSAR(gift.owedHalalas)} SAR below zero.`
+          : "") +
+        (gift.lostHalalas
+          ? `\n${formatSAR(gift.lostHalalas)} SAR of it had already been spent by the person it was given to: the salon's loss. See "Needs your decision".`
           : ""),
     );
   } catch (err) {

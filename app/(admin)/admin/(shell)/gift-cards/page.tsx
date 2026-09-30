@@ -22,6 +22,7 @@ export default async function GiftCardsPage() {
   return (
     <GiftCardsView
       canAdjust={can(user.role, "giftcards.adjust")}
+      canChangeEmail={can(user.role, "wallet.decide")}
       cards={cardRows.map((c) => ({
         id: c.id,
         code: c.code,

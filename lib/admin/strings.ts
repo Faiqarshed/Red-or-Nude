@@ -545,6 +545,7 @@ const ar = {
     kinds: {
       "negative-balance": "رصيد تحت الصفر: أُعيد مبلغ رصيد كانت قد صرفته",
       "no-customer": "مبلغ على حجز ملغى بلا عميلة",
+      "gift-card-loss": "بطاقة هدية استُرد ثمنها للمشتري بعد أن صُرفت: خسارة على الصالون",
     } as Record<string, string>,
     booking: (code: string) => `الحجز ${code}`,
     settle: "احسميها",
@@ -598,6 +599,12 @@ const ar = {
     cancelBody: (code: string, balance: string) =>
       `لن يمكن استخدام الرصيد المتبقي ${balance} ر.س على البطاقة ${code}. لا يمكن التراجع عن هذا الإجراء.`,
     keepCard: "إبقاء البطاقة",
+    changeEmailTitle: "تصحيح بريد المستلمة (خطأ من المشتري)",
+    newEmail: "البريد الصحيح",
+    changeEmail: "تغيير البريد وإرسال البطاقة",
+    emailClaimed: "استُخدمت البطاقة، وقيمتها في محفظة. صحّحي ذلك من «بحاجة إلى قرارك».",
+    emailReason: "اكتبي سبب التغيير.",
+    emailInvalid: "أدخلي بريداً إلكترونياً صحيحاً.",
     valueTaken: (amount: string) => `القيمة ${amount} ر.س موجودة بالفعل`,
     imageRequired: "اختاري صورة من مكتبة الصور لهذا التصميم",
     designInUse: "لا يمكن حذف هذا التصميم لأنه مستخدم في بطاقات مُصدرة. عطّليه بدلاً من ذلك.",
@@ -1383,6 +1390,7 @@ const en: AdminStrings = {
     kinds: {
       "negative-balance": "Below zero: credit she had spent went back to her card",
       "no-customer": "Money on a cancelled booking with no customer",
+      "gift-card-loss": "A gift card refunded to its buyer after it was spent: the salon's loss",
     } as Record<string, string>,
     booking: (code: string) => `Booking ${code}`,
     settle: "Settle",
@@ -1436,6 +1444,12 @@ const en: AdminStrings = {
     cancelBody: (code: string, balance: string) =>
       `The remaining ${balance} SAR on ${code} can no longer be spent. This can't be undone.`,
     keepCard: "Keep card",
+    changeEmailTitle: "Fix the recipient's email (the buyer's typo)",
+    newEmail: "Correct email",
+    changeEmail: "Change email and resend the card",
+    emailClaimed: "The card has been used and its value is in a wallet. Correct it from \"Needs your decision\".",
+    emailReason: "Write why you are changing it.",
+    emailInvalid: "Enter a valid email.",
     valueTaken: (amount: string) => `${amount} SAR is already one of the values`,
     imageRequired: "Pick an image from the media library for this design",
     designInUse: "This design is on cards already issued, so it can't be deleted. Switch it off instead.",

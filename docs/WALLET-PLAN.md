@@ -139,7 +139,8 @@ Examples:
   - **gift card claim** (someone else paid): a `reversal` of at most her `available`; the rest → `wallet_decisions` as the salon's loss. If the buyer's email is the recipient's, it is treated as her own payment.
   - What went back beyond the credits (a group where some guests were served) is in the owner's alert that `refundedOutside` already sends for every outside refund, now with what was taken from the wallet. Not a `wallet_decisions` row: it isn't wallet money, and a running total reported again would write it again.
   - Called from `refundedOutside` (`refund.ts`) for full **and** partial refunds, which covers dashboard refunds, the refund webhooks and chargebacks found by the daily comparison.
-  - **Built (step 7a)** for cancel and chair credit. The gift card case joins it in step 6.
+  - **Built (step 7a)** for cancel and chair credit.
+- `reverseGiftCards(tx, paymentIds, refundedSoFarHalalas)`: **built (step 6)**, beside `reverseCredit` in `refundedOutside`. A claimed card's value is in a wallet, so freezing the card does nothing; what is left of it there is taken back instead, never below zero, and the rest is the salon's loss (`gift-card-loss` on "Needs your decision"). A card the buyer bought for her own email is taken back in full, as her own credit would be. The running total less what was taken and what was lost, so a repeat writes nothing.
 - `creditChair(tx, paymentId, bookingId, halalas)`: **built (step 7b).** After launch, `refundOrCredit` (`purchase.ts`) writes a `chair-credit` to the visit's email in the transaction that marks `owedCredit`, and emails her. The mark stays, since it is what tells the settle job the payment is handled. Before launch it marks only. **Launch (step 9)** still owes a one-off pass converting existing `owedCredit` marks **only where the payment is still `paid`**, emailing each.
 
 ### Checkout
@@ -186,23 +187,14 @@ Examples:
 - A customer who arrives without a booking books herself on the app, at the desk if need be.
 
 ### Gift card delivery and emails
-- `app/api/gift-cards` and its form: `recipientEmail` required.
-- `deliver()` (`purchase.ts:313`): if the recipient email matches a verified account, claim the card into that wallet right away.
-- **Recipient email** (`lib/giftcard/email.ts`), card image always inline:
-  - account holder: "Your X SAR gift card from <buyer> is in your Red or Nude wallet."
-  - no account: the code, plus "Enter it at checkout with this email. What's left goes to your wallet. Or sign in with this email and it's added now."
-- Inline image: `SendMailInput.attachments` gains `cid?`, and the mail transport passes it through. The PNG is fetched from `/api/gift-card-image`, best-effort, falling back to the remote `<img>`.
-- **Buyer receipt** says which of the two happened, and that the card works only with the recipient's email.
-- **`lib/wallet-email.ts` → `sendWalletEmail(kind, …)`** on `brandedEmail` + `sendReceipt`:
-  - cancel credit (hers and the salon's): this is the missing cancel email;
-  - gift card leftover;
-  - chair credit;
-  - reversal;
-  - owner correction.
-  - A guest's version adds "Sign in with <email> at /account to use it."
-- **`createAccount`** (`lib/account/create.ts`):
-  - also moves `wallet_txns` whose `owner_email` matches onto the account;
-  - then claims active, unexpired cards locked to that email.
+- **Built (step 6).** `app/api/gift-cards`: `recipientEmail` required (the form already asked for it).
+- **Tax from launch:** `giftCardLine(amountSar, taxed)` (`lib/payments/lines.ts`); the route passes `walletLaunched()`. A taxed card is a new StreamPay product version (the VAT flag is part of the version).
+- **Into her wallet:** `claimCardsFor(email)` (`lib/wallet.ts`) moves every card sold after launch to that email, still active and unexpired, into the wallet of the account with that email. Called by `deliver()` right after a card is issued, and by `createAccount` after the account commits. Neither can fail the sale or the sign-up: a card that doesn't move stays a working code. A card sold before launch stays a code, as it was sold.
+- **Recipient email** (`lib/giftcard/email.ts`): already in her wallet ("sign in and switch on Use my credit"), or the code with her email ("booking with this email; what's left stays yours; or sign in and it goes into your wallet now"). Before launch, the old wording.
+- **Buyer receipt** says which: in the recipient's wallet, or that it works only with the recipient's email.
+- **Inline image:** `SendMailInput.attachments` gains `cid`, which nodemailer passes through. The PNG is fetched from `/api/gift-card-image` (5 s at most), falling back to the remote `<img>`.
+- **`lib/wallet-email.ts`** (built with steps 2 and 7): the cancel credit email, the chair credit email, the owner correction email. Not built: a separate "gift card leftover" email; her wallet on /account shows it.
+- **`createAccount`** (`lib/account/create.ts`): nothing moves between rows; a wallet is its email (`walletBalance`), so guest-row credit is hers on sign-up. Then `claimCardsFor`.
 
 ### Account screen
 - **Built (step 3).** `accountWallet(email)` (`lib/wallet.ts`): null before launch; after it, `available` and her email's last 10 rows, newest first. `app/(site)/account/page.tsx` adds it to its `Promise.all`, by the email she signs in with.
@@ -217,7 +209,7 @@ Examples:
   - a revived payment that could not be confirmed or delivered.
 - Each item has **Correct**: an amount (+ or −), a required reason, written as a `correction` row and to the audit log, and emailed to her. Marking an item done without a correction also needs a reason.
 - **Built (step 8a):** `/admin/wallet-decisions`, the `wallet.decide` capability (CEO only), `decideWallet` (closes the case and writes the correction in one transaction, guarded on the case being open, so a double submit writes one), `correctWallet` and `walletOwner` in `lib/wallet.ts`, and the correction email (sent only after launch). Not yet: the staff form for a mistyped email, and changing a gift card's email (with step 6).
-- **Change a gift card's email:** for a buyer's typo in the recipient email. Owner only, a required reason, audited, and only while the card is unclaimed. The new recipient gets the gift card email.
+- **Change a gift card's email. Built:** `changeGiftCardEmail` (`gift-cards/actions.ts`) and a section in the card drawer, for a buyer's typo in the recipient email. `wallet.decide` (the owner), a required reason, audited, and only while the card is still an unused code (the update is guarded on `active`). The new address is sent the card, and it goes into her wallet if she has an account.
 - Skipped: a read-only balance in the admin customer screen. Add it when support asks.
 
 ## Build order
@@ -228,9 +220,9 @@ One commit per step, docs in the same commit. Nothing reaches customers until st
 3. **Built.** Account screen: the wallet card and its history.
 4. **Built.** Booking checkout: gift card and wallet, quote route, UI.
 5. **Built.** Purchase checkouts: `startPurchase` wallet in one transaction and zero path, three routes, releases, revive re-spend, UI.
-6. Gift cards: required recipient email, the email lock, delivery claim, `createAccount` claim/merge, inline image, emails.
-7. **Built:** `reverseCredit` in `refundedOutside`, and chair credit after launch. Left for launch: converting `owedCredit` marks made before it. The gift card case of `reverseCredit` waits for step 6.
-8. "Needs your decision" page, owner correction (**built**), and changing a gift card's email.
+6. **Built.** Gift cards: required recipient email, taxed from launch, delivery and sign-up claim, chargeback reversal (`reverseGiftCards`), inline image, emails.
+7. **Built:** `reverseCredit` in `refundedOutside`, and chair credit after launch; the gift card case is `reverseGiftCards` (step 6). Left for launch: converting `owedCredit` marks made before it.
+8. **Built.** "Needs your decision" page, owner correction, and changing a gift card's email.
 9. Launch: set `wallet_launched_at`, remove `refundBookings` and `payments.refund`, PAYMENTS-STATUS.md §2 updated to "built".
 
 ## Verification

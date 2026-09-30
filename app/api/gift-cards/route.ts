@@ -20,6 +20,7 @@ import { clientIp, throttled } from "@/lib/throttle";
 import { startPurchase } from "@/lib/payments/purchase";
 import { giftCardLine } from "@/lib/payments/lines";
 import { currentCustomer } from "@/lib/account/guard";
+import { walletLaunched } from "@/lib/wallet";
 
 export const dynamic = "force-dynamic";
 // The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
@@ -33,7 +34,8 @@ const body = z.object({
   buyerName: nameField.optional().or(z.literal("")),
   buyerEmail: emailField.optional().or(z.literal("")),
   recipientName: nameField,
-  recipientEmail: emailField.optional().or(z.literal("")),
+  // Required: a card sold from the wallet's launch works only with its recipient's email.
+  recipientEmail: emailField,
   message: z.string().max(500).optional(),
   lang: z.enum(["ar", "en"]).optional(),
   /** This attempt, made by the page (lib/giftcard-selection.ts); see GiftIntent. */
@@ -129,7 +131,7 @@ export async function POST(request: Request) {
       attemptId: d.attemptId ?? randomUUID(),
     },
     amountHalalas: d.amountSar * 100,
-    lines: [giftCardLine(d.amountSar)],
+    lines: [giftCardLine(d.amountSar, await walletLaunched())],
     title: "Gift card",
     back: "/gift-card/payment",
     ip,
