@@ -70,7 +70,6 @@ export const paymentStatus = pgEnum("payment_status", [
   "paid",
   "failed",
   "refunded",
-  "partially_refunded",
 ]);
 
 export const giftCardStatus = pgEnum("gift_card_status", [
@@ -498,15 +497,16 @@ export const bookings = pgTable(
     removalPriceHalalas: integer("removal_price_halalas").notNull().default(0),
     subtotalHalalas: integer("subtotal_halalas").notNull().default(0),
     /**
-     * Everything taken off this guest's line: their share of the group discount
-     * plus their share of any promo code, as one number.
+     * Everything taken off this guest's line: their share of the group discount,
+     * of any promo code and of any points spent, as one number.
      *
-     * ponytail: the two are not stored separately, so "how much did promos cost
-     * us" cannot be answered from this column alone — `promo_code_id` says only
-     * that one was used. Split it into two columns when someone actually wants
-     * that report.
+     * The promo and points shares are also kept on their own below, because the
+     * StreamPay invoice names each discount as its own coupon. The group share is
+     * whatever is left: discount − promo − points.
      */
     discountHalalas: integer("discount_halalas").notNull().default(0),
+    promoDiscountHalalas: integer("promo_discount_halalas").notNull().default(0),
+    pointsDiscountHalalas: integer("points_discount_halalas").notNull().default(0),
     vatHalalas: integer("vat_halalas").notNull().default(0),
     totalHalalas: integer("total_halalas").notNull().default(0),
 
@@ -565,6 +565,10 @@ export const bookings = pgTable(
     slotUnique: uniqueIndex("bookings_station_slot_unique")
       .on(t.stationId, t.startsAt)
       .where(sql`${t.status} not in ('cancelled', 'no_show')`),
+    // Not declarable here: `bookings_station_no_overlap`, an EXCLUDE constraint
+    // refusing any two live bookings whose times overlap on one chair, lives in
+    // hand-written migration drizzle/0028_no_chair_overlap.sql. A lapsed hold
+    // still counts until it is swept (withLapsedHoldsReleased, lib/bookings.ts).
     // One refill per booking, decided by the database rather than by a read
     // that two concurrent requests could both pass. Partial for the same reason
     // as the slot index: a cancelled refill gives the window back.
@@ -738,7 +742,7 @@ export const payments = pgTable(
      * same reason: a receipt must outlive the thing it paid for.
      */
     treatBookingId: uuid("treat_booking_id"),
-    provider: text("provider"), // moyasar | tap | manual
+    provider: text("provider"), // streampay | fake
     providerRef: text("provider_ref"),
     method: paymentMethod("method"),
     amountHalalas: integer("amount_halalas").notNull(),
@@ -768,6 +772,48 @@ export const payments = pgTable(
     oneLiveAttempt: uniqueIndex("payments_booking_live_unique")
       .on(t.bookingId)
       .where(sql`${t.bookingId} is not null and ${t.status} in ('pending', 'paid')`),
+  }),
+);
+
+/**
+ * Our thing → its StreamPay id. One table for every kind, keyed by a string
+ * lib/payments/streampay.ts builds: `product:service:<uuid>`, `product:refill:<uuid>`,
+ * `product:giftcard`, `coupon:<label>:<halalas>`, `consumer:<phone|email>`.
+ *
+ * `signature` is what was last pushed (name, price, VAT flag), so a sync only
+ * calls StreamPay when something actually changed. `price_id` is the product's
+ * live price, which StreamPay archives and replaces on every price edit.
+ */
+export const streampayIds = pgTable("streampay_ids", {
+  key: text("key").primaryKey(),
+  streampayId: text("streampay_id").notNull(),
+  priceId: text("price_id"),
+  signature: text("signature"),
+  ...stamps,
+});
+
+/**
+ * Everything that happened to a payment, append-only, whether or not a screen
+ * shows it. Two writers: a database trigger on `payments` (migration 0030) logs
+ * every insert and every change, so no code path can skip it; and
+ * logPaymentEvent (lib/payments/events.ts) logs what is not a row change —
+ * webhooks, alerts, failed refunds, settle runs, StreamPay products, receipts.
+ *
+ * No foreign keys: the record outlives whatever it describes.
+ * ponytail: no retention; prune by `at` if it ever grows too large to keep.
+ */
+export const paymentEvents = pgTable(
+  "payment_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+    paymentId: uuid("payment_id"),
+    providerRef: text("provider_ref"),
+    kind: text("kind").notNull(),
+    detail: jsonb("detail"),
+  },
+  (t) => ({
+    byRef: index("payment_events_ref_idx").on(t.providerRef, t.at),
   }),
 );
 

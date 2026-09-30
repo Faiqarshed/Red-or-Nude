@@ -1,51 +1,63 @@
-// Public gift-card purchase. Charges for the card, then issues it.
+// Public gift-card purchase.
 //
 // The charge is not decoration: without it this endpoint mints spendable balance
 // to anyone who can POST to it. Same driver and the same `payments` row shape as
 // a booking (lib/payments/), so gift-card revenue shows up in exactly the same
 // place as every other sale.
 //
-// Order matters — money first, card second. A card issued before a declined
-// charge is free money; a charge that succeeds and then fails to issue is a
-// refund we can see in the log and settle, which is the recoverable direction.
+// Nothing is issued here. The request is recorded against a pending payment and
+// the card is issued once that payment is verified (lib/payments/purchase.ts) —
+// on the spot with the fake driver, after the embedded checkout with StreamPay.
 
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
+import { emailField, nameField } from "@/lib/account/fields";
 import { db } from "@/lib/db";
-import { giftCardDesigns, payments } from "@/lib/db/schema";
-import { issueGiftCard } from "@/lib/giftcards";
-import { sendGiftCardEmails } from "@/lib/giftcard/email";
-import { notify } from "@/lib/notify";
-import { getDriver } from "@/lib/payments";
-import { sarToHalalas } from "@/lib/money";
+import { giftCardDesigns, giftCardValues, payments } from "@/lib/db/schema";
+import { clientIp, throttled } from "@/lib/throttle";
+import { startPurchase } from "@/lib/payments/purchase";
+import { giftCardLine } from "@/lib/payments/lines";
 
 export const dynamic = "force-dynamic";
+// The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
+export const maxDuration = 60;
 
 const body = z.object({
-  // The preset denominations live in gift_card_values and are admin-managed, but
-  // the builder also offers a custom amount, so the bound is what's enforced.
-  amountSar: z.coerce.number().min(50).max(2000),
+  // Whole riyals, and one of the salon's active amounts (checked below).
+  amountSar: z.coerce.number().int().positive(),
   designId: z.string().uuid().nullable().optional(),
-  method: z.enum(["card", "mada", "stc", "apple"]),
-  buyerName: z.string().trim().max(120).optional(),
-  buyerEmail: z.string().trim().email().optional().or(z.literal("")),
-  recipientName: z.string().trim().max(120).optional(),
-  recipientEmail: z.string().trim().email().optional().or(z.literal("")),
-  recipientPhone: z
-    .string()
-    .trim()
-    .regex(/^(\+?966|0)?5\d{8}$/, "invalid-phone")
-    .optional()
-    .or(z.literal("")),
+  // The builder's own checks (lib/account/fields.ts), so the page and the API agree.
+  buyerName: nameField.optional().or(z.literal("")),
+  buyerEmail: emailField.optional().or(z.literal("")),
+  recipientName: nameField,
+  recipientEmail: emailField.optional().or(z.literal("")),
   message: z.string().max(500).optional(),
   lang: z.enum(["ar", "en"]).optional(),
+  /** This attempt, made by the page (lib/giftcard-selection.ts); see GiftIntent. */
+  attemptId: z.string().uuid().optional(),
   /** Dev-only, to exercise the decline path. Stripped in production. */
   simulate: z.literal("decline").optional(),
 });
 
+/**
+ * New gift card checkouts allowed per IP, and per buyer email, in an hour.
+ *
+ * The page needs no account and a card is worth money the moment it is issued,
+ * which is what people testing stolen cards look for: every decline they cause
+ * counts against the salon's StreamPay account. A reload or a double tap resumes
+ * the same checkout (attemptId), so it does not count as a new one.
+ */
+const GIFT_TRIES_PER_HOUR = 5;
+
 export async function POST(request: Request) {
+  const ip = clientIp(request);
+  // Cheap first line, per server instance. The count below is the real limit.
+  if (throttled(`gift-card:${ip}`, { windowMs: 3_600_000, max: GIFT_TRIES_PER_HOUR * 2 })) {
+    return NextResponse.json({ error: "too-many" }, { status: 429 });
+  }
+
   let payload: unknown;
   try {
     payload = await request.json();
@@ -62,10 +74,27 @@ export async function POST(request: Request) {
   }
   const d = parsed.data;
 
-  // Nobody to give it to.
-  if (!d.recipientEmail && !d.recipientPhone) {
-    return NextResponse.json({ error: "no-recipient" }, { status: 400 });
-  }
+  // Counted in the database, so it holds across server instances.
+  const email = d.buyerEmail?.trim().toLowerCase() || null;
+  const [{ tries }] = await db
+    .select({ tries: sql<number>`count(*)::int` })
+    .from(payments)
+    .where(
+      sql`${payments.raw} -> 'intent' ->> 'kind' = 'gift_card'
+        and ${payments.createdAt} > now() - interval '1 hour'
+        and (${payments.raw} ->> 'ip' = ${ip}
+          ${email ? sql`or lower(${payments.raw} -> 'intent' ->> 'buyerEmail') = ${email}` : sql``})`,
+    );
+  if (tries >= GIFT_TRIES_PER_HOUR) return NextResponse.json({ error: "too-many" }, { status: 429 });
+
+  // Only the amounts the salon sells (/admin/gift-cards). There is no custom
+  // amount: each amount is its own StreamPay product, see giftCardLine.
+  const [value] = await db
+    .select({ id: giftCardValues.id })
+    .from(giftCardValues)
+    .where(and(eq(giftCardValues.amountHalalas, d.amountSar * 100), eq(giftCardValues.active, true)))
+    .limit(1);
+  if (!value) return NextResponse.json({ error: "invalid-amount" }, { status: 400 });
 
   // Only offer designs the salon has actually published.
   let designId: string | null = null;
@@ -78,98 +107,34 @@ export async function POST(request: Request) {
     designId = design?.id ?? null;
   }
 
-  const amountHalalas = sarToHalalas(d.amountSar);
-  const driver = getDriver();
-  const ref = randomUUID();
-
-  let charge;
-  try {
-    charge = await driver.charge({
-      ref,
-      amountHalalas,
-      method: d.method,
-      simulate: process.env.NODE_ENV === "production" ? undefined : d.simulate,
-    });
-  } catch (err) {
-    console.error("[giftcards] charge threw", err);
-    return NextResponse.json({ error: "failed" }, { status: 500 });
-  }
-
-  if (charge.status !== "paid") {
-    return NextResponse.json({ error: "payment-declined" }, { status: 402 });
-  }
-
-  const result = await issueGiftCard({
-    amountHalalas,
-    designId,
-    buyerName: d.buyerName || null,
-    buyerEmail: d.buyerEmail || null,
-    recipientName: d.recipientName || null,
-    recipientEmail: d.recipientEmail || null,
-    recipientPhone: d.recipientPhone || null,
-    message: d.message || null,
-    expiresInMonths: 12,
+  const result = await startPurchase({
+    intent: {
+      kind: "gift_card",
+      amountSar: d.amountSar,
+      designId,
+      buyerName: d.buyerName || null,
+      buyerEmail: d.buyerEmail || null,
+      recipientName: d.recipientName || null,
+      recipientEmail: d.recipientEmail || null,
+      message: d.message || null,
+      lang: d.lang ?? "ar",
+      // Missing, the purchase simply never resumes an earlier checkout.
+      attemptId: d.attemptId ?? randomUUID(),
+    },
+    amountHalalas: d.amountSar * 100,
+    lines: [giftCardLine(d.amountSar)],
+    title: "Gift card",
+    back: "/gift-card/payment",
+    ip,
+    payer: { name: d.buyerName || null, email: d.buyerEmail || null },
+    simulate: d.simulate,
   });
 
   if (!result.ok) {
-    // Paid for, but no card exists. Loud, because someone is owed a refund.
-    console.error(`[giftcards] charged ${ref} but could not issue; refund owed`, result.error);
-    return NextResponse.json({ error: "failed" }, { status: 500 });
+    const status = result.error === "payment-declined" ? 402 : 500;
+    return NextResponse.json({ error: result.error }, { status });
   }
-
-  // The sale, recorded where every other sale is recorded.
-  await db.insert(payments).values({
-    giftCardId: result.id,
-    provider: driver.name,
-    providerRef: charge.providerRef,
-    method: d.method,
-    amountHalalas,
-    status: "paid",
-    raw: charge.raw,
-  });
-
-  // Delivery. The buyer still gets a WhatsApp share button on the success
-  // screen — this is the automatic half.
-  //
-  // Email goes through lib/giftcard/email.ts and really sends (SMTP), the same
-  // path the booking invoice uses. WhatsApp still goes through notify(), which
-  // is log-only until a provider is chosen. Two paths on purpose — see
-  // docs/INVOICE-EMAIL.md §7; the email one is deliberately *not* routed through
-  // notify() as well, or a real notify driver would send this card twice.
-  //
-  // Awaited, not fired and forgotten: on a serverless host the function is
-  // frozen the moment this response returns. Neither call can fail the sale —
-  // the card is issued and paid for, and both swallow their own errors.
-  const lang = d.lang ?? "ar";
-
-  await sendGiftCardEmails({
-    code: result.code,
-    amountSar: d.amountSar,
-    senderName: d.buyerName || null,
-    recipientName: d.recipientName || null,
-    recipientEmail: d.recipientEmail || null,
-    buyerEmail: d.buyerEmail || null,
-    message: d.message || null,
-    expiresAt: result.expiresAt,
-    lang,
-  });
-
-  if (d.recipientPhone) {
-    await notify({
-      channel: "whatsapp",
-      to: d.recipientPhone,
-      template: "gift-card",
-      lang,
-      data: {
-        code: result.code,
-        amountSar: d.amountSar,
-        senderName: d.buyerName ?? null,
-        recipientName: d.recipientName ?? null,
-        message: d.message ?? null,
-        cardUrl: `/gift/${result.code}`,
-      },
-    });
-  }
-
-  return NextResponse.json({ id: result.id, code: result.code }, { status: 201 });
+  if ("checkout" in result) return NextResponse.json({ checkout: result.checkout });
+  if (result.delivered.kind !== "gift_card") return NextResponse.json({ error: "failed" }, { status: 500 });
+  return NextResponse.json({ code: result.delivered.code }, { status: 201 });
 }

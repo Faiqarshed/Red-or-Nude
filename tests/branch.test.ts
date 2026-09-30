@@ -12,9 +12,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { addons, bookings, services } from "@/lib/db/schema";
+import { randomUUID } from "node:crypto";
+import { addons, bookings, payments, services } from "@/lib/db/schema";
 import { createBooking, createBookings, bookingSummaries, releaseWebHold } from "@/lib/bookings";
 import { confirmBookingPayment } from "@/lib/payments/confirm";
+import { buildBookingInvoice } from "@/lib/invoice/data";
+import { renderInvoiceEmail } from "@/lib/invoice/template";
 import { halalasToSar, sarToHalalas, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { promoDiscount, normalizePromoCode } from "@/lib/promo";
 import {
@@ -35,7 +38,6 @@ import {
   toStoredPhone,
   validateSaudiMobile,
 } from "@/lib/phone";
-import { brandOf, cvvLength, formatCardNumber, luhnValid, validateExpiry } from "@/lib/card";
 import { checkBirthday, checkEmail, checkNote, checkPersonName } from "@/lib/admin/validate";
 import { validationMessages } from "@/lib/validation-messages";
 import { utcToLocalDate } from "@/lib/availability";
@@ -484,6 +486,60 @@ describe("a party is one bill and one unit", () => {
     expect(summaries.every((s) => s.groupSize === 2)).toBe(true);
   });
 
+  it("sends a booking confirmation that links StreamPay's tax invoice, not a second one", async () => {
+    const party = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE).toISOString(),
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE, email: "vat@example.com" },
+      source: "web",
+      status: "pending",
+    });
+    if (!party.ok) throw new Error(party.error);
+    const [b] = party.bookings;
+    const url = "https://streampay.sa/s/test-invoice";
+    await db.insert(payments).values({
+      bookingId: b.id, provider: "streampay", providerRef: randomUUID(), method: "mada",
+      amountHalalas: b.totalHalalas, status: "paid", raw: { invoiceUrl: url },
+    });
+
+    const invoice = await buildBookingInvoice([b.id]);
+    expect(invoice?.taxInvoiceUrl).toBe(url);
+    const { html, text } = renderInvoiceEmail(invoice!);
+    expect(html).toContain(url);
+    expect(text).toContain(url);
+    // Without the PDF she is told so, and pointed at the link.
+    expect(text).toContain("تعذّر إرفاق فاتورتك الضريبية");
+    expect(renderInvoiceEmail(invoice!, true).text).toContain("مرفقة بهذه الرسالة");
+    // No second set of VAT figures to disagree with StreamPay's.
+    expect(html).not.toMatch(/VAT no\.|Subtotal \(excl\. VAT\)|Tax Invoice/);
+  });
+
+  it("leaves out a checkout she opened and walked away from", async () => {
+    const party = await createBookings({
+      branchId: f.branchA,
+      startsAt: new Date(FUTURE).toISOString(),
+      members: [{ serviceId: f.svcA.id, addonIds: [] }],
+      customer: { phone: TEST_PHONE },
+      source: "web",
+      status: "pending",
+    });
+    if (!party.ok) throw new Error(party.error);
+    const made = party.bookings[0];
+    // Fresh: still hers to pay, so still listed.
+    expect(await bookingSummaries({ code: made.code })).toHaveLength(1);
+
+    // Past the payment window with no checkout open: gone, before and after the sweep.
+    await db.update(bookings).set({ createdAt: new Date(Date.now() - 60 * 60_000) }).where(eq(bookings.code, made.code));
+    expect(await bookingSummaries({ code: made.code })).toHaveLength(0);
+    await db.update(bookings).set({ status: "cancelled", cancelReason: "payment-timeout" }).where(eq(bookings.code, made.code));
+    expect(await bookingSummaries({ code: made.code })).toHaveLength(0);
+
+    // A cancellation the salon made still shows.
+    await db.update(bookings).set({ cancelReason: "salon" }).where(eq(bookings.code, made.code));
+    expect(await bookingSummaries({ code: made.code })).toHaveLength(1);
+  });
+
   it("never returns a name, a phone, an address or a chair to a reference holder", async () => {
     const made = await createBooking({
       branchId: f.branchA,
@@ -548,7 +604,7 @@ describe("going back from checkout gives the chair up", () => {
     });
     if (!made.ok) throw new Error(made.error);
 
-    const paid = await confirmBookingPayment({ code: made.bookings[0].code, method: "card" });
+    const paid = await confirmBookingPayment({ code: made.bookings[0].code });
     expect(paid.ok).toBe(true);
 
     expect(await releaseWebHold(made.bookings[0].code, "paid@example.com")).toBe(false);
@@ -643,56 +699,6 @@ describe("a Saudi mobile, however it was pasted", () => {
   it("groups for reading without changing what is submitted", () => {
     expect(formatNational("0512345678")).toBe("51 234 5678");
     expect(toStoredPhone(formatNational("0512345678"))).toBe("0512345678");
-  });
-});
-
-// ---------------------------------------------------------------------------
-
-describe("the card form, which never sends a card anywhere", () => {
-  it("knows the brands it claims to", () => {
-    expect(brandOf("4111111111111111")).toBe("visa");
-    expect(brandOf("5500000000000004")).toBe("mastercard");
-    expect(brandOf("340000000000009")).toBe("amex");
-    expect(brandOf("")).toBe("unknown");
-  });
-
-  it("asks American Express for four digits and everyone else for three", () => {
-    expect(cvvLength("340000000000009")).toBe(4);
-    expect(cvvLength("4111111111111111")).toBe(3);
-  });
-
-  it("checks the digits add up", () => {
-    expect(luhnValid("4111111111111111")).toBe(true);
-    expect(luhnValid("4111111111111112")).toBe(false);
-  });
-
-  it("spaces a number as it is typed", () => {
-    expect(formatCardNumber("4111111111111111")).toMatch(/^4111 1111 1111 1111$/);
-  });
-
-  it("keeps a card valid through the last day of its printed month", () => {
-    // Local dates on purpose: validateExpiry reads getFullYear/getMonth, which
-    // are the reader's own clock. Building these in UTC would put the last
-    // instant of June into July on any positive offset — including Riyadh's.
-    const june2031 = new Date(2031, 5, 15);
-    // A card expiring this month is still good today — months are compared, not days.
-    expect(validateExpiry("06/31", june2031)).toBeNull();
-    expect(validateExpiry("05/31", june2031)).toBe("expiry-past");
-    expect(validateExpiry("07/31", june2031)).toBeNull();
-
-    // The very last instant of the expiry month still passes, and the first
-    // instant of the next month does not.
-    expect(validateExpiry("06/31", new Date(2031, 5, 30, 23, 59, 59, 999))).toBeNull();
-    expect(validateExpiry("06/31", new Date(2031, 6, 1))).toBe("expiry-past");
-  });
-
-  it("refuses an impossible month and a mistyped year", () => {
-    const now = new Date(Date.UTC(2031, 5, 15));
-    expect(validateExpiry("00/31", now)).toBe("expiry-month");
-    expect(validateExpiry("13/31", now)).toBe("expiry-month");
-    expect(validateExpiry("06/99", now)).toBe("expiry-far");
-    expect(validateExpiry("6/31", now)).toBe("expiry-format");
-    expect(validateExpiry("", now)).toBe("required");
   });
 });
 

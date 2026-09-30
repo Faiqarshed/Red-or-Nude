@@ -12,40 +12,68 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
-import PaymentMethods, { methodIdFor } from "@/components/PaymentMethods";
+import PaymentMethods from "@/components/PaymentMethods";
+import { declineMessage, usePaymentReturn, type PaymentOutcome } from "@/components/StreamPayCheckout";
+import { CheckingModal } from "@/components/PayFlow";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
-import { formatDateLabel } from "@/lib/booking";
+import { showPaidOn } from "@/lib/paid-handoff";
 import type { PublicPack } from "@/lib/catalog";
 import PackLines from "../PackLines";
 
 export default function MembershipPaymentView({
   pack,
   signedIn,
+  returning,
 }: {
   pack: PublicPack;
   signedIn: boolean;
+  /** Back from the bank (`?paid=`): the loader is drawn from the first paint. */
+  returning: boolean;
 }) {
   const { c, lang } = useI18n();
   const p = c.payment;
   const k = c.packs;
-  const router = useRouter();
 
-  const [method, setMethod] = useState(p.cardTitle);
-  const [cardValid, setCardValid] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [checkout, setCheckout] = useState<{ ref: string; url: string } | null>(null);
   /**
-   * The charge went through and the credits may not have. The button stays
-   * off for good: the only thing pressing it again can do is charge her twice.
+   * The charge went through and the credits did not. The button stays off for
+   * good: the only thing pressing it again can do is charge her twice.
    */
   const [paidNotGranted, setPaidNotGranted] = useState(false);
-  /** When she bought it — the expiry on the success panel counts from here. */
-  const [boughtAt, setBoughtAt] = useState<number | null>(null);
+  // Paid: back to the shelf, which shows what she bought over itself. The
+  // expiry there counts from now.
+  const bought = () => showPaidOn("/memberships", "pack", { pack, boughtAt: Date.now() });
+
+  const showError = (code: string | undefined) => {
+    // Nothing was charged on a decline, so retrying is safe and cheap.
+    if (code === "signed-out") setError(k.signInFirst);
+    else if (code === "payment-declined") setError(k.declined);
+    else if (code === "paid-not-granted" || code === "not-delivered") {
+      setPaidNotGranted(true);
+      setError(k.paidNotGranted);
+    }
+    // Anything else may have happened before or after the charge — a thrown
+    // gateway call, a dropped connection — so she is sent to check her account
+    // before retrying, not told outright to try again.
+    else setError(k.failed);
+  };
+
+  const onPaid = (outcome: PaymentOutcome) => {
+    setCheckout(outcome.status === "failed" ? (outcome.checkout ?? null) : null);
+    if (outcome.status === "paid") bought();
+    else {
+      const why = declineMessage(c.payDecline, outcome);
+      if (why) setError(why);
+      else showError(outcome.error);
+    }
+  };
+  const checkingPayment = usePaymentReturn(onPaid, returning);
 
   const confirm = async () => {
     if (submitting || paidNotGranted) return;
@@ -55,28 +83,13 @@ export default function MembershipPaymentView({
       const res = await fetch("/api/packs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ packId: pack.id, method: methodIdFor(method, p) }),
+        body: JSON.stringify({ packId: pack.id }),
       });
 
-      if (res.ok) {
-        setBoughtAt(Date.now());
-        // Her account and the shelf both say something different now.
-        router.refresh();
-        return;
-      }
-
       const data = await res.json().catch(() => ({}));
-      // Nothing was charged on a decline, so retrying is safe and cheap.
-      if (data.error === "signed-out") setError(k.signInFirst);
-      else if (data.error === "payment-declined") setError(k.declined);
-      else if (data.error === "paid-not-granted") {
-        setPaidNotGranted(true);
-        setError(k.paidNotGranted);
-      }
-      // Anything else may have happened before or after the charge — a thrown
-      // gateway call, a dropped connection — so she is sent to check her account
-      // before retrying, not told outright to try again.
-      else setError(k.failed);
+      if (res.ok && data.checkout) setCheckout(data.checkout);
+      else if (res.ok) bought();
+      else showError(data.error);
     } catch {
       setError(k.failed);
     } finally {
@@ -150,42 +163,7 @@ export default function MembershipPaymentView({
 
         {/* -- and how she is paying ---------------------------------------- */}
         <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)]">
-          {boughtAt ? (
-            // What she has, until when, and how to spend it — "Bought" alone
-            // left her to guess all three. No receipt step: the credits are
-            // already on her account by the time this renders.
-            <div className="rounded-[14px] bg-[#fbeaea] p-5 text-start">
-              <p className="font-display text-lg font-extrabold text-red">{k.bought}</p>
-              <div className="mt-3">
-                <PackLines lines={pack.lines} />
-              </div>
-              {/* Counted the way buyPack counts it, and sliced to a UTC date the
-                  way the account page slices expiresAt, so the two screens name
-                  the same day. */}
-              <p className="mt-2 text-[12px] text-ink/55">
-                {k.expiresOn.replace(
-                  "{date}",
-                  formatDateLabel(
-                    new Date(boughtAt + pack.validDays * 86_400_000).toISOString().slice(0, 10),
-                    lang,
-                  ),
-                )}
-              </p>
-              <p className="mt-3 text-[13px] leading-relaxed text-ink/65">{k.boughtNote}</p>
-              <Link
-                href="/booking"
-                className="mt-4 block rounded-[12px] bg-red-grad py-3 text-center text-sm font-bold text-white"
-              >
-                {k.bookNow}
-              </Link>
-              <Link
-                href="/account"
-                className="mt-3 block text-center text-[12px] font-semibold text-red underline underline-offset-4"
-              >
-                {k.seeAccount}
-              </Link>
-            </div>
-          ) : !signedIn ? (
+          {!signedIn ? (
             // The wall, said plainly and before anything is filled in.
             <div className="rounded-[14px] bg-[#fbeaea] p-5 text-center">
               <p className="text-sm text-ink/70">{k.signInFirst}</p>
@@ -200,7 +178,7 @@ export default function MembershipPaymentView({
             </div>
           ) : (
             <>
-              <PaymentMethods onMethodChange={setMethod} onValidityChange={setCardValid} />
+              <PaymentMethods checkout={checkout} onDone={onPaid} />
 
               {error && (
                 <p
@@ -214,9 +192,9 @@ export default function MembershipPaymentView({
               <button
                 type="button"
                 onClick={confirm}
-                disabled={submitting || !cardValid || paidNotGranted}
+                disabled={submitting || checkout !== null || paidNotGranted}
                 className={`mt-5 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
-                  submitting || !cardValid || paidNotGranted
+                  submitting || checkout !== null || paidNotGranted
                     ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
                     : "bg-red-grad text-white hover:opacity-90"
                 }`}
@@ -234,6 +212,7 @@ export default function MembershipPaymentView({
       </div>
 
       <SiteFooter />
+      {checkingPayment && <CheckingModal />}
     </main>
   );
 }

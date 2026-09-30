@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, loyaltyTxns } from "@/lib/db/schema";
 import { getSettings } from "@/lib/settings";
+import { checkoutOpen } from "@/lib/payments";
 import {
   pointsValue,
   rewardDiscount,
@@ -54,14 +55,15 @@ export async function loyaltyRules(): Promise<LoyaltyRules> {
  * that stops being true. A customer's ledger is one row per booking; reading it
  * is not the expensive part of any page that asks.
  */
-export async function loyaltyBalance(customerId: string): Promise<number> {
+export async function loyaltyBalance(customerId: string, executor: Pick<typeof db, "select"> = db): Promise<number> {
   const { booking_hold_min: holdMin } = await getSettings(["booking_hold_min"]);
 
-  const rows = await db
+  const rows = await executor
     .select({
       deltaPoints: loyaltyTxns.deltaPoints,
       bookingStatus: bookings.status,
       bookingCreatedAt: bookings.createdAt,
+      checkoutOpen: checkoutOpen(bookings.id),
     })
     .from(loyaltyTxns)
     .leftJoin(bookings, eq(bookings.id, loyaltyTxns.bookingId))

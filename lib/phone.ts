@@ -1,6 +1,6 @@
 // Saudi mobile number rules.
 //
-// Pure and dependency-free, like lib/card.ts — the same rules run in the form
+// Pure and dependency-free — the same rules run in the form
 // and can be unit-tested, so what the customer is allowed to type and what the
 // server accepts can't drift apart.
 //

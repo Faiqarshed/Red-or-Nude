@@ -34,12 +34,13 @@ import { refillDaysLeft, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
 import { halalasToSar, shareAmount, splitGroupPrice, vatIncludedIn } from "@/lib/money";
 import { quotePromo, type PromoRefusal } from "@/lib/promo";
-import { quoteReward, spendPoints } from "@/lib/loyalty";
+import { loyaltyBalance, quoteReward, spendPoints } from "@/lib/loyalty";
 import { quotePackCredit, spendPackCredit } from "@/lib/packs";
 import type { RewardRefusal } from "@/lib/rewards";
 import { formatTicketNo } from "@/lib/tickets";
 import { assignIfToday } from "@/lib/assign";
 import { mediaUrl } from "@/lib/storage";
+import { checkoutOpen, PAY_WINDOW_MIN } from "@/lib/payments";
 import type { BookingSummary } from "@/lib/booking";
 
 /** What one guest is booking. */
@@ -255,7 +256,7 @@ class BookingAbort extends Error {
  */
 export function isSlotConflict(err: unknown): boolean {
   for (let e = err; e instanceof Error; e = e.cause) {
-    if (e.message.includes("bookings_station_slot_unique")) return true;
+    if (e.message.includes("bookings_station_slot_unique") || e.message.includes("bookings_station_no_overlap")) return true;
   }
   return false;
 }
@@ -523,7 +524,17 @@ export async function bookingSummaries(
     .leftJoin(services, eq(services.id, bookings.serviceId))
     .leftJoin(branches, eq(branches.id, bookings.branchId))
     .leftJoin(staff, eq(staff.id, bookings.technicianId))
-    .where(byCode ? codeFilter : eq(bookings.customerId, lookup.customerId))
+    .where(
+      and(
+        byCode ? codeFilter : eq(bookings.customerId, lookup.customerId),
+        // A checkout she opened and left was never a booking: not "awaiting
+        // payment" once it can no longer be paid, and not "cancelled" after.
+        sql`not (${bookings.status} = 'pending'
+          and ${bookings.createdAt} < now() - make_interval(mins => ${PAY_WINDOW_MIN})
+          and not ${checkoutOpen(bookings.id)})`,
+        sql`${bookings.cancelReason} is distinct from 'payment-timeout'`,
+      ),
+    )
     // A party is at most a handful, so the reference path keeps a small cap
     // rather than none: whatever the group table says, this is still a lookup
     // by one code and should never return a page of history.
@@ -648,6 +659,10 @@ export async function allocateTickets(
  *
  * `source = 'web'` so a pending booking an admin created is never swept out from
  * under staff.
+ *
+ * Spared while a checkout for it is still open: she may be on her bank's 3-D
+ * Secure page at the moment the hold runs out, and sweeping then takes her
+ * money for a chair that has just been given away. See checkoutOpen.
  */
 async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Promise<void> {
   await tx.execute(sql`
@@ -656,10 +671,63 @@ async function sweepExpiredHolds(tx: Tx, branchId: string, holdMin: number): Pro
       and status = 'pending'
       and source = 'web'
       and created_at < now() - make_interval(mins => ${holdMin})
+      and not ${checkoutOpen(bookings.id)}
   `);
   // ponytail: sweeps only when someone tries to book. A branch with no booking
   // attempts keeps stale holds visible until the next one. Add a cron only if
   // that ever becomes visible to staff.
+}
+
+/**
+ * A transaction that claims a chair outside createBookings — a reschedule, a
+ * paid add-on that lengthens her visit — with lapsed holds at the branch let go
+ * first, the same way createBookings does it.
+ *
+ * The availability screens already show a lapsed hold as free
+ * (lib/availability.ts), but reserveStations and bookings_station_no_overlap
+ * count it until it is swept. Without the sweep, a slot shown free was refused,
+ * and at the chair that meant after she had paid for it.
+ */
+export async function withLapsedHoldsReleased<T>(branchId: string, work: (tx: Tx) => Promise<T>): Promise<T> {
+  const { booking_hold_min: holdMin } = await getSettings(["booking_hold_min"]);
+  await settleLapsedCheckouts([branchId], holdMin);
+  return db.transaction(async (tx) => {
+    await sweepExpiredHolds(tx, branchId, holdMin);
+    return work(tx);
+  });
+}
+
+/**
+ * Ask StreamPay about the lapsed holds sweepExpiredHolds is about to release
+ * that have a checkout past its pay window. Paid: settle confirms her, and the
+ * chair stays hers. Not paid: settle marks it failed, and the sweep lets it go.
+ * No answer: swept as before, and a payment that lands later is refunded.
+ *
+ * Without this, she could pay in the last seconds of her pay window, and the
+ * next customer to book at that branch took her chair before the webhook came.
+ */
+async function settleLapsedCheckouts(branchIds: string[], holdMin: number): Promise<void> {
+  const rows = await db.execute<{ ref: string }>(sql`
+    select distinct p.provider_ref as ref
+    from ${payments} p join ${bookings} b on b.id = p.booking_id
+    where b.branch_id in (${sql.join(branchIds.map((id) => sql`${id}`), sql`, `)})
+      and b.status = 'pending' and b.source = 'web'
+      and b.created_at < now() - make_interval(mins => ${holdMin})
+      and p.status = 'pending' and p.raw ->> 'linkId' is not null
+      and p.created_at <= now() - make_interval(mins => ${PAY_WINDOW_MIN})
+    limit 5
+  `);
+  if (rows.length === 0) return;
+  // Imported here: settle reaches back into this file for tickets.
+  const { settlePayment } = await import("@/lib/payments/settle");
+  await Promise.all(
+    [...rows].map(({ ref }) =>
+      Promise.race([
+        settlePayment(ref).catch((err) => console.error(`[bookings] could not settle ${ref} before the sweep`, err)),
+        new Promise((resolve) => setTimeout(resolve, 5_000)),
+      ]),
+    ),
+  );
 }
 
 /**
@@ -706,6 +774,37 @@ export async function releaseWebHold(code: string, email: string): Promise<boole
     )
     .returning({ id: bookings.id });
   return released.length > 0;
+}
+
+/**
+ * Why her hold was not released, when releaseWebHold said no: a payment for it
+ * is still in flight (she may have paid on her bank's page a moment ago), or it
+ * is already booked. Null for anything else — gone, or not hers.
+ *
+ * The checkout asks this so that coming back to it any way but StreamPay's
+ * return link (Back from the bank's page, a dropped connection, a reload) shows
+ * her the booking she has, instead of a Pay button that books and charges her
+ * a second time. Same email proof as the release itself.
+ */
+export async function heldState(code: string, email: string): Promise<"paying" | "booked" | null> {
+  const [b] = await db
+    .select({
+      status: bookings.status,
+      paying: sql<boolean>`exists (select 1 from ${payments} p where p.booking_id = ${bookings.id} and p.status = 'pending')`,
+    })
+    .from(bookings)
+    .innerJoin(customers, eq(customers.id, bookings.customerId))
+    .where(
+      and(
+        eq(bookings.code, code),
+        eq(bookings.source, "web"),
+        sql`lower(${customers.email}) = ${email.trim().toLowerCase()}`,
+      ),
+    )
+    .limit(1);
+  if (!b) return null;
+  if (b.status === "pending") return b.paying ? "paying" : null;
+  return b.status === "cancelled" || b.status === "no_show" ? null : "booked";
 }
 
 /**
@@ -989,6 +1088,11 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
   );
 
   try {
+    // Before the sweep inside lets any lapsed hold go: one with a checkout may
+    // have been paid a moment ago, its webhook still on the way. Asked here,
+    // outside the transaction, so no chair lock is held across a network call.
+    await settleLapsedCheckouts([...new Set(placements.map((p) => p.branchId))], settings.booking_hold_min);
+
     const created = await db.transaction(async (tx) => {
       // Every branch's chairs, locked up front in one fixed order.
       //
@@ -1150,6 +1254,8 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
             refillOfBookingId: refillParent?.id ?? null,
             removalPriceHalalas: guest.removal?.priceHalalas ?? 0,
             discountHalalas,
+            promoDiscountHalalas: promoShare,
+            pointsDiscountHalalas: rewardShare,
             promoCodeId,
             subtotalHalalas: totalHalalas - vat,
             vatHalalas: vat,
@@ -1214,6 +1320,10 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
       // gone stale, so an abandoned checkout, a declined payment and a
       // cancellation each release them with no compensating write.
       if (input.customerId && pointsSpent > 0) {
+        // Asked again, now that her row is locked. The quote above ran before
+        // the lock, so two tabs booking at once both saw the same balance and
+        // both spent it; the second one waits here and sees the first's debit.
+        if ((await loyaltyBalance(customer.id, tx)) < pointsSpent) throw new BookingAbort("reward-invalid");
         await spendPoints(tx, customer.id, out[0].id, pointsSpent);
       }
 
@@ -1312,7 +1422,7 @@ export async function rescheduleBooking(input: {
   const endsAt = new Date(input.startsAt.getTime() + duration);
 
   try {
-    const moved = await db.transaction(async (tx) => {
+    const moved = await withLapsedHoldsReleased(booking.branchId, async (tx) => {
       // Claim and move in one transaction, so nobody can take the target chair
       // between the check and the update. Its own chair is fair game — hence the
       // ignore id, or a booking would see itself as the conflict.

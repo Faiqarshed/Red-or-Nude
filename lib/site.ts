@@ -1,3 +1,5 @@
+import { headers } from "next/headers";
+
 /**
  * The site's canonical public origin.
  *
@@ -13,4 +15,26 @@ export function siteOrigin(): string {
   const raw =
     process.env.SITE_URL?.trim() || process.env.AUTH_URL?.trim() || "http://localhost:3000";
   return raw.replace(/\/+$/, "");
+}
+
+/**
+ * Where a payment sends the customer back to: the address she paid from.
+ *
+ * Her selection and her hold are kept in the browser, per address, so coming
+ * back on another one (paid on localhost, returned to the ngrok SITE_URL) shows
+ * a checkout that has forgotten them. Outside production only: there SITE_URL
+ * is the one address, and a request's Host is not trusted to name a redirect.
+ * Called inside a request; anywhere else (a test, a job) it is siteOrigin().
+ */
+export function returnOrigin(): string {
+  if (process.env.NODE_ENV === "production") return siteOrigin();
+  try {
+    const h = headers();
+    const host = h.get("x-forwarded-host") ?? h.get("host");
+    if (!host) return siteOrigin();
+    const proto = h.get("x-forwarded-proto")?.split(",")[0].trim() || (/^(localhost|127\.0\.0\.1)(:|$)/.test(host) ? "http" : "https");
+    return `${proto}://${host}`;
+  } catch {
+    return siteOrigin();
+  }
 }

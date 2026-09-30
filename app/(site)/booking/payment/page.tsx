@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Coffee } from "lucide-react";
-import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
-import PaymentMethods, { methodIdFor } from "@/components/PaymentMethods";
+import PaymentMethods from "@/components/PaymentMethods";
+import { declineMessage, usePaymentReturn, type PaymentOutcome } from "@/components/StreamPayCheckout";
+import { CheckingModal, PayNoticeModal, PayStep, Steps } from "@/components/PayFlow";
 import PhoneField from "@/components/PhoneField";
 import { Riyal, Lock } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
@@ -20,6 +21,7 @@ import {
   type BookingSelection,
 } from "@/lib/booking";
 import { isValidSaudiMobile, toNationalDigits, toStoredPhone } from "@/lib/phone";
+import { showPaidOn } from "@/lib/paid-handoff";
 import { pick } from "@/lib/localized";
 import {
   pointsEarned,
@@ -32,31 +34,20 @@ import {
 //
 // Two calls, in order:
 //   POST /api/bookings         → holds the chair(s), rows written as `pending`
-//   POST /api/payments/confirm → charges, confirms, and issues the ticket numbers
+//   POST /api/payments/confirm → opens StreamPay's checkout, embedded on the left
 //
-// Nothing is a booking until the second one succeeds. A declined card leaves the
+// She pays inside that checkout; GET /api/payments/status is what then confirms
+// and issues the ticket numbers (see components/StreamPayCheckout.tsx). With the
+// fake driver, or nothing to pay, the second call confirms on the spot instead.
+//
+// Nothing is a booking until the payment is verified. A declined card leaves the
 // hold in place so the customer can retry without losing their slot, which is why
 // the created code is kept in state between attempts.
-//
-// The gateway itself is still a stand-in (lib/payments/fake.ts) — no money moves
-// until PAYMENT_DRIVER points at Moyasar or Tap.
 
-type Ticket = {
-  code: string;
-  ticketNo: string;
-  stationLabel: string | null;
-  /** Null for a booking further out than today — nobody is assigned yet. */
-  technicianName: string | null;
-  serviceName: { ar: string; en: string } | null;
-  startsAt: string;
-  totalHalalas: number;
-};
-
-export default function PaymentPage() {
+export default function PaymentPage({ searchParams }: { searchParams: { paid?: string } }) {
   const { c, lang } = useI18n();
   const p = c.payment;
   const a = c.account;
-  const router = useRouter();
 
   const [booking, setBooking] = useState<BookingSelection>(emptySelection);
   const [loaded, setLoaded] = useState(false);
@@ -65,12 +56,30 @@ export default function PaymentPage() {
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tickets, setTickets] = useState<Ticket[] | null>(null);
-  const [method, setMethod] = useState(p.cardTitle);
+  /**
+   * What became of a payment, said in front of the page (PayNoticeModal) — not
+   * at the foot of a summary she has scrolled away from. Kept after the modal
+   * closes, above the checkout, so the reason is still there when she retries.
+   */
+  const [payNotice, setPayNotice] = useState<string | null>(null);
+  /** Set only when she was charged and refunded; otherwise the modal says nothing was. */
+  const [noticeTitle, setNoticeTitle] = useState<string | null>(null);
+  const [noticeOpen, setNoticeOpen] = useState(false);
+  /** Back on a checkout she had open (a reload): said calmly above it, never as a failure. */
+  const [resumed, setResumed] = useState(false);
+  const notifyPay = (message: string, title: string | null = null) => {
+    setPayNotice(message);
+    setNoticeTitle(title);
+    setNoticeOpen(true);
+  };
   /** Set once the hold exists, so a retry after a decline doesn't re-book. */
   const [heldCode, setHeldCode] = useState<string | null>(null);
-  /** Card fields live inside PaymentMethods; this mirrors their validity up. */
-  const [cardValid, setCardValid] = useState(false);
+  /** Asking what became of a hold she came back to (see resumeHeld). */
+  const [resuming, setResuming] = useState(false);
+  /** Opening a new checkout after a declined one, without going back to step 1. */
+  const [reopening, setReopening] = useState(false);
+  /** The open StreamPay checkout, once Pay has been pressed. */
+  const [checkout, setCheckout] = useState<{ ref: string; url: string } | null>(null);
   const [phoneTouched, setPhoneTouched] = useState(false);
   /**
    * The discount code (brief §2.10). `promoApplied` is the code the server
@@ -96,6 +105,8 @@ export default function PaymentPage() {
   const [rules, setRules] = useState<LoyaltyRules | null>(null);
   /** Null until the session has answered. True once her details are her own. */
   const [signedIn, setSignedIn] = useState(false);
+  /** The session has answered (signed in or not), so the form is filled as it will stay. */
+  const [accountChecked, setAccountChecked] = useState(false);
   const [redeemPoints, setRedeemPoints] = useState<number | null>(null);
   const [redeemDiscountSar, setRedeemDiscountSar] = useState(0);
   const [redeemError, setRedeemError] = useState<string | null>(null);
@@ -113,11 +124,47 @@ export default function PaymentPage() {
    */
   const released = useRef<Promise<void>>(Promise.resolve());
 
+  // As the server saw the URL: usePaymentReturn drops `?paid=` from the address
+  // bar, and a second run of the effect below (React dev mode) reading it there
+  // would see a plain visit and release the hold she is paying for.
+  const returning = Boolean(searchParams.paid);
+
   useEffect(() => {
-    released.current = releaseHold();
+    // Back from StreamPay's checkout, the hold is the one she was paying for:
+    // keep it, so paying again reuses it instead of fighting it for the chair.
+    // Its email comes back with it — the box is empty after the redirect, and a
+    // hold saved with a blank email can never be released early.
+    if (returning) {
+      const held = loadCheckout()?.held;
+      setHeldCode(held?.code ?? null);
+      if (held?.email) setEmail(held.email);
+    } else {
+      // Back here any other way — Back from the bank's page, a dropped
+      // connection, a reload. A hold the server kept is one she is paying for
+      // or has paid: show her that, never a Pay button that books her twice.
+      // Checking from the first frame when there is a hold to ask about, so a
+      // reload does not show the form for the seconds that takes.
+      if (loadCheckout()?.held) setResuming(true);
+      released.current = releaseHold().then((kept) => {
+        if (kept) void resumeHeld(kept.held);
+        else setResuming(false);
+      });
+    }
     const saved = loadBooking();
     if (saved) setBooking(saved);
     setLoaded(true);
+  }, []);
+
+  // Leaving checkout — closing the tab, going elsewhere — lets her chair go at
+  // once instead of when the hold runs out. The server keeps a hold she is still
+  // paying for (her bank's page is also a "leaving"), so this cannot cost her it.
+  useEffect(() => {
+    const onHide = () => {
+      const held = loadCheckout()?.held;
+      if (held) navigator.sendBeacon("/api/bookings/release", JSON.stringify(held));
+    };
+    window.addEventListener("pagehide", onHide);
+    return () => window.removeEventListener("pagehide", onHide);
   }, []);
 
   // What she chose here last time — a treat, a code, a reward — so going back to
@@ -155,7 +202,10 @@ export default function PaymentPage() {
       })
       .catch(() => {
         /* a prefill, never a gate — the form still works typed out */
-      });
+      })
+      // Answered either way: the loader waits for it, so her details do not
+      // pop into the form a moment after it appears.
+      .finally(() => setAccountChecked(true));
   }, []);
 
   // The rules and the balance. Signed out this comes back with `signedIn:
@@ -194,7 +244,6 @@ export default function PaymentPage() {
   // addresses that are actually valid.
   const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const phoneOk = isValidSaudiMobile(phone);
-  const canSubmit = phoneOk && emailOk && cardValid;
 
   /** The upsells this guest has taken. */
   const treatsFor = (i: number) =>
@@ -267,8 +316,8 @@ export default function PaymentPage() {
    */
   const fullyCovered = booking.total <= 0;
 
-  /** Card validity stops mattering the moment there is no card to take. */
-  const readyToConfirm = canSubmit || (phoneOk && emailOk && nothingToPay);
+  /** The card itself is StreamPay's to check; ours are the contact details. */
+  const readyToConfirm = phoneOk && emailOk && checkout === null;
 
   const promoReasonText = (reason: string, minTotalHalalas?: number): string => {
     const e = p.promoErrors;
@@ -412,13 +461,15 @@ export default function PaymentPage() {
 
   const confirm = async () => {
     if (!hasSelection || submitting) return;
-    // PaymentMethods has its own confirm button, which doesn't know about these
-    // fields — so the guard lives here rather than only on the disabled prop.
+    // Guarded here as well as on the disabled prop: Enter in a field can still
+    // reach this.
     if (!emailOk) {
       setError(p.invalidEmail);
       return;
     }
     setError(null);
+    setPayNotice(null);
+    setResumed(false);
     setSubmitting(true);
 
     try {
@@ -516,33 +567,120 @@ export default function PaymentPage() {
         setHeldCode(code);
       }
 
-      // Step 2 — take the money. Only this confirms anything.
-      const pay = await fetch("/api/payments/confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, method: methodIdFor(method, p) }),
-      });
-
-      if (pay.ok) {
-        const data = await pay.json();
-        setTickets(data.tickets);
-        clearBooking();
-        return;
-      }
-
-      const data = await pay.json().catch(() => ({}));
-      if (data.error === "payment-declined") setError(p.declined);
-      else if (data.error === "expired") {
-        // The hold is gone; a retry would confirm nothing, so send them back.
-        setHeldCode(null);
-        setError(p.expired);
-      } else setError(p.bookingFailed);
+      await payHeld(code);
     } catch {
       setError(p.bookingFailed);
     } finally {
       setSubmitting(false);
     }
   };
+
+  /**
+   * Step 2 — the checkout. Only a verified payment confirms anything. A hold
+   * already paid comes back as its tickets; one being paid, as the same checkout.
+   */
+  const payHeld = async (code: string) => {
+    const pay = await fetch("/api/payments/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+
+    const data = await pay.json().catch(() => ({}));
+    if (pay.ok && data.checkout) {
+      setCheckout(data.checkout);
+      return true;
+    }
+    if (pay.ok) {
+      clearBooking();
+      showPaidOn("/booking", "booking", data.tickets);
+      return "paid" as const;
+    }
+    showPayError(data.error);
+    return false;
+  };
+
+  /** Her kept hold (releaseHold): paid shows the tickets, paying reopens it. */
+  const resumeHeld = async (held: { code: string; email: string }) => {
+    setHeldCode(held.code);
+    setEmail(held.email);
+    setResuming(true);
+    setResumed(true);
+    try {
+      await payHeld(held.code);
+    } catch {
+      setError(p.bookingFailed);
+    } finally {
+      setResuming(false);
+    }
+  };
+
+  const showPayError = (code: string | undefined) => {
+    if (code === "payment-declined") notifyPay(p.declined);
+    else if (code === "expired") {
+      // The hold is gone; a retry would confirm nothing, so send them back.
+      setHeldCode(null);
+      notifyPay(p.expired);
+    } else if (code === "not-delivered") {
+      // Charged after the hold was gone (or the wrong amount), and refunded.
+      setHeldCode(null);
+      notifyPay(p.refunded, p.refundedTitle);
+    } else if (code === "unconfirmed" || code === "in-progress" || code === "unverified") notifyPay(p.unconfirmed);
+    else notifyPay(p.bookingFailed);
+  };
+
+  /** The embedded checkout ended — or she came back from the hosted one. */
+  const onPaid = (outcome: PaymentOutcome) => {
+    // Declined, and that checkout is over: straight into a new one on the hold
+    // she still has, rather than back to step 1 to press Pay again. Not after
+    // the timer ran out — a new checkout for someone who walked away would keep
+    // her chair from everyone for another ten minutes. The server still decides:
+    // a hold that has lapsed comes back `expired` and she lands on step 1.
+    const reopen =
+      outcome.status === "failed" &&
+      !outcome.checkout &&
+      outcome.error === "payment-declined" &&
+      outcome.reason !== "timedOut" &&
+      heldCode !== null;
+    // A decline with the checkout still open re-opens it right here. One being
+    // replaced stays on screen, under the loader, until the new one arrives:
+    // clearing it drew step 1 for a moment on the way.
+    if (!reopen) setCheckout(outcome.status === "failed" ? (outcome.checkout ?? null) : null);
+    if (outcome.status === "paid" && outcome.result.kind === "booking") {
+      clearBooking();
+      showPaidOn("/booking", "booking", outcome.result.tickets);
+      return;
+    }
+    const why = declineMessage(c.payDecline, outcome);
+    if (why) notifyPay(why);
+    else showPayError(outcome.status === "failed" ? outcome.error : undefined);
+
+    if (reopen) {
+      setReopening(true);
+      void payHeld(heldCode)
+        .then((result) => {
+          // Paid after all (an earlier attempt came through): the loader stays
+          // up while the page leaves for the success popup.
+          if (result === "paid") return;
+          // Refused (the hold lapsed, say): the dead checkout goes, and step 1
+          // says why — payHeld has already put the reason up.
+          if (!result) setCheckout(null);
+          setReopening(false);
+        })
+        .catch(() => {
+          setCheckout(null);
+          setError(p.bookingFailed);
+          setReopening(false);
+        });
+    }
+  };
+  const checkingPayment = usePaymentReturn(onPaid, returning);
+
+  // Step 2 replaces the page rather than appearing somewhere down it.
+  const paying = checkout !== null;
+  useEffect(() => {
+    if (paying) window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [paying]);
 
   return (
     <main className="relative min-h-screen bg-cream">
@@ -555,7 +693,55 @@ export default function PaymentPage() {
           was ticked. Adding a treat is a small decision and it was rearranging
           the whole screen — which reads as something going wrong, not as ten
           riyals being added. The columns stay; what changes is a number. */}
-      <div className="mx-auto grid max-w-page gap-8 px-6 pb-24 pt-[120px] md:px-12 lg:grid-cols-[1fr_540px] lg:px-16">
+      <div className="mx-auto flex max-w-page justify-center px-6 pt-[112px] md:px-12 lg:justify-start lg:px-16">
+        <Steps current={paying ? 2 : 1} labels={[p.stepDetails, p.stepPay]} />
+      </div>
+
+      {/* Step 2: only what paying needs. The form, extras and points are
+          settled once the chair is held, so they leave the screen instead of
+          sitting beside a checkout they no longer affect. */}
+      {paying && checkout ? (
+        <div className="mx-auto grid max-w-page gap-6 px-4 pb-24 pt-6 sm:px-6 md:px-12 lg:grid-cols-[1fr_400px] lg:gap-8 lg:px-16">
+          <PayStep checkout={checkout} onDone={onPaid} notice={payNotice} info={resumed ? p.resumedPayment : null} sub={p.paySub} />
+
+          {/* Her booking, beside the card form on a desktop and above it on a
+              phone — what she is paying for never scrolls out of reach. */}
+          <aside className="order-first h-fit rounded-[24px] bg-white p-5 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] sm:p-6 lg:sticky lg:top-28 lg:order-none">
+            <h2 className="font-display text-lg font-extrabold text-ink">{p.summaryTitle}</h2>
+            <p className="mt-1 text-[13px] text-ink/55">
+              {[booking.dateLabel, booking.timeLabel].filter(Boolean).join(" · ")}
+            </p>
+
+            <ul className="mt-4 divide-y divide-black/[0.06]">
+              {booking.members.map((m, i) => (
+                <li key={i} className="py-3 first:pt-0">
+                  {booking.members.length > 1 && (
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-red/70">
+                      {m.guestName || c.booking.guestN.replace("{n}", String(i + 1))}
+                    </p>
+                  )}
+                  <p className="text-sm font-semibold text-ink">{m.service ?? "—"}</p>
+                  {(m.addons.length > 0 || m.removal || m.timeLabel) && (
+                    <p className="mt-0.5 text-[12px] text-ink/50">
+                      {[...m.addons, m.removal, m.timeLabel].filter(Boolean).join(" · ")}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-2 flex items-center justify-between rounded-[16px] bg-[#fbeaea] px-4 py-3.5">
+              <p className="text-[13px] font-semibold text-ink/60">{creditTotal > 0 ? p.toPayNow : p.total}</p>
+              <div className="flex items-center gap-1 font-display text-2xl font-extrabold text-red">
+                <Riyal className="h-5 w-5" />
+                {payableTotal}
+              </div>
+            </div>
+            <p className="mt-3 text-center text-[11px] text-ink/45">{p.payFirstNote}</p>
+          </aside>
+        </div>
+      ) : (
+      <div className="mx-auto grid max-w-page gap-8 px-6 pb-24 pt-6 md:px-12 lg:grid-cols-[1fr_540px] lg:px-16">
         <div className="space-y-5">
           <h1 className="text-start font-display text-2xl font-extrabold text-ink">{p.payWith}</h1>
 
@@ -598,7 +784,7 @@ export default function PaymentPage() {
               {covered.length > 0 && (
                 <p className="text-start text-[12px] text-ink/50">{p.remainderNote}</p>
               )}
-              <PaymentMethods onMethodChange={setMethod} onValidityChange={setCardValid} />
+              <PaymentMethods checkout={null} onDone={onPaid} heading={false} />
             </>
           )}
 
@@ -668,6 +854,19 @@ export default function PaymentPage() {
                 {/* Currency, not status. Said plainly because the bar above is
                     the shape people read as a tier. */}
                 <p className="mt-2.5 text-[11px] text-ink/45">{a.earnNote}</p>
+
+                {/* A guest earns on this booking but cannot spend: the balance
+                    lives on her account. Back here after signing in — the
+                    selection is saved, so nothing she picked is lost. */}
+                {!signedIn && (
+                  <Link
+                    href={`/account?next=${encodeURIComponent("/booking/payment")}`}
+                    className="mt-4 flex items-center justify-between gap-3 rounded-[14px] bg-[#fbeaea] px-4 py-3 text-[13px] font-bold text-red transition-colors hover:bg-[#f7dcdc]"
+                  >
+                    {a.earnSignIn}
+                    <span aria-hidden className="rtl:rotate-180">→</span>
+                  </Link>
+                )}
               </section>
             );
           })()}
@@ -763,7 +962,9 @@ export default function PaymentPage() {
         </div>
 
         {/* Summary */}
-        <aside className="h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)]">
+        {/* First on a phone: her details and the button come before a payment
+            panel that has nothing to do until she presses it. */}
+        <aside className="order-first h-fit rounded-[24px] bg-white p-6 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] lg:order-none">
           <h2 className="mb-5 text-center font-display text-2xl font-extrabold text-ink">
             {p.summaryTitle}
           </h2>
@@ -1081,9 +1282,9 @@ export default function PaymentPage() {
                 <p className="text-xs text-ink/45">{creditTotal > 0 ? p.toPayNow : p.total}</p>
               </div>
 
-              {error && (
+              {(error ?? payNotice) && (
                 <p role="alert" className="mt-3 rounded-[12px] bg-red/[0.08] px-4 py-3 text-start text-xs text-red">
-                  {error}
+                  {error ?? payNotice}
                 </p>
               )}
 
@@ -1097,7 +1298,7 @@ export default function PaymentPage() {
                     : "bg-red-grad text-white hover:opacity-90"
                 }`}
               >
-                {submitting ? p.confirming : nothingToPay ? p.confirmBooking : p.confirmPay}
+                {submitting ? p.confirming : nothingToPay ? p.confirmBooking : p.continueToPay}
               </button>
               {nothingToPay ? (
                 // Only when no membership is in play — a full reward, or a 100%
@@ -1119,15 +1320,20 @@ export default function PaymentPage() {
           )}
         </aside>
       </div>
+      )}
 
       <SiteFooter />
 
-      {tickets && (
-        <SuccessModal
-          tickets={tickets}
-          booking={booking}
-          method={method}
-          onClose={() => router.replace("/")}
+      {/* From the first paint on a reload (loaded starts false on the server
+          too) until the page is as it will stay: her selection back, her
+          details in, and any payment she had going found. */}
+      {(checkingPayment || resuming) ? <CheckingModal /> : (!loaded || !accountChecked || reopening) && <CheckingModal loading />}
+      {noticeOpen && payNotice && !checkingPayment && !reopening && (
+        <PayNoticeModal
+          message={payNotice}
+          title={noticeTitle ?? undefined}
+          retry={paying}
+          onClose={() => setNoticeOpen(false)}
         />
       )}
     </main>
@@ -1139,135 +1345,6 @@ function Field({ label, value }: { label: string; value: string }) {
     <div className="rounded-[14px] border border-black/[0.05] p-4">
       <p className="mb-1 text-[11px] text-ink/45">{label}</p>
       <p className="text-sm font-semibold text-ink">{value}</p>
-    </div>
-  );
-}
-
-function SuccessModal({
-  tickets,
-  booking,
-  method,
-  onClose,
-}: {
-  tickets: Ticket[];
-  booking: BookingSelection;
-  method: string;
-  onClose: () => void;
-}) {
-  const { c, lang } = useI18n();
-  const p = c.payment;
-
-  // Nothing to hunt for. The booking is paid and this screen has no decision
-  // left on it, so anywhere outside the card leaves, and so does Escape — both
-  // land on the home page rather than on the checkout she has just finished.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      role="presentation"
-      onClick={onClose}
-      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm"
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-[460px] rounded-[24px] bg-white p-8 text-center shadow-[0_40px_100px_rgba(0,0,0,0.25)]"
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/pay/success-check.webp" alt="" className="mx-auto mb-5 h-20 w-20" />
-        <h3 className="font-display text-2xl font-extrabold text-ink">{p.successTitle}</h3>
-        <p className="mx-auto mt-2 max-w-[320px] text-sm text-ink/55">{p.successSub}</p>
-
-        {/* The number the salon calls out, and the chair it belongs to. One block
-            per guest — a pair gets consecutive numbers on different chairs. */}
-        <div className="mt-6 space-y-3">
-          {tickets.map((t) => (
-            <div key={t.code} className="rounded-[18px] bg-[#fbeaea] p-5">
-              <p className="text-[11px] uppercase tracking-wider text-red/60">{p.ticketLabel}</p>
-              <p className="font-display text-4xl font-extrabold tracking-wider text-red" dir="ltr">
-                {t.ticketNo}
-              </p>
-              <div className="mt-3 flex items-center justify-center gap-4 text-[13px]">
-                <span className="text-ink/55">
-                  {p.stationLabel}{" "}
-                  <span className="font-bold text-ink" dir="ltr">
-                    {t.stationLabel ?? "—"}
-                  </span>
-                </span>
-                {t.serviceName && (
-                  <span className="font-semibold text-ink">{t.serviceName[lang]}</span>
-                )}
-                {/* Only when there is one. A booking further out has no
-                    technician yet — the morning run assigns on the day — and
-                    an empty label would read as one nobody turned up for. */}
-                {t.technicianName && (
-                  <span className="text-ink/55">
-                    {p.technicianLabel}{" "}
-                    <span className="font-bold text-ink">{t.technicianName}</span>
-                  </span>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-6 rounded-[16px] bg-[#f6f6f6] p-5 text-start">
-          <p className="mb-3 font-display text-base font-extrabold text-red">{p.detailsTitle}</p>
-          <div className="divide-y divide-black/[0.06]">
-            {[
-              { label: p.rowDate, value: booking.dateLabel ?? "—" },
-              { label: p.rowTime, value: booking.timeLabel ?? "—" },
-              { label: p.rowMethod, value: method },
-            ].map((r) => (
-              <div key={r.label} className="flex items-center justify-between py-2.5">
-                <span className="text-[13px] text-ink/50">{r.label}</span>
-                <span className="text-[13px] font-semibold text-ink">{r.value}</span>
-              </div>
-            ))}
-            <div className="flex items-center justify-between py-2.5">
-              <span className="text-[13px] text-ink/50">{p.rowTotal}</span>
-              <span className="flex items-center gap-1 font-display text-base font-extrabold text-red">
-                <Riyal className="h-4 w-4" />
-                {/* Summed from the tickets, not from the selection: this is what
-                    the card was actually charged, discounts and all. */}
-                {tickets.reduce((sum, t) => sum + t.totalHalalas, 0) / 100}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-6 flex gap-3">
-          <Link
-            href="/booking"
-            replace
-            className="flex-1 rounded-[12px] bg-black/[0.05] py-3.5 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
-          >
-            {p.newBooking}
-          </Link>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-1 rounded-[12px] bg-red-grad py-3.5 text-center text-sm font-bold text-white transition-opacity hover:opacity-90"
-          >
-            {p.close}
-          </button>
-        </div>
-
-        {/* The reference goes out by email only — nothing here to memorise. */}
-        <Link
-          href="/my-bookings"
-          className="mt-4 inline-block text-[12px] font-semibold text-red underline underline-offset-4"
-        >
-          {p.myBookings}
-        </Link>
-      </div>
     </div>
   );
 }
