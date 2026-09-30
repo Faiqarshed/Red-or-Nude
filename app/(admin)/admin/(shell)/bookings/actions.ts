@@ -10,7 +10,7 @@ import { inBranchScope } from "@/lib/admin/branch-scope";
 import { can } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
 import { returnPackCredits } from "@/lib/packs";
-import { cancelDeadline } from "@/lib/cancellation";
+import { cancelDeadline, SALON_CAN_CANCEL } from "@/lib/cancellation";
 import { creditCancelled, walletLaunched, WalletHeld } from "@/lib/wallet";
 import { sendCancelCreditEmail } from "@/lib/wallet-email";
 import { rescheduleBooking as moveBooking } from "@/lib/bookings";
@@ -93,6 +93,10 @@ export async function setBookingStatus(
   const now = new Date();
   const from = shown ?? before.status;
   if (from !== before.status) return { ok: false, error: "changed" };
+
+  // Only she cancels (SALON_CAN_CANCEL, lib/cancellation.ts). Any `cancelled`,
+  // not just entering it: re-saving one would overwrite her own reason.
+  if (status === "cancelled" && !SALON_CAN_CANCEL) return { ok: false, error: "salon-cannot-cancel" };
 
   // The salon's word on why, for her and for the owner's books (CLAUDE.md).
   if (entering("cancelled") && !why) return { ok: false, error: "reason-required" };

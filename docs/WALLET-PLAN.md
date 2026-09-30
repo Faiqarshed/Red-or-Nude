@@ -27,7 +27,7 @@ Fixed decisions:
 0. **A group dropping guests.** Today a group cancels as one (CLAUDE.md, `app/api/my-bookings/cancel/route.ts:75`). Our assumption: a group can drop guests as long as 2 stay. The 10% group discount holds for any 2 or more, so the guests who stay still pay a fair group price. Leaving 1 is refused: she cancels the whole group or none. Each cancelled guest's credit is what she actually paid, after the discount. No cap on how many are dropped. **Nothing that depends on it is built until the client agrees.** Until then the whole-group cancel stays the only one, and every other step goes ahead.
 
 **For the client (sent, waiting):**
-1. **Salon cancel inside 3 h.** The technician is off sick at 11:00 for a 12:00 booking. Offer a reschedule first and credit if she declines? Must the salon enter a reason? Until answered, the build treats a salon cancel as always allowed, with a reason, crediting the wallet. That is what `setBookingStatus` does today ("she should not lose an appointment she paid for over a decision that was not hers"). The alternative is marking a no-show, which gives her nothing.
+1. ~~Salon cancel inside 3 h~~: answered, see Settled.
 2. **VAT** (the accountant): gift cards taxed at sale or at redemption; a credit note for a cancelled booking; credit spent as a StreamPay coupon. **Build step 0**: if credit must be a payment method and not a discount, steps 4 and 5 change, because StreamPay links only take coupons.
 3. **One sentence for the refund policy.** Card refunds still happen when she pays late, pays the wrong amount, pays twice, or buys something we can't deliver. Proposed: "A payment that bought nothing goes back to the card; everything else goes to the wallet." Written into PAYMENTS-STATUS.md once agreed.
 4. **Invoice wording.** "Wallet credit" and "Gift card" lines print on StreamPay's tax invoice as coupons, the way promo codes do (PR #21 Q4). Is that wording right for the client?
@@ -39,12 +39,12 @@ Fixed decisions:
 5. What status does a chargeback show on a payment: `REFUNDED`, or something like `DISPUTED`? Is there a disputes API or webhook? Today there is no chargeback event (`app/api/payments/streampay/webhook/route.ts`), and the daily comparison is what finds one.
 
 **Settled:**
+- **The salon never cancels a booking** (the client, 2026-09-30), inside 3 h or not. Only she cancels. Switched off by `SALON_CAN_CANCEL = false` (`lib/cancellation.ts`), not deleted: the desk's cancel stays built and tested, for the day the client wants it back (a technician off sick). Switching it back on reopens the 3 h question with the client.
 - Credit never expires (the client).
 - StreamPay's payment page has no field for typing a coupon (checked in the sandbox). If one appears, a payment below our amount is already refunded and nothing is given for it (`confirm.ts` "wrong-amount", `purchase.ts` "wrong-amount").
 
 ## Launch blockers
 Built around, not decided. Each is a refusal (`WalletHeld`, "held") or an `it.todo` in the tests, and `wallet_launched_at` is not set until every one is answered:
-- **Open question 1:** a salon cancel inside 3 h is refused with "held" after launch (`setBookingStatus`). Before launch it goes through with no money, as it always has.
 - **Open question 6:** a booking with no `customer_email` is refused with "held" when cancelling after launch (`creditCancelled`).
 - **Open question 2 (VAT):** steps 4 and 5 don't start.
 - **Open question 0 (group drop):** not a blocker. Without an answer the wallet launches with the whole-group cancel only.
@@ -54,7 +54,7 @@ Built around, not decided. Each is a refusal (`WalletHeld`, "held") or an `it.to
 | Event | Wallet |
 |---|---|
 | She cancels more than 3 h before | **+** card paid on that booking + wallet spent on it |
-| Salon cancels (reason required) | **+** same amount. Inside 3 h: see open question 1 |
+| Salon cancels | Never (the client, 2026-09-30): refused, and no cancel button. Switched back on (`SALON_CAN_CANCEL`), **+** same amount, reason required |
 | She cancels within 3 h | Not allowed (already enforced) |
 | A cancelled booking with a cancel credit set back to confirmed | Refused. The desk makes a new booking |
 | No-show (`resolveNoShow`, marked no-show) | Nothing. Her points on it stand: what it earned counts, what it spent stays spent |
@@ -158,11 +158,12 @@ Examples:
 - **Only the booker cancels.** Signed in, the party's customer; a guest, the booking email proved by its code, as today.
 - **Dropping guests from a group** *(assumption, open question 0; not built until the client agrees)*: the route takes the guest ids to drop. Allowed only when 2 or more stay and none of the dropped is past `cancelRefusal`. Each dropped guest's credit is her own discounted share (`splitGroupPrice`, as billed), so the guests who stay keep their 10% and nobody gains a discount they didn't have. Leaving 1 → "Cancel the whole group instead." The whole-group cancel stays as it is.
 - **Salon** (`setBookingStatus`, `app/(admin)/admin/(shell)/bookings/actions.ts`):
+  - **switched off (the client, 2026-09-30):** `SALON_CAN_CANCEL = false` refuses any `cancelled` from the salon (`salon-cannot-cancel`), re-saving one included, so her own reason can't be overwritten; `drawerStatuses` offers no cancel button to any role (`tests/salon-never-cancels.test.ts`). Everything below stays built, and its tests switch it back on;
   - **built (step 2a):** the admin form sends the status it showed; the update is `where status = <that status>`, and zero rows back answers "This booking changed. Reload." instead of acting twice;
   - **built (step 2a):** entering `cancelled` requires a reason, and the status change and `returnPackCredits` run in **one transaction**, so a crash leaves all or none. `creditCancelled(..., "cancel-salon", reason)` joins that transaction in step 2c;
   - **built (step 2c):** after launch, `creditCancelled(..., "cancel-salon", reason)` runs in that transaction;
   - **built (step 2c):** leaving `cancelled` is refused while the booking has a cancel credit;
-  - inside `cancel_cutoff_hours`: open question 1. The cancel itself stays allowed, as it is today. Whether it credits her is held until the client answers, and launch waits on it.
+  - inside `cancel_cutoff_hours`: refused with "held" after launch. Only reachable if the salon cancel is switched back on, and then a question for the client again.
 - **No-show (built, step 2b):** `isDead` (`lib/rewards.ts`) no longer voids a `no_show` or no-show-resolved booking. She paid for it, so what it earned counts and what it spent stays spent (the owner, 2026-09-29).
 - **Remove** `refundBookings` and the `payments.refund` permission (`lib/auth/rbac.ts:42,70`) at launch, once `wallet_launched_at` is set.
 

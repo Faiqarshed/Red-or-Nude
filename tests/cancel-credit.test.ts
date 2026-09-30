@@ -15,6 +15,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/throttle", () => ({ throttled: () => false, clientIp: () => "127.0.0.1" }));
 vi.mock("@/lib/booking-auth", () => ({ refuseBookingAction: async () => null }));
+// The desk's cancel is switched off (SALON_CAN_CANCEL, lib/cancellation.ts);
+// switched back on here so the code kept for that day stays tested.
+vi.mock("@/lib/cancellation", async (actual) => ({
+  ...(await actual<typeof import("@/lib/cancellation")>()),
+  SALON_CAN_CANCEL: true,
+}));
 const mail = vi.hoisted(() => ({ sent: [] as { to: string; subject: string; text: string }[] }));
 vi.mock("@/lib/email", () => ({
   sendMail: async (m: { to: string; subject: string; text: string }) => {

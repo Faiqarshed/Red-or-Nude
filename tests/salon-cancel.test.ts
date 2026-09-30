@@ -29,6 +29,12 @@ vi.mock("@/lib/packs", async (actual) => {
   };
 });
 
+// The desk's cancel is switched off (SALON_CAN_CANCEL, lib/cancellation.ts);
+// switched back on here so the code kept for that day stays tested.
+vi.mock("@/lib/cancellation", async (actual) => ({
+  ...(await actual<typeof import("@/lib/cancellation")>()),
+  SALON_CAN_CANCEL: true,
+}));
 const { setBookingStatus } = await import("@/app/(admin)/admin/(shell)/bookings/actions");
 
 let f: Fixtures;

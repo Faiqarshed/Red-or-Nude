@@ -81,9 +81,11 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
   (`cancel_cutoff_hours`); exactly on the deadline is too late. Rule: `cancelRefusal`
   in `lib/cancellation.ts`. Guests confirm with an OTP.
 - A group cancels as one; reschedule moves only the quoted booking.
-- Staff reschedule ignores the window. A salon cancel requires a reason and credits
-  her in full. ⚠ **Salon cancel inside 3 h is an open question with the client —
-  ask before building anything that depends on it.**
+- Staff reschedule ignores the window. **The salon never cancels a booking** (the
+  client, 2026-09-30): `SALON_CAN_CANCEL = false` in `lib/cancellation.ts` refuses it
+  in `setBookingStatus` and hides the button. The desk-cancel code (reason required,
+  credits her in full) is kept switched off and tested; switching it back on is the
+  client's call, and reopens the 3 h question with them.
 - No-show: not checked in within `no_show_grace_min` (20) → released by `sweepNoShows`,
   7-day lookback. Moves no money. She paid, so a no-show keeps its points: what it
   earned counts and what it spent stays spent (`isDead` in `lib/rewards.ts`).
@@ -122,7 +124,6 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
 - Email is the customer's identity. Sign-in code: 1 minute, 5 attempts.
 
 ## Open questions — ask, don't guess
-- Salon cancel inside 3 h (above).
 - VAT on gift cards and credit notes (waits on the accountant; blocks wallet step 3).
 - A group dropping guests down to 2 (docs/WALLET-PLAN.md open question 0). Our
   assumption only; until the client agrees, a group cancels as one.

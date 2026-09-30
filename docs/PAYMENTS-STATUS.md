@@ -139,8 +139,7 @@ Foodpanda credits) that she spends on a later booking.
 | Paid after her hold expired, or paid for something we could not deliver (booking never confirmed) | Card refund, automatic. **Already built, stays as it is.** |
 | She cancels, more than 3 h before the appointment | The amount she paid goes to her **wallet**. No card refund. |
 | She cancels within 3 h | Not allowed (already enforced, `cancel_cutoff_hours` = 3). |
-| The salon cancels, more than 3 h before | Goes to her **wallet**. |
-| The salon cancels within 3 h | **Not allowed.** Admin cannot cancel inside the window. |
+| The salon cancels | **Never** (the client, 2026-09-30). Only she cancels. Switched off by `SALON_CAN_CANCEL` in `lib/cancellation.ts`; the code is kept. |
 | She does not come / the salon marks a no-show | She gets **nothing**. |
 | The salon reschedules | Up to the salon, and no money moves. Already works. |
 | The wallet balance | **Admin cannot edit it.** Cancellations, gift cards and small chair refunds add to it, and every checkout can spend it. See `docs/WALLET-PLAN.md`. |

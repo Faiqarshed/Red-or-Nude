@@ -879,6 +879,38 @@ const mutations = [
         "  return { group: b.discountHalalas - promo - wallet, promo, points: 0, wallet };",
       ),
   },
+
+  // ---- the salon never cancels (SALON_CAN_CANCEL) ---------------------------
+  {
+    name: "salon cancel: let the desk cancel again",
+    expect: "tests/salon-never-cancels.test.ts",
+    apply: () =>
+      mutate(
+        STATUS,
+        '  if (status === "cancelled" && !SALON_CAN_CANCEL) return { ok: false, error: "salon-cannot-cancel" };\n',
+        "",
+      ),
+  },
+  {
+    name: "subtle: refuse only entering cancelled, so a re-save rewrites her reason",
+    expect: "tests/salon-never-cancels.test.ts",
+    apply: () =>
+      mutate(
+        STATUS,
+        '  if (status === "cancelled" && !SALON_CAN_CANCEL)',
+        '  if (entering("cancelled") && !SALON_CAN_CANCEL)',
+      ),
+  },
+  {
+    name: "salon cancel: offer the cancel button in the drawer",
+    expect: "tests/salon-never-cancels.test.ts",
+    apply: () =>
+      mutate(
+        RBAC,
+        '(SALON_CAN_CANCEL ? all : all.filter((s) => s !== "cancelled"))',
+        "all",
+      ),
+  },
 ];
 
 const touched = [
