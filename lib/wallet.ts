@@ -43,6 +43,31 @@ export async function walletBalance(
   return { total: row.total, available: Math.max(0, row.total) };
 }
 
+/**
+ * Her wallet for the account screen: what she can spend, and her last ten
+ * movements, newest first. Null before launch, so nothing of it shows until
+ * the whole wallet does.
+ */
+export async function accountWallet(ownerEmail: string) {
+  if (!(await walletLaunched())) return null;
+  const email = ownerEmail.trim().toLowerCase();
+  const [{ available }, rows] = await Promise.all([
+    walletBalance(email),
+    db
+      .select({ reason: walletTxns.reason, halalas: walletTxns.deltaHalalas, createdAt: walletTxns.createdAt })
+      .from(walletTxns)
+      .where(eq(walletTxns.ownerEmail, email))
+      .orderBy(desc(walletTxns.createdAt), desc(walletTxns.id))
+      .limit(10),
+  ]);
+  return {
+    available,
+    history: rows.map((r) => ({ reason: r.reason, halalas: r.halalas, at: r.createdAt.toISOString() })),
+  };
+}
+
+export type AccountWallet = NonNullable<Awaited<ReturnType<typeof accountWallet>>>;
+
 /** Serialise every write that reads a wallet's balance. Held to the end of `tx`. */
 async function lockWallet(tx: Tx, ownerEmail: string) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"wallet:" + ownerEmail}))`);

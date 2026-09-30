@@ -197,8 +197,8 @@ Examples:
   - then claims active, unexpired cards locked to that email.
 
 ### Account screen
-- `app/(site)/account/page.tsx` adds `walletBalance` and the last 10 rows to its `Promise.all`.
-- `AccountView.tsx` gets a "Wallet" card for money next to the points card (`Wallet` at :441 is renamed `Points`) and a short history. Strings go in `lib/dictionary.ts` in both languages. The card shows `available`, never a negative number.
+- **Built (step 3).** `accountWallet(email)` (`lib/wallet.ts`): null before launch; after it, `available` and her email's last 10 rows, newest first. `app/(site)/account/page.tsx` adds it to its `Promise.all`, by the email she signs in with.
+- `AccountView.tsx` shows a "Wallet" card above the points card (the old `Wallet` component is renamed `Points`): the amount she can spend, never a negative number, and each movement with its reason and date. Strings (`account.money*`) in both languages. Tests: `tests/account-wallet.test.ts`.
 
 ### Admin: "Needs your decision"
 - An owner-only page over `wallet_decisions`:
@@ -217,7 +217,7 @@ One commit per step, docs in the same commit. Nothing reaches customers until st
 0. VAT: the working approach (Settled). Steps 4 and 5 go ahead on it; the accountant's confirmation is wanted before step 9.
 1. **Built.** Migration 0031 (guest rows merged by email, guest identity, `customer_email`, `wallet_discount_halalas`, `wallet_txns`, `wallet_decisions`); `lib/wallet.ts` with `walletBalance`, `spendWallet`, `releaseSpend`; `guestRow` in `createBookings`; `tests/wallet.test.ts` and its mutants; the walk-in flow removed. `wallet_launched_at` moves to step 2, where the first thing reads it.
 2. **Built**, except what is held (see Launch blockers). Cancellation: customer, and salon (switched off; one transaction, guarded status, reason, no un-cancel), no-show points, the cancel email. Behind `wallet_launched_at`. A group cancels as one (the client): there is no dropping guests.
-3. Account screen: the wallet card and its history.
+3. **Built.** Account screen: the wallet card and its history.
 4. Booking checkout: gift card and wallet, quote route, UI.
 5. Purchase checkouts: `startPurchase` wallet in one transaction and zero path, two routes, releases, revive re-spend, UI.
 6. Gift cards: required recipient email, the email lock, delivery claim, `createAccount` claim/merge, inline image, emails.

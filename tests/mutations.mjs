@@ -911,6 +911,13 @@ const mutations = [
         "all",
       ),
   },
+
+  // ---- the wallet on her account screen --------------------------------------
+  {
+    name: "account wallet: show it before launch",
+    expect: "tests/account-wallet.test.ts",
+    apply: () => mutate(WALLET, "  if (!(await walletLaunched())) return null;\n  const email = ownerEmail", "  const email = ownerEmail"),
+  },
 ];
 
 const touched = [

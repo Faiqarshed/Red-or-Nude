@@ -39,6 +39,7 @@ import {
   PERSON_TEXT,
 } from "@/lib/admin/validate";
 import { formatDateKey, riyadhDateKey } from "@/lib/time";
+import { formatSAR } from "@/lib/money";
 import { validationMessages } from "@/lib/validation-messages";
 
 type Customer = {
@@ -59,17 +60,25 @@ type Credit = {
   expiresAt: string;
 };
 
+/** Her money in the salon (accountWallet, lib/wallet.ts). Null before launch. */
+type MoneyWallet = {
+  available: number;
+  history: { reason: string; halalas: number; at: string }[];
+};
+
 export default function AccountView({
   customer,
   balance = 0,
   credits = [],
   history = [],
   rules,
+  wallet = null,
 }: {
   customer?: Customer;
   balance?: number;
   credits?: Credit[];
   history?: BookingSummary[];
+  wallet?: MoneyWallet | null;
   /** The loyalty scheme's four numbers. Needed signed out too — the advert at
    *  the bottom of the sign-in screen quotes the offer, and that is the whole
    *  reason to make an account. */
@@ -82,6 +91,7 @@ export default function AccountView({
       credits={credits}
       history={history}
       rules={rules}
+      wallet={wallet}
     />
   ) : (
     <SignedOut rules={rules} />
@@ -113,12 +123,14 @@ function SignedIn({
   credits,
   history,
   rules,
+  wallet,
 }: {
   customer: Customer;
   balance: number;
   credits: Credit[];
   history: BookingSummary[];
   rules: LoyaltyRules;
+  wallet: MoneyWallet | null;
 }) {
   const { c, lang } = useI18n();
   const a = c.account;
@@ -205,7 +217,8 @@ function SignedIn({
         <div className="mt-8 grid items-start gap-8 lg:grid-cols-[1fr_380px] lg:grid-rows-[auto_1fr]">
           {/* -- the wallet and her memberships ------------------------------ */}
           <div className="space-y-6 self-start lg:col-start-2 lg:row-start-1">
-            <Wallet balance={balance} rules={rules} />
+            {wallet && <Wallet wallet={wallet} />}
+            <Points balance={balance} rules={rules} />
             <Memberships credits={credits} />
           </div>
 
@@ -419,7 +432,56 @@ function Memberships({ credits }: { credits: Credit[] }) {
 }
 
 /**
- * The wallet: money she already has, not a rank she has reached.
+ * Her wallet: money she holds with the salon, from a cancelled booking, a gift
+ * card or a treat we couldn't serve, spent at any checkout. `available` is never
+ * below zero (a debt is the owner's to settle, not hers to be shown). The last
+ * ten movements say why it moved.
+ */
+function Wallet({ wallet }: { wallet: MoneyWallet }) {
+  const { c, lang } = useI18n();
+  const a = c.account;
+  const reasons = a.moneyReasons as Record<string, string>;
+
+  return (
+    <section className="overflow-hidden rounded-[20px] bg-white text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
+      <div className="bg-gradient-to-b from-[#fbeaea] to-transparent p-6 pb-7">
+        <h2 className="font-display text-lg font-extrabold text-ink">{a.moneyTitle}</h2>
+        <p
+          className={`mt-3 flex items-baseline gap-1.5 font-display text-4xl font-extrabold ${
+            wallet.available > 0 ? "text-red" : "text-ink/25"
+          }`}
+        >
+          <Riyal className="h-6 w-6 shrink-0" />
+          {formatSAR(wallet.available)}
+        </p>
+        <p className="mt-1.5 text-[12px] text-ink/55">{wallet.available > 0 ? a.moneyUse : a.moneyEmpty}</p>
+      </div>
+
+      {wallet.history.length > 0 && (
+        <div className="px-6 pb-6">
+          <h3 className="text-[12px] font-semibold uppercase tracking-wider text-ink/45">{a.moneyHistory}</h3>
+          <ul className="mt-2 space-y-2">
+            {wallet.history.map((h, i) => (
+              <li key={i} className="flex items-center justify-between gap-3 text-[13px]">
+                <span className="min-w-0 truncate text-ink/70">
+                  {reasons[h.reason] ?? h.reason}
+                  <span className="text-ink/40"> · {formatDateLabel(riyadhDateKey(new Date(h.at)), lang)}</span>
+                </span>
+                <span dir="ltr" className={`shrink-0 font-semibold ${h.halalas > 0 ? "text-red" : "text-ink"}`}>
+                  {h.halalas > 0 ? "+" : "−"}
+                  {formatSAR(Math.abs(h.halalas))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Loyalty points: money she already has, not a rank she has reached.
  *
  * **There is deliberately no progress bar here.** Two designs were tried and
  * both were wrong for the same reason. A track from zero to a top rung made the
@@ -438,7 +500,7 @@ function Memberships({ credits }: { credits: Credit[] }) {
  * is per bill. It lives at checkout, where she can act on it. See the earn
  * progress strip in app/(site)/booking/payment/page.tsx.
  */
-function Wallet({ balance, rules }: { balance: number; rules: LoyaltyRules }) {
+function Points({ balance, rules }: { balance: number; rules: LoyaltyRules }) {
   const { c } = useI18n();
   const a = c.account;
 
