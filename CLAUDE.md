@@ -67,10 +67,11 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
   card/membership could not be issued. Always the whole bill — no partial refunds.
 - Undelivered chair purchase ≤ 10 SAR → credit, not card (`CHAIR_CREDIT_MAX_HALALAS`).
 - Wallet (planned, being built): credit belongs to an **email**, never expires, never
-  shows negative, one cancel credit per booking, can pay bookings/memberships/chair
-  items but **not gift cards**, leaves ≥ 1 SAR to charge unless it covers the whole
-  bill. Only the owner (CEO) can correct a balance, with a reason, audited. Staff
-  actions never write to the ledger. A chargeback writes a `reversal` row.
+  shows negative, one cancel credit per booking, can pay bookings, memberships, chair
+  items and gift cards (the client, 2026-09-30), leaves ≥ 1 SAR to charge unless it
+  covers the whole bill. Only the owner (CEO) can correct a balance, with a reason,
+  audited. Staff actions never write to the ledger. A chargeback writes a `reversal`
+  row.
 - ⚠ Until `wallet_launched_at` is set, a customer cancel still refunds the card
   (`refundBookings` in `app/api/my-bookings/cancel/route.ts`). That is legacy pending
   the wallet — do not copy it anywhere new. After launch it credits the wallet
@@ -80,7 +81,8 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
 - Customer may cancel/reschedule only `pending`/`confirmed` bookings, until 3 h before
   (`cancel_cutoff_hours`); exactly on the deadline is too late. Rule: `cancelRefusal`
   in `lib/cancellation.ts`. Guests confirm with an OTP.
-- A group cancels as one; reschedule moves only the quoted booking.
+- A group cancels as one, by the booker; its credit is what was paid, after the 10%
+  (the client, 2026-09-30). Reschedule moves only the quoted booking.
 - Staff reschedule ignores the window. **The salon never cancels a booking** (the
   client, 2026-09-30): `SALON_CAN_CANCEL = false` in `lib/cancellation.ts` refuses it
   in `setBookingStatus` and hides the button. The desk-cancel code (reason required,
@@ -124,9 +126,10 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
 - Email is the customer's identity. Sign-in code: 1 minute, 5 attempts.
 
 ## Open questions — ask, don't guess
-- VAT on gift cards and credit notes (waits on the accountant; blocks wallet step 3).
-- A group dropping guests down to 2 (docs/WALLET-PLAN.md open question 0). Our
-  assumption only; until the client agrees, a group cancels as one.
+- VAT (waits on the accountant). Built meanwhile on the owner's working approach
+  (docs/WALLET-PLAN.md, Settled): gift cards taxed when sold from launch (a 100 SAR
+  card costs 100 incl. VAT), no credit note on a cancel, credit is a discount on
+  the next bill. Confirm with the accountant before launch.
 
 ## Verify before saying done
 - `npx tsc --noEmit` · `npm run lint` · `npm test` (real Postgres, serial)
