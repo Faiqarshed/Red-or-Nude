@@ -228,7 +228,7 @@ export type CheckoutChoices = {
    * Her credit switch and the gift card the server priced, so a reload shows the
    * bill she held. Display only: the next hold is worked out again server side.
    */
-  wallet?: { use: boolean; gift: { code: string; halalas: number } | null };
+  wallet?: { gift: { code: string; halalas: number } | null };
   /** The unpaid hold a declined card left behind, and whose it is. */
   held: { code: string; email: string } | null;
 };

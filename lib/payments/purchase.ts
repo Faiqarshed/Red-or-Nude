@@ -33,7 +33,7 @@ import {
   reSpendReleased,
   spendWallet,
 } from "@/lib/wallet";
-import { walletCovers } from "@/lib/money";
+import { walletSpendOk } from "@/lib/money";
 import { sendChairCreditEmail } from "@/lib/wallet-email";
 import { refundRef } from "./refund";
 import { errorText, logPaymentEvent } from "./events";
@@ -178,7 +178,7 @@ export async function startPurchase(input: {
         .returning({ id: payments.id });
       if (!input.wallet || walletHalalas <= 0) return;
       const { available } = await lockedBalance(tx, input.wallet.email);
-      if (walletCovers(input.amountHalalas, available) !== walletHalalas) throw new WalletChanged(available);
+      if (!walletSpendOk(walletHalalas, input.amountHalalas, available)) throw new WalletChanged(available);
       const spent = await spendWallet(tx, input.wallet.customerId, input.wallet.email, walletHalalas, { paymentId: row.id });
       if (!spent) throw new WalletChanged(available);
     });

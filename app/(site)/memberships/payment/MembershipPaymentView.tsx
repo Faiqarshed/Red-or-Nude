@@ -221,7 +221,7 @@ export default function MembershipPaymentView({
               <button
                 type="button"
                 onClick={confirm}
-                disabled={submitting || checkout !== null || paidNotGranted}
+                disabled={submitting || checkout !== null || paidNotGranted || !credit.ok}
                 className={`mt-5 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
                   submitting || checkout !== null || paidNotGranted
                     ? "cursor-not-allowed bg-black/[0.06] text-ink/40"

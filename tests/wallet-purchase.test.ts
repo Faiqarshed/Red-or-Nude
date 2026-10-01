@@ -100,6 +100,15 @@ describe("her credit on a purchase", () => {
     expect((await walletBalance(SARA)).available).toBe(0);
   });
 
+  it("spends only the amount she typed, and the rest stays hers", async () => {
+    await credit(20_000);
+    expect(await buy(5_000)).toMatchObject({ ok: true, delivered: { kind: "pack" } });
+
+    const [p] = await paymentsOfSara();
+    expect(p).toMatchObject({ status: "paid", amountHalalas: PRICE - 5_000 });
+    expect((await walletBalance(SARA)).available).toBe(15_000);
+  });
+
   it("covers the whole purchase with no charge at all", async () => {
     await credit(PRICE + 5_000);
     const r = await buy(PRICE);

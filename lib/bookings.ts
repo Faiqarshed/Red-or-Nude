@@ -32,7 +32,7 @@ import { reserveStations, utcToLocalDate } from "@/lib/availability";
 import { canCancel, cancelDeadline } from "@/lib/cancellation";
 import { refillDaysLeft, refillWindowEnd } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
-import { halalasToSar, shareAmount, splitGroupPrice, vatIncludedIn, walletCovers } from "@/lib/money";
+import { halalasToSar, shareAmount, splitGroupPrice, vatIncludedIn, walletSpendOk } from "@/lib/money";
 import { quotePromo, type PromoRefusal } from "@/lib/promo";
 import { loyaltyBalance, quoteReward, spendPoints } from "@/lib/loyalty";
 import { quotePackCredit, spendPackCredit } from "@/lib/packs";
@@ -1286,8 +1286,8 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
         }
         const { available } = await lockedBalance(tx, walletEmail);
         const spendable = input.customerId ? available : Math.min(brought, available);
-        walletSpent = walletCovers(billTotal, spendable);
-        if (walletSpent !== (input.walletHalalas ?? 0)) throw new BookingAbort("wallet-changed", undefined, spendable);
+        walletSpent = input.walletHalalas ?? 0;
+        if (!walletSpendOk(walletSpent, billTotal, spendable)) throw new BookingAbort("wallet-changed", undefined, spendable);
         walletShares = shareAmount(payable, walletSpent);
       }
 

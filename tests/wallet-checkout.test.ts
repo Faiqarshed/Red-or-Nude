@@ -93,6 +93,15 @@ describe("her credit at the booking checkout", () => {
     expect((await spends(SARA)).map((s) => [s.deltaHalalas, s.bookingId])).toEqual([[-5_000, row.id]]);
   });
 
+  it("spends only the amount she typed, and the rest stays hers", async () => {
+    await credit(SARA, 20_000);
+    const r = await book("sara", { walletHalalas: 5_000 });
+    if (!r.ok) throw new Error(r.error);
+
+    expect(r.totalHalalas).toBe(price - 5_000);
+    expect((await walletBalance(SARA)).available).toBe(15_000);
+  });
+
   it("covers the whole bill, and what is left stays hers", async () => {
     await credit(SARA, price + 10_000);
     const r = await book("sara", { walletHalalas: price });

@@ -54,7 +54,7 @@ const T = {
     howTo: "اذكري رقم البطاقة عند الحجز أو في الفرع لاستخدام الرصيد.",
     howToLocked:
       "أدخلي رقم البطاقة عند الدفع واحجزي بهذا البريد الإلكتروني، وما يتبقى منها يبقى لكِ. أو سجّلي الدخول بهذا البريد فتُضاف إلى محفظتك الآن.",
-    howToInWallet: "البطاقة في محفظتك في ريد أور نيود. سجّلي الدخول بهذا البريد وفعّلي «استخدمي رصيدي» عند الدفع.",
+    howToInWallet: "البطاقة في محفظتك في ريد أور نيود. سجّلي الدخول بهذا البريد واختاري «الدفع من المحفظة» عند الدفع.",
     buyerLocked: (to: string) => `تعمل البطاقة مع ${to} فقط: برقمها مع هذا البريد، أو بتسجيل الدخول به.`,
     buyerInWallet: (to: string) => `أُضيفت البطاقة مباشرة إلى محفظة ${to}.`,
     expires: "صالحة حتى",
@@ -76,7 +76,7 @@ const T = {
     howTo: "Quote the card number when booking, or at the branch, to spend the balance.",
     howToLocked:
       "Enter the card number at checkout, booking with this email, and what's left of it stays yours. Or sign in with this email and it goes into your wallet now.",
-    howToInWallet: "It's already in your Red or Nude wallet. Sign in with this email and switch on \"Use my credit\" at checkout.",
+    howToInWallet: "It's already in your Red or Nude wallet. Sign in with this email and use \"Pay with wallet\" at checkout.",
     buyerLocked: (to: string) => `It works only with ${to}: the card number with that email, or signed in with it.`,
     buyerInWallet: (to: string) => `It went straight into the wallet of ${to}.`,
     expires: "Valid until",

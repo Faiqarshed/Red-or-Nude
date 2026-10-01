@@ -143,23 +143,26 @@ Examples:
   1. the wallet is the checkout's email: her account's when signed in, the one she typed otherwise;
   2. a gift card is claimed into that email's wallet (`claimGiftCard`). It works only when that email is its recipient's; the code plus the email is the proof, so there is no separate email field;
   3. what she can spend: signed in, her whole balance; a guest, only what the card just brought (a typed email proves no wallet);
-  4. `walletCovers` (`lib/money.ts`, the same function the screen uses): all it can, but never leaving the card under 1 SAR;
-  5. if that differs from `walletHalalas`, refused with `wallet-changed` and her real figure: another tab spent it, and she is never charged more in silence;
+  4. `walletSpendOk` (`lib/money.ts`, the same function the screen uses): what she typed, never more than she can spend or the bill, never leaving the card under 1 SAR (`walletCovers` is the most);
+  5. if `walletHalalas` fails it, refused with `wallet-changed` and her real figure: another tab spent it, and she is never charged more in silence;
   6. split across member rows (`wallet_discount_halalas`), and one `spend` row on the first booking. VAT comes out of the lower total, as with a promo.
   - `bookingLines` (`lib/payments/lines.ts`) already names the "Wallet credit" coupon. A bill fully covered goes down the existing zero path.
   - A lapsed hold (the sweep) or one she let go (`releaseWebHold`) writes a `release` for its spend in the same transaction (`releaseBookingSpends`).
   - **A card's leftover.** A guest's spend is tagged with her card (`gift_card_id`), and its release carries the tag back, so typing the code again with the same email brings what is left of that card: after going back to change her service, or on her next visit. Never more than that, so a used card's code and email reach nothing else on that email. Once an account exists for the email, its credit is spent signed in, untagged, so a guest typing the code is told to sign in (`gift-card-claimed`). Any other refusal reads the same (`gift-card-invalid`), and no email is shown.
 - **Preview. Built:** `/api/wallet/quote`. GET: live or not, and her balance when signed in. POST `{ code, email }`: what a card brings, without claiming; signed in, the email is always her account's. Throttled per IP like the promo route.
-- **UI. Built:** a "Wallet and gift cards" panel on `app/(site)/booking/payment/page.tsx`, shown only once live: a "Use my credit (X SAR)" switch when signed in, and a gift card field. A "Wallet credit" line in the summary, and `payableTotal` after it. Choices kept across a reload for display; the hold is worked out again server side.
+- **UI. Built:** in the summary column of `app/(site)/booking/payment/page.tsx`, under the discount code.
+  - **Signed in:** "Pay with wallet" (`WalletAmount`, `components/WalletCredit.tsx`): her balance, an amount she types or Max, and what is left for the card. Her gift cards are already in her wallet, so the card field waits behind "Have a gift card code?", for a card the desk issued with no email.
+  - **A guest:** no wallet, a gift card field only. It pays all the card can, and anything left waits in her email's wallet. Her booking email says how much is left and to sign in with that email (`giftCardLeftAfter`, `lib/invoice`).
+  - A "Wallet credit" (or "Gift card") line in the summary, and `payableTotal` after it. The card is kept across a reload, and the hold is worked out again server side.
 - **Purchases. Built (step 5)** (`startPurchase`, `lib/payments/purchase.ts`):
-  - takes `wallet?: { customerId, email, halalas }`, **signed-in only**: every route passes her session's customer and email, never the request's (the chair QR proves presence, not who). The pending payment and `spendWallet` are one transaction under the wallet's lock; `walletCovers` is worked out again there and a difference is refused (`wallet-changed`, with her real figure), which also keeps the card's part at 1 SAR or more;
+  - takes `wallet?: { customerId, email, halalas }`, **signed-in only**: every route passes her session's customer and email, never the request's (the chair QR proves presence, not who). The pending payment and `spendWallet` are one transaction under the wallet's lock; `walletSpendOk` checks the amount again there and refuses one it fails (`wallet-changed`, with her real figure), which also keeps the card's part at 1 SAR or more;
   - the card is asked for the rest, with `discounts: [{ label: "Wallet credit", halalas }]` off the full price;
   - a purchase the credit covers never reaches StreamPay: it settles on the spot as a zero payment (gap 6);
   - `markFailed` (declined, abandoned) gives the credit back in the same write; `refundOrCredit` (paid, not delivered, at checkout or by the daily job) gives it back too, and a zero card part is marked `refunded` without StreamPay (gap 7);
   - a gift card is issued for its full value, not for what the card paid;
   - routes: `app/api/packs`, `app/api/gift-cards` (the client allows credit there) and `app/api/station/treat`. A gift card code is not taken on the gift card route: a card doesn't buy a card.
 - **Revive. Built:** before a written-off payment that turns up paid is delivered (`settlePurchase`), `reSpendReleased` takes its released credit again (`reSpendOf`). She no longer has it: nothing is delivered, and the card's part is refunded as a late payment. A booking's credit is never released while its hold stands, so only purchases need this.
-- **Purchase pages. Built (step 5):** the same switch (`components/WalletCredit.tsx`, one hook for the three) on the membership, gift card and chair pages, with what is left to pay; a purchase the credit covers shows no card form.
+- **Purchase pages. Built (step 5):** the same amount field (`components/WalletCredit.tsx`, one hook for the three) on the membership, gift card and chair pages, with what is left to pay; a purchase the credit covers shows no card form.
 
 ### Cancellation
 - **Customer** (`app/api/my-bookings/cancel/route.ts`), **built (step 2c):** `creditCancelled(..., "cancel-customer")` in one transaction with the guarded status update and the pack credit return; there is no card refund for a cancel. The confirm and done copy (`cancelConfirmWallet`, `cancelConfirmGroupWallet`, `cancelledToWallet`, `cancelledNothingPaid`) says it goes to her wallet.
@@ -184,7 +187,7 @@ Examples:
 - **Built (step 6).** `app/api/gift-cards`: `recipientEmail` required (the form already asked for it).
 - **Tax:** `giftCardLine(amountSar)` (`lib/payments/lines.ts`): taxed, VAT included in the price.
 - **Into her wallet:** `claimCardsFor(email)` (`lib/wallet.ts`) moves every card sent to that email, still active and unexpired, into the wallet of the account with that email. Called by `deliver()` right after a card is issued, and by `createAccount` after the account commits. Neither can fail the sale or the sign-up: a card that doesn't move stays a working code.
-- **Recipient email** (`lib/giftcard/email.ts`): already in her wallet ("sign in and switch on Use my credit"), or the code with her email ("booking with this email; what's left stays yours; or sign in and it goes into your wallet now"). A card with no recipient email: the code alone.
+- **Recipient email** (`lib/giftcard/email.ts`): already in her wallet ("sign in and use Pay with wallet"), or the code with her email ("booking with this email; what's left stays yours; or sign in and it goes into your wallet now"). A card with no recipient email: the code alone.
 - **Buyer receipt** says which: in the recipient's wallet, or that it works only with the recipient's email.
 - **Inline image:** `SendMailInput.attachments` gains `cid`, which nodemailer passes through. The PNG is fetched from `/api/gift-card-image` (5 s at most), falling back to the remote `<img>`.
 - **`lib/wallet-email.ts`** (built with steps 2 and 7): the cancel credit email, the chair credit email, the owner correction email. Not built: a separate "gift card leftover" email; her wallet on /account shows it.

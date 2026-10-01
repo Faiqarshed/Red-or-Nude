@@ -223,7 +223,7 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
               <button
                 type="button"
                 onClick={confirm}
-                disabled={submitting || !selection}
+                disabled={submitting || !selection || !credit.ok}
                 className={`mt-6 block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
                   submitting || !selection
                     ? "cursor-not-allowed bg-black/[0.06] text-ink/40"

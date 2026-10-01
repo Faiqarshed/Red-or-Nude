@@ -438,7 +438,7 @@ export default function StationAddOnView({
             <button
               type="button"
               onClick={tab === "now" ? () => void pay() : proceed}
-              disabled={tab === "now" ? busy : tooLong}
+              disabled={tab === "now" ? busy || !credit.ok : tooLong}
               className="shrink-0 rounded-full bg-red-grad px-6 py-3.5 text-sm font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
             >
               {tab === "now" ? (busy ? p.confirming : s.pay) : s.proceed}

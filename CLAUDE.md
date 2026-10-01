@@ -69,8 +69,9 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
 - Wallet (`lib/wallet.ts`, docs/WALLET-PLAN.md): always on, no launch switch
   (production starts on an empty database). Credit belongs to an **email**, never
   expires, never shows negative, one cancel credit per booking, can pay bookings,
-  memberships, chair items and gift cards (the client, 2026-09-30), leaves ≥ 1 SAR to
-  charge unless it covers the whole bill. Only the owner (CEO) can correct a
+  memberships, chair items and gift cards (the client, 2026-09-30). She types how
+  much (`walletSpendOk`); it leaves ≥ 1 SAR to charge unless it covers the whole
+  bill. A guest has no wallet at checkout, only a gift card. Only the owner (CEO) can correct a
   balance, with a reason, audited. Staff actions never write to the ledger. A
   chargeback writes a `reversal` row.
 - Credit is VAT-inclusive at face value (the owner): a 100 SAR gift card is 100 SAR

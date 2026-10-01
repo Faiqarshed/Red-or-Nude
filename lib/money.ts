@@ -113,3 +113,16 @@ export function discountParts(b: {
   const wallet = b.walletDiscountHalalas;
   return { group: b.discountHalalas - promo - points - wallet, promo, points, wallet };
 }
+
+/**
+ * Whether she may spend `halalas` of her credit on this bill: what she typed,
+ * up to walletCovers. Never more than she has or the bill, and never leaving
+ * the card under 1 SAR. Nothing at all is always fine.
+ */
+export function walletSpendOk(halalas: number, billHalalas: number, availableHalalas: number): boolean {
+  if (!Number.isInteger(halalas) || halalas < 0) return false;
+  if (halalas === 0) return true;
+  if (halalas > availableHalalas || halalas > billHalalas) return false;
+  const left = billHalalas - halalas;
+  return left === 0 || left >= HALALAS_PER_SAR;
+}

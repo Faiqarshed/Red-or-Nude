@@ -10,7 +10,8 @@ import { declineMessage, usePaymentReturn, type PaymentOutcome } from "@/compone
 import { CheckingModal, PayNoticeModal, PayStep, Steps } from "@/components/PayFlow";
 import PhoneField from "@/components/PhoneField";
 import { Riyal, Lock } from "@/components/icons";
-import { formatSAR, walletCovers } from "@/lib/money";
+import { formatSAR, walletCovers, walletSpendOk } from "@/lib/money";
+import { WalletAmount } from "@/components/WalletCredit";
 import { useI18n } from "@/lib/i18n";
 import {
   clearBooking,
@@ -111,12 +112,14 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
   const [redeemDiscountSar, setRedeemDiscountSar] = useState(0);
   const [redeemError, setRedeemError] = useState<string | null>(null);
   /**
-   * The wallet (docs/WALLET-PLAN.md): her balance when signed in, in halalas; a
-   * guest spends only a gift card she types, and only one sent to the email she
-   * books with.
+   * The wallet (docs/WALLET-PLAN.md): her balance when signed in, in halalas,
+   * and how much of it she typed to spend. A guest has no wallet here: she
+   * spends a gift card she types, sent to the email she books with.
    */
   const [walletAvailable, setWalletAvailable] = useState(0);
-  const [useCredit, setUseCredit] = useState(false);
+  const [walletPick, setWalletPick] = useState({ halalas: 0, ok: true });
+  /** Signed in, the gift card field waits behind a link: her cards are already in her wallet. */
+  const [giftOpen, setGiftOpen] = useState(false);
   const [giftInput, setGiftInput] = useState("");
   /** A card the server said brings `halalas` to this checkout. */
   const [gift, setGift] = useState<{ code: string; halalas: number } | null>(null);
@@ -193,7 +196,6 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
     }
     if (saved.redeemPoints !== null) void pickReward(saved.redeemPoints);
     if (saved.wallet) {
-      setUseCredit(saved.wallet.use);
       setGift(saved.wallet.gift);
       setGiftInput(saved.wallet.gift?.code ?? "");
     }
@@ -309,12 +311,20 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
 
   /**
    * Then her credit, last, as lib/bookings.ts takes it, and by the same rule
-   * (walletCovers): all it can, but never leaving the card under 1 SAR. Signed
-   * in, her balance plus a card she typed; a guest, the card alone. Sent with
-   * the booking, which works it out again and refuses if the two differ.
+   * (walletSpendOk): never more than she has or the bill, and never leaving the
+   * card under 1 SAR. Signed in, what she typed, from her balance plus a card
+   * she added; a guest, all the card can pay (walletCovers). Sent with the
+   * booking, which checks it again and refuses if it can't be spent.
    */
-  const walletSpendable = signedIn ? (useCredit ? walletAvailable + (gift?.halalas ?? 0) : 0) : (gift?.halalas ?? 0);
-  const walletHalalas = walletCovers(Math.round(beforeCredit * 100), walletSpendable);
+  const billHalalas = Math.round(beforeCredit * 100);
+  const walletSpendable = (signedIn ? walletAvailable : 0) + (gift?.halalas ?? 0);
+  const walletHalalas = signedIn
+    ? walletSpendOk(walletPick.halalas, billHalalas, walletSpendable)
+      ? walletPick.halalas
+      : 0
+    : walletCovers(billHalalas, walletSpendable);
+  /** What she typed can't be spent: the field says why, and Pay waits. */
+  const walletTypedBad = signedIn && !walletPick.ok && walletSpendable > 0 && billHalalas > 0;
   const walletSar = walletHalalas / 100;
   const payableTotal = Math.round((beforeCredit - walletSar) * 100) / 100;
 
@@ -363,7 +373,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
   const fullyCovered = booking.total <= 0;
 
   /** The card itself is StreamPay's to check; ours are the contact details. */
-  const readyToConfirm = phoneOk && emailOk && checkout === null;
+  const readyToConfirm = phoneOk && emailOk && checkout === null && !walletTypedBad;
 
   const promoReasonText = (reason: string, minTotalHalalas?: number): string => {
     const e = p.promoErrors;
@@ -446,8 +456,6 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
         return;
       }
       setGift({ code, halalas: data.halalas });
-      // Signed in, a card joins her credit, so spending it is spending that.
-      if (signedIn) setUseCredit(true);
     } catch {
       setGiftError(p.giftErrors.invalid);
     } finally {
@@ -534,12 +542,12 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       treats,
       promo: promoApplied,
       redeemPoints,
-      wallet: { use: useCredit, gift },
+      wallet: { gift },
       held: heldCode ? { code: heldCode, email: email.trim() } : null,
     });
     // `email` is read only alongside a new hold; typing does not need a write.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, treats, promoApplied, redeemPoints, useCredit, gift, heldCode]);
+  }, [loaded, treats, promoApplied, redeemPoints, gift, heldCode]);
 
   const confirm = async () => {
     if (!hasSelection || submitting) return;
@@ -1016,82 +1024,6 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
             );
           })()}
 
-          {/* Her wallet and gift cards. A way of paying,
-              so beside the others; outside the card-form branch for the same
-              reason the points are: credit that clears the bill hides the card
-              form, and the way to turn it off must not go with it. */}
-          {hasSelection && (
-            <section className="rounded-[20px] bg-white p-5 text-start ring-1 ring-black/[0.04]">
-              <p className="font-display text-base font-extrabold text-ink">{p.walletTitle}</p>
-
-              {signedIn && walletAvailable > 0 && (
-                <label className="mt-3 flex cursor-pointer items-center justify-between gap-3 rounded-[12px] border border-black/[0.08] px-3.5 py-3 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-red/30">
-                  <span className="text-[13px] font-semibold text-ink">
-                    {p.walletUse.replace("{sar}", formatSAR(walletAvailable))}
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={useCredit}
-                    onChange={(e) => {
-                      setUseCredit(e.target.checked);
-                      // Signed in, a card is part of her credit: off takes it off too.
-                      if (!e.target.checked) setGift(null);
-                    }}
-                    className="h-4 w-4 accent-red"
-                  />
-                </label>
-              )}
-
-              {gift ? (
-                <div className="mt-3 flex items-center justify-between gap-3 rounded-[12px] bg-red/[0.04] px-3.5 py-3 text-[13px]">
-                  <span className="font-semibold text-red">
-                    {p.giftApplied.replace("{sar}", formatSAR(gift.halalas))}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setGift(null);
-                      setGiftInput("");
-                    }}
-                    className="shrink-0 text-[12px] font-semibold text-ink/50 hover:text-red"
-                  >
-                    {p.giftRemove}
-                  </button>
-                </div>
-              ) : (
-                <div className="mt-3 flex gap-2">
-                  <input
-                    value={giftInput}
-                    onChange={(e) => setGiftInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        void applyGift();
-                      }
-                    }}
-                    placeholder={p.giftPlaceholder}
-                    dir="ltr"
-                    autoCapitalize="characters"
-                    className="min-w-0 flex-1 rounded-[12px] border border-black/[0.08] px-3.5 py-2.5 text-[13px] uppercase tracking-wider text-ink outline-none focus:border-red/40"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void applyGift()}
-                    disabled={!giftInput.trim() || giftChecking}
-                    className="shrink-0 rounded-[12px] border border-red/30 px-4 text-[13px] font-bold text-red transition-colors hover:bg-red/[0.04] disabled:opacity-40"
-                  >
-                    {p.giftApply}
-                  </button>
-                </div>
-              )}
-              {giftError && (
-                <p role="alert" className="mt-1.5 text-[11px] text-red">
-                  {giftError}
-                </p>
-              )}
-              {!signedIn && <p className="mt-2 text-[11px] text-ink/45">{p.giftGuestNote}</p>}
-            </section>
-          )}
         </div>
 
         {/* Summary */}
@@ -1268,6 +1200,128 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
               </div>
               )}
 
+              {/* Her wallet, or a guest's gift card: a way of paying, so beside
+                  the code and the total it changes. Signed in, her gift cards
+                  are already in her wallet, so she types how much of it to
+                  spend, and the card field waits behind a link for a card sent
+                  with no email. A guest has no wallet to show: she types the
+                  card, sent to the email above, and it pays all it can. */}
+              {hasSelection && billHalalas > 0 && (
+                <div className="mt-4">
+                  {signedIn ? (
+                    <div className="space-y-2">
+                      {walletSpendable > 0 && (
+                        <WalletAmount
+                          available={walletSpendable}
+                          billHalalas={billHalalas}
+                          onChange={(halalas, ok) => setWalletPick({ halalas, ok })}
+                        />
+                      )}
+                      {gift ? (
+                        <div className="flex items-center justify-between rounded-[12px] border border-red/20 bg-red/[0.04] px-4 py-3">
+                    <span className="text-sm font-semibold text-red">
+                      {p.giftApplied.replace("{sar}", formatSAR(gift.halalas))}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGift(null);
+                        setGiftInput("");
+                      }}
+                      className="text-[12px] font-semibold text-ink/50 underline underline-offset-4 hover:text-ink"
+                    >
+                      {p.giftRemove}
+                    </button>
+                  </div>
+                      ) : giftOpen ? (
+                        <div className="flex gap-2">
+                    <input
+                      value={giftInput}
+                      onChange={(e) => setGiftInput(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void applyGift();
+                        }
+                      }}
+                      dir="ltr"
+                      maxLength={40}
+                      placeholder="XXXX-XXXX-XXXX-XXXX"
+                      autoCapitalize="characters"
+                      className="min-w-0 flex-1 rounded-[12px] border border-black/[0.08] px-4 py-3 text-left text-sm uppercase tracking-wider text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void applyGift()}
+                      disabled={!giftInput.trim() || giftChecking}
+                      className="shrink-0 rounded-[12px] bg-black/[0.06] px-5 text-sm font-bold text-ink transition-colors hover:bg-black/[0.1] disabled:cursor-not-allowed disabled:text-ink/40"
+                    >
+                      {giftChecking ? p.promoApplying : p.giftApply}
+                    </button>
+                  </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setGiftOpen(true)}
+                          className="px-1 text-[12px] font-semibold text-red underline underline-offset-4 hover:opacity-70"
+                        >
+                          {p.giftHave}
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <span className="mb-1.5 block text-[12px] text-ink/55">{p.giftLabel}</span>
+                      {gift ? <div className="flex items-center justify-between rounded-[12px] border border-red/20 bg-red/[0.04] px-4 py-3">
+                    <span className="text-sm font-semibold text-red">
+                      {p.giftApplied.replace("{sar}", formatSAR(gift.halalas))}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGift(null);
+                        setGiftInput("");
+                      }}
+                      className="text-[12px] font-semibold text-ink/50 underline underline-offset-4 hover:text-ink"
+                    >
+                      {p.giftRemove}
+                    </button>
+                  </div> : <div className="flex gap-2">
+                    <input
+                      value={giftInput}
+                      onChange={(e) => setGiftInput(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void applyGift();
+                        }
+                      }}
+                      dir="ltr"
+                      maxLength={40}
+                      placeholder="XXXX-XXXX-XXXX-XXXX"
+                      autoCapitalize="characters"
+                      className="min-w-0 flex-1 rounded-[12px] border border-black/[0.08] px-4 py-3 text-left text-sm uppercase tracking-wider text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void applyGift()}
+                      disabled={!giftInput.trim() || giftChecking}
+                      className="shrink-0 rounded-[12px] bg-black/[0.06] px-5 text-sm font-bold text-ink transition-colors hover:bg-black/[0.1] disabled:cursor-not-allowed disabled:text-ink/40"
+                    >
+                      {giftChecking ? p.promoApplying : p.giftApply}
+                    </button>
+                  </div>}
+                      {!gift && <span className="mt-1.5 block text-[11px] text-ink/40">{p.giftGuestNote}</span>}
+                    </>
+                  )}
+                  {giftError && (
+                    <p role="alert" className="mt-1.5 text-[11px] text-red">
+                      {giftError}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Coffee and a cookie, offered once the services are chosen and
                   before payment — one row per guest, so one can take it and
                   another skip it. Frozen once the chairs are held: the retry
@@ -1394,7 +1448,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
                         −<Riyal className="h-3 w-3" />
                         {formatSAR(walletHalalas)}
                       </span>
-                      <span>{p.walletLine}</span>
+                      <span>{signedIn ? p.walletLine : p.giftLine}</span>
                     </div>
                   )}
                 </div>

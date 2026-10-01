@@ -901,12 +901,17 @@ const mutations = [
   {
     name: "wallet: let credit leave a card charge under 1 SAR",
     expect: "tests/wallet-checkout.test.ts",
-    apply: () => mutate(MONEY, "  return left > 0 && left < HALALAS_PER_SAR ? Math.max(0, billHalalas - HALALAS_PER_SAR) : spend;", "  return spend;"),
+    apply: () => mutate(MONEY, "  return left === 0 || left >= HALALAS_PER_SAR;", "  return true;"),
+  },
+  {
+    name: "wallet: let her spend more credit than she has",
+    expect: "tests/wallet-checkout.test.ts",
+    apply: () => mutate(MONEY, "  if (halalas > availableHalalas || halalas > billHalalas) return false;", "  if (halalas > billHalalas) return false;"),
   },
   {
     name: "wallet: charge what the balance allows, not what the screen showed",
     expect: "tests/wallet-checkout.test.ts",
-    apply: () => mutate(ENGINE, "        if (walletSpent !== (input.walletHalalas ?? 0)) throw new BookingAbort(\"wallet-changed\", undefined, spendable);\n", ""),
+    apply: () => mutate(ENGINE, "        if (!walletSpendOk(walletSpent, billTotal, spendable)) throw new BookingAbort(\"wallet-changed\", undefined, spendable);\n", ""),
   },
   {
     name: "wallet: let a guest spend the wallet of an email she only typed",
@@ -938,7 +943,7 @@ const mutations = [
   {
     name: "purchase: charge what the balance allows, not what the screen showed",
     expect: "tests/wallet-purchase.test.ts",
-    apply: () => mutate(PURCHASE, "      if (walletCovers(input.amountHalalas, available) !== walletHalalas) throw new WalletChanged(available);\n", ""),
+    apply: () => mutate(PURCHASE, "      if (!walletSpendOk(walletHalalas, input.amountHalalas, available)) throw new WalletChanged(available);\n", ""),
   },
   {
     name: "purchase: keep the credit of a declined checkout",
