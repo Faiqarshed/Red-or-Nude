@@ -146,7 +146,8 @@ export default function StationAddOnView({
     setCheckout(outcome.status === "failed" ? (outcome.checkout ?? null) : null);
     notify(declineMessage(c.payDecline, outcome) ?? refusal(outcome.status === "failed" ? outcome.error : undefined));
   };
-  const checkingPayment = usePaymentReturn(onPaid, returning);
+  // The chair page says "Added to your visit" in place; it never leaves.
+  const checkingPayment = usePaymentReturn(onPaid, returning, { staysOnPaid: true });
 
   const pay = async () => {
     if (basket.length === 0 || busy) return;

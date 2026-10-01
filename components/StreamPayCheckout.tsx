@@ -193,8 +193,16 @@ export default function StreamPayCheckout({
  * `returning` is `?paid=` as the server saw it (the page's searchParams): the
  * page is then drawn with the loader already up, rather than showing the form
  * until its JavaScript runs.
+ *
+ * `staysOnPaid`: the page shows its own "paid" in place (the chair's "Added to
+ * your visit") rather than leaving for one, so the loader comes down on paid.
+ * Left up, it covered that popup for good: charged, and stuck on "Checking".
  */
-export function usePaymentReturn(onDone: (outcome: PaymentOutcome) => void, returning: boolean): boolean {
+export function usePaymentReturn(
+  onDone: (outcome: PaymentOutcome) => void,
+  returning: boolean,
+  { staysOnPaid = false }: { staysOnPaid?: boolean } = {},
+): boolean {
   const done = useRef(onDone);
   done.current = onDone;
   const [checking, setChecking] = useState(returning);
@@ -217,8 +225,8 @@ export function usePaymentReturn(onDone: (outcome: PaymentOutcome) => void, retu
     // was usually a payment StreamPay had not written down yet.
     void pollPayment(ref, () => true, 80, declined).then((o) => {
       // Paid: the loader stays up while the page leaves for the success popup,
-      // instead of flashing the spent checkout on the way.
-      if (o?.status !== "paid") setChecking(false);
+      // instead of flashing the spent checkout on the way — unless it stays.
+      if (o?.status !== "paid" || staysOnPaid) setChecking(false);
       if (o) done.current(o);
     });
   }, []);
