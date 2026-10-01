@@ -7,6 +7,7 @@ import { LanguageProvider } from "@/lib/i18n";
 import { LANG_COOKIE } from "@/lib/localized";
 import { AccountProvider } from "@/lib/account/context";
 import { currentCustomer } from "@/lib/account/guard";
+import { walletBalance } from "@/lib/wallet";
 import ChatWidget from "@/components/ChatWidget";
 
 // Closest free fallbacks for the licensed Figma fonts:
@@ -45,6 +46,9 @@ export default async function RootLayout({
   // Resolved once here so every SiteHeader on the site knows which button to
   // render, without any page having to think about auth. See lib/account/context.
   const customer = await currentCustomer();
+  // Her balance for the header's wallet pill, drawn with the page rather than
+  // fetched after it. See lib/account/context.
+  const walletHalalas = customer ? (await walletBalance(customer.email.trim().toLowerCase())).available : null;
   // Her language, drawn by the server from the first byte. Read from a cookie
   // because the server cannot see localStorage: without it every refresh
   // painted Arabic and flipped to English a moment later.
@@ -58,7 +62,7 @@ export default async function RootLayout({
     >
       <body className="font-ar bg-cream text-ink">
         <LanguageProvider initialLang={lang}>
-          <AccountProvider signedIn={Boolean(customer)}>
+          <AccountProvider signedIn={Boolean(customer)} walletHalalas={walletHalalas}>
             {children}
             {/* Site only — the admin shell has its own layout and no business
                 with a customer-facing assistant. */}
