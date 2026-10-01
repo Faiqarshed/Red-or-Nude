@@ -109,3 +109,13 @@ export function Lock(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+
+export function WalletIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" width={24} height={24} {...base} {...props}>
+      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H18a1 1 0 0 1 1 1v2" />
+      <rect x="3" y="7.5" width="18" height="12" rx="2.5" />
+      <path d="M16.5 13.5h.01" />
+    </svg>
+  );
+}

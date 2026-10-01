@@ -505,7 +505,6 @@ function Points({ balance, rules }: { balance: number; rules: LoyaltyRules }) {
   const a = c.account;
 
   const { stepPoints, pointHalalas, firstSar } = rules;
-  const worthSar = (balance * pointHalalas) / 100;
   const stepSar = (stepPoints * pointHalalas) / 100;
 
   return (
@@ -519,7 +518,7 @@ function Points({ balance, rules }: { balance: number; rules: LoyaltyRules }) {
                 balance in riyals says what you have. */}
             <p className="mt-3 flex items-baseline gap-1.5 font-display text-4xl font-extrabold text-red">
               <Riyal className="h-6 w-6 shrink-0" />
-              {worthSar}
+              {formatSAR(balance * pointHalalas)}
             </p>
             <p className="mt-1 text-[13px] font-semibold text-ink/60">
               {a.walletPoints.replace("{n}", String(balance))}

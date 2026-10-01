@@ -7,13 +7,14 @@
 // the screen showed.
 //
 // Whose wallet is the session's, never the body's. A guest has proved no
-// wallet, so she is told only what a card she typed would bring.
+// wallet, so she is told only what a card she typed would bring. GET is also
+// the header's wallet menu, so signed in it carries the whole account view.
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentCustomer } from "@/lib/account/guard";
 import { clientIp, throttled } from "@/lib/throttle";
-import { giftCardValue, walletBalance } from "@/lib/wallet";
+import { accountWallet, giftCardValue } from "@/lib/wallet";
 
 export const dynamic = "force-dynamic";
 
@@ -25,8 +26,8 @@ const body = z.object({
 
 export async function GET() {
   const customer = await currentCustomer();
-  const available = customer ? (await walletBalance(customer.email)).available : 0;
-  return NextResponse.json({ signedIn: Boolean(customer), available });
+  if (!customer) return NextResponse.json({ signedIn: false, available: 0 });
+  return NextResponse.json({ signedIn: true, ...(await accountWallet(customer.email)) });
 }
 
 export async function POST(request: Request) {

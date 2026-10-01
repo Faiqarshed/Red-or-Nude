@@ -192,6 +192,7 @@ Examples:
 
 ### Account screen
 - **Built (step 3).** `accountWallet(email)` (`lib/wallet.ts`): `available` and her email's last 10 rows, newest first. `app/(site)/account/page.tsx` adds it to its `Promise.all`, by the email she signs in with.
+- **Built.** The header shows her balance on every page, signed in (`components/WalletMenu.tsx`, from GET `/api/wallet/quote`). Its menu splits what she holds by source (`sources`: gift cards; refunds as credit, meaning cancels and chair credit; spent, net of releases; adjustments, meaning corrections and reversals) and shows her last movements.
 - `AccountView.tsx` shows a "Wallet" card above the points card (the old `Wallet` component is renamed `Points`): the amount she can spend, never a negative number, and each movement with its reason and date. Strings (`account.money*`) in both languages. Tests: `tests/account-wallet.test.ts`.
 
 ### Admin: "Needs your decision"

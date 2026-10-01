@@ -30,14 +30,33 @@ export async function walletBalance(
   return { total: row.total, available: Math.max(0, row.total) };
 }
 
+/** Where her money came from, as the wallet menu groups it. */
+const SOURCE: Record<(typeof walletTxns.$inferSelect)["reason"], "giftCards" | "refunds" | "spent" | "adjustments"> = {
+  "gift-card": "giftCards",
+  "cancel-customer": "refunds",
+  "cancel-salon": "refunds",
+  "chair-credit": "refunds",
+  // A release gives back a spend that never completed: it nets off "spent".
+  spend: "spent",
+  release: "spent",
+  reversal: "adjustments",
+  correction: "adjustments",
+};
+
 /**
- * Her wallet for the account screen: what she can spend, and her last ten
- * movements, newest first.
+ * Her wallet for the account screen and the header: what she can spend, the
+ * sum of her movements by where they came from, and her last ten movements,
+ * newest first.
  */
 export async function accountWallet(ownerEmail: string) {
   const email = ownerEmail.trim().toLowerCase();
-  const [{ available }, rows] = await Promise.all([
+  const [{ available }, byReason, rows] = await Promise.all([
     walletBalance(email),
+    db
+      .select({ reason: walletTxns.reason, halalas: sql<number>`sum(${walletTxns.deltaHalalas})::int` })
+      .from(walletTxns)
+      .where(eq(walletTxns.ownerEmail, email))
+      .groupBy(walletTxns.reason),
     db
       .select({ reason: walletTxns.reason, halalas: walletTxns.deltaHalalas, createdAt: walletTxns.createdAt })
       .from(walletTxns)
@@ -45,8 +64,11 @@ export async function accountWallet(ownerEmail: string) {
       .orderBy(desc(walletTxns.createdAt), desc(walletTxns.id))
       .limit(10),
   ]);
+  const sources = { giftCards: 0, refunds: 0, spent: 0, adjustments: 0 };
+  for (const r of byReason) sources[SOURCE[r.reason]] += r.halalas;
   return {
     available,
+    sources,
     history: rows.map((r) => ({ reason: r.reason, halalas: r.halalas, at: r.createdAt.toISOString() })),
   };
 }

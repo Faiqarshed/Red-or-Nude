@@ -321,6 +321,14 @@ const ar = {
     moneyUse: "استخدميه عند الدفع: للحجوزات والعضويات والضيافة وبطاقات الهدايا.",
     moneyEmpty: "لا يوجد رصيد بعد. إذا ألغيتِ حجزاً مدفوعاً يُضاف مبلغه هنا لزيارتك القادمة.",
     moneyHistory: "آخر الحركات",
+    moneySourcesTitle: "مصدر الرصيد",
+    moneySources: {
+      giftCards: "بطاقات الهدايا",
+      refunds: "مبالغ مستردة كرصيد",
+      spent: "ما دفعتِه من المحفظة",
+      adjustments: "تعديلات",
+    },
+    moneySeeAll: "عرض حسابي",
     moneyReasons: {
       "cancel-customer": "حجز ألغيتِه",
       "cancel-salon": "حجز ألغاه الصالون",
@@ -947,6 +955,14 @@ const en: Content = {
     moneyUse: "Spend it at checkout: bookings, memberships, treats and gift cards.",
     moneyEmpty: "No credit yet. If you cancel a paid booking, its amount comes here for your next visit.",
     moneyHistory: "Recent",
+    moneySourcesTitle: "Where it came from",
+    moneySources: {
+      giftCards: "Gift cards",
+      refunds: "Refunds as credit",
+      spent: "Spent from your wallet",
+      adjustments: "Adjustments",
+    },
+    moneySeeAll: "See my account",
     moneyReasons: {
       "cancel-customer": "Booking you cancelled",
       "cancel-salon": "Booking the salon cancelled",
