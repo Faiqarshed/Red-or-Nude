@@ -47,6 +47,11 @@ describe("the booking email's discounts", () => {
     expect(html).not.toMatch(/group/i);
   });
 
+  it("calls a guest's gift card a gift card, in both languages", () => {
+    expect(renderInvoiceEmail(invoice("en", [{ kind: "giftCard", halalas: 5_000 }])).text).toContain("Gift card");
+    expect(renderInvoiceEmail(invoice("ar", [{ kind: "giftCard", halalas: 5_000 }])).text).toContain("بطاقة هدية");
+  });
+
   it("gives each discount its own line", () => {
     const { text } = renderInvoiceEmail(
       invoice(

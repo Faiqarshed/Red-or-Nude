@@ -166,6 +166,28 @@ export async function giftCardValue(
 }
 
 /**
+ * Whether a guest's gift card paid this bill, rather than her own wallet: only
+ * a guest's spend is tagged with its card. Her bill and her email then call
+ * the discount "Gift card", which is what she paid with; signed in, the card
+ * went into her wallet first, and it is wallet credit.
+ */
+export async function paidWithGiftCard(bookingIds: string[]): Promise<boolean> {
+  if (bookingIds.length === 0) return false;
+  const [spend] = await db
+    .select({ id: walletTxns.id })
+    .from(walletTxns)
+    .where(
+      and(
+        inArray(walletTxns.bookingId, bookingIds),
+        eq(walletTxns.reason, "spend"),
+        isNotNull(walletTxns.giftCardId),
+      ),
+    )
+    .limit(1);
+  return Boolean(spend);
+}
+
+/**
  * What is left of the gift card a guest paid this booking with, or 0. Her
  * booking email says it waits for her. Only a guest's spend is tagged with
  * its card, so a signed-in booking has none.

@@ -14,6 +14,8 @@ import { db } from "@/lib/db";
 import { bookings, customers, giftCards, giftCardTxns, walletTxns } from "@/lib/db/schema";
 import { createBookings, releaseWebHold } from "@/lib/bookings";
 import { giftCardLeftAfter, giftCardValue, walletBalance } from "@/lib/wallet";
+import { bookingLines } from "@/lib/payments/lines";
+import { buildBookingInvoice } from "@/lib/invoice/data";
 import { vatIncludedIn } from "@/lib/money";
 import { FUTURE, fixtures, reset, type Fixtures } from "./helpers";
 
@@ -178,6 +180,26 @@ describe("a gift card at the booking checkout", () => {
     const signedIn = await book("sara", { walletHalalas: 5_000 }, 1);
     if (!signedIn.ok) throw new Error(signedIn.error);
     expect(await giftCardLeftAfter(signedIn.bookings[0].id)).toBe(0);
+  });
+
+  it("is called a gift card on a guest's bill and email, and her own credit wallet credit", async () => {
+    await card("WALL-ETTE-ST00-0011", 5_000, GUEST);
+    const guest = await book("guest", { giftCardCode: "WALL-ETTE-ST00-0011", walletHalalas: 5_000 }, 0);
+    if (!guest.ok) throw new Error(guest.error);
+    const guestRows = await db.select().from(bookings).where(eq(bookings.id, guest.bookings[0].id));
+    expect((await bookingLines(guestRows)).discounts).toEqual([{ label: "Gift card", halalas: 5_000 }]);
+    expect((await buildBookingInvoice([guest.bookings[0].id]))?.guests[0].discounts).toEqual([
+      { kind: "giftCard", halalas: 5_000 },
+    ]);
+
+    await credit(SARA, 5_000);
+    const own = await book("sara", { walletHalalas: 5_000 }, 1);
+    if (!own.ok) throw new Error(own.error);
+    const ownRows = await db.select().from(bookings).where(eq(bookings.id, own.bookings[0].id));
+    expect((await bookingLines(ownRows)).discounts).toEqual([{ label: "Wallet credit", halalas: 5_000 }]);
+    expect((await buildBookingInvoice([own.bookings[0].id]))?.guests[0].discounts).toEqual([
+      { kind: "wallet", halalas: 5_000 },
+    ]);
   });
 
   it("works with no other email, and the card is left as it was", async () => {

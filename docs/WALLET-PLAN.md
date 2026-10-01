@@ -41,7 +41,7 @@ Fixed decisions:
 
 **Settled:**
 - **A group cancels as one** (the client, 2026-09-30), by the booker, never guest by guest. One payment, one credit, of what was paid after the 10% group discount. `creditCancelled` already credits what was paid.
-- **Invoice wording** (the client, 2026-09-30): "Wallet credit" and "Gift card" as discount lines on StreamPay's tax invoice, as promo codes are.
+- **Invoice wording** (the client, 2026-09-30): "Wallet credit" and "Gift card" as discount lines on StreamPay's tax invoice, as promo codes are. Built: a guest's gift card is "Gift card" on her StreamPay bill and her booking email (`paidWithGiftCard`, `lib/wallet.ts`: her spend is tagged with the card); signed in, the card went into her wallet first, so it is "Wallet credit".
 - **VAT** (the owner, 2026-09-30 and 2026-10-01): every price VAT-inclusive, as Saudi rules require; customers only ever see the inclusive price.
   - gift cards are taxed when sold: a "100 SAR" card costs 100 SAR including VAT, like every price here, and brings 100 SAR of credit. Spending one later as a discount is then right, since the tax was collected at sale;
   - a cancelled booking gets no credit note and keeps its VAT; her credit is a discount on the next bill (option A);

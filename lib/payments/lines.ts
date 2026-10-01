@@ -10,6 +10,7 @@ import { db } from "@/lib/db";
 import { bookingAddons, bookings, promoCodes, removalTypes } from "@/lib/db/schema";
 import type { Localized } from "@/lib/localized";
 import { discountParts } from "@/lib/money";
+import { paidWithGiftCard } from "@/lib/wallet";
 import type { Discount, Line } from "./index";
 
 /** "مانيكير | Manicure" — the invoice is read in both languages. */
@@ -90,11 +91,14 @@ export async function bookingLines(
     if (code) promoLabel = code.code;
   }
 
+  const wallet = total("wallet");
+  const walletLabel = wallet > 0 && (await paidWithGiftCard(ids)) ? "Gift card" : "Wallet credit";
+
   const discounts: Discount[] = [
     { label: "Group discount", halalas: total("group") },
     { label: promoLabel, halalas: promo },
     { label: "Loyalty points", halalas: total("points") },
-    { label: "Wallet credit", halalas: total("wallet") },
+    { label: walletLabel, halalas: wallet },
   ].filter((d) => d.halalas > 0);
 
   return { lines, discounts };

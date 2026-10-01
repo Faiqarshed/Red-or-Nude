@@ -29,7 +29,7 @@ import { discountParts } from "@/lib/money";
 import { getSettings } from "@/lib/settings";
 import type { PaymentMethod } from "@/lib/payments";
 import { membershipsLeft, packsSpentOn, type MembershipLeft } from "@/lib/packs";
-import { giftCardLeftAfter } from "@/lib/wallet";
+import { giftCardLeftAfter, paidWithGiftCard } from "@/lib/wallet";
 
 export type InvoiceLine = { label: Localized; amountHalalas: number };
 
@@ -53,7 +53,7 @@ export type InvoiceGuest = {
   totalHalalas: number;
 };
 
-export type InvoiceDiscount = "group" | "promo" | "points" | "wallet";
+export type InvoiceDiscount = "group" | "promo" | "points" | "wallet" | "giftCard";
 
 export type InvoiceData = {
   seller: {
@@ -169,6 +169,8 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
 
   const { business_legal_name } = await getSettings(["business_legal_name"]);
 
+  // A guest's gift card is named as one; signed in, it went into her wallet first.
+  const byCard = await paidWithGiftCard(bookingIds);
   const guests: InvoiceGuest[] = ordered.map((b) => {
     const lines: InvoiceLine[] = [];
 
@@ -193,7 +195,7 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
       lines,
       discounts: (Object.entries(discountParts(b)) as [InvoiceDiscount, number][])
         .filter(([, halalas]) => halalas > 0)
-        .map(([kind, halalas]) => ({ kind, halalas })),
+        .map(([kind, halalas]) => ({ kind: kind === "wallet" && byCard ? "giftCard" : kind, halalas })),
       discountHalalas: b.discountHalalas,
       totalHalalas: b.totalHalalas,
     };
