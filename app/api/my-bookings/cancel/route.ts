@@ -20,8 +20,7 @@ import { bookings } from "@/lib/db/schema";
 import { cancelDeadline, cancelRefusal } from "@/lib/cancellation";
 import { getSettings } from "@/lib/settings";
 import { clientIp, throttled } from "@/lib/throttle";
-import { refundBookings } from "@/lib/payments/refund";
-import { creditCancelled, walletLaunched, WalletHeld } from "@/lib/wallet";
+import { creditCancelled } from "@/lib/wallet";
 import { sendCancelCreditEmail } from "@/lib/wallet-email";
 import { returnPackCredits } from "@/lib/packs";
 import { recordAudit } from "@/lib/audit";
@@ -132,58 +131,21 @@ export async function POST(request: Request) {
       .returning({ id: bookings.id })
       .then((rows) => rows.map((r) => r.id));
 
-  let cancelled: string[];
-  let refund: Awaited<ReturnType<typeof refundBookings>> = { ok: false };
-  let creditedHalalas = 0;
-  let creditsBack = 0;
-
-  if (await walletLaunched()) {
-    // The wallet (docs/WALLET-PLAN.md): what she paid becomes credit, never a
-    // card refund. The release, the credit and the pack credits are one
-    // transaction, so a crash leaves all of them or none.
-    try {
-      ({ cancelled, creditedHalalas, creditsBack } = await db.transaction(async (tx) => {
-        const ids = await release(tx);
-        return {
-          cancelled: ids,
-          creditedHalalas: await creditCancelled(tx, ids, "cancel-customer"),
-          creditsBack: await returnPackCredits(ids, "customer-cancelled", tx),
-        };
-      }));
-    } catch (err) {
-      if (err instanceof WalletHeld) return NextResponse.json({ error: "held" }, { status: 409 });
-      throw err;
-    }
-    if (cancelled.length === 0) {
-      return NextResponse.json({ error: "already-cancelled" }, { status: 409 });
-    }
-    await sendCancelCreditEmail(cancelled);
-  } else {
-    // Legacy until the wallet launches. Do not copy (CLAUDE.md).
-    cancelled = await release(db);
-    if (cancelled.length === 0) {
-      return NextResponse.json({ error: "already-cancelled" }, { status: 409 });
-    }
-
-    // Money comes back after the chair is released, never before: a gateway that
-    // is having a bad day must not be able to keep a customer's appointment alive.
-    // refundBookings never throws — a failure is logged for the admin to settle.
-    refund = await refundBookings(cancelled, "customer-cancelled");
-
-    // A pack credit comes back exactly where money does, and only where money
-    // does. Inside the window it is returned; cancel later and it is spent, the
-    // same way the fee is kept — the symmetry is the rule, and putting this call
-    // beside the refund is what keeps the two from drifting apart.
-    //
-    // Nothing here can fail the cancellation: the chair is already released, and a
-    // credit that did not come back is a support ticket, not a reason to leave an
-    // appointment standing.
-    try {
-      creditsBack = await returnPackCredits(cancelled, "customer-cancelled");
-    } catch (err) {
-      console.error("[cancel] could not return pack credits", err);
-    }
+  // The wallet (docs/WALLET-PLAN.md): what she paid becomes credit, never a
+  // card refund, VAT included as she paid it. The release, the credit and the
+  // pack credits are one transaction, so a crash leaves all of them or none.
+  const { cancelled, creditedHalalas, creditsBack } = await db.transaction(async (tx) => {
+    const ids = await release(tx);
+    return {
+      cancelled: ids,
+      creditedHalalas: await creditCancelled(tx, ids, "cancel-customer"),
+      creditsBack: await returnPackCredits(ids, "customer-cancelled", tx),
+    };
+  });
+  if (cancelled.length === 0) {
+    return NextResponse.json({ error: "already-cancelled" }, { status: 409 });
   }
+  await sendCancelCreditEmail(cancelled);
 
   await recordAudit(
     { id: null, name: "customer" },
@@ -193,7 +155,6 @@ export async function POST(request: Request) {
       entityId: anchor.id,
       diff: {
         status: { from: anchor.status, to: "cancelled" },
-        refundedHalalas: { from: null, to: refund.ok ? refund.amountHalalas : null },
         creditedHalalas: { from: null, to: creditedHalalas || null },
         packCreditsReturned: { from: null, to: creditsBack || null },
       },
@@ -216,9 +177,6 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ok: true,
     cancelled: cancelled.length,
-    // `false` here is not a failed cancellation — the booking is gone either
-    // way. It means the money needs a human, and the screen says so.
-    refunded: refund.ok,
     credited: creditedHalalas,
   });
 }

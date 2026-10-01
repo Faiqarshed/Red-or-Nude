@@ -218,7 +218,7 @@ describe("buying something twice by accident", () => {
       const again = await startPurchase({
         intent: { ...intent },
         amountHalalas: 7500,
-        lines: [giftCardLine(75, false)],
+        lines: [giftCardLine(75)],
         title: "Gift card",
         payer: { name: null, email: null },
         back: "/gift-card/payment",

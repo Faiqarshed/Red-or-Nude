@@ -92,15 +92,6 @@ export const SETTING_DEFAULTS = {
   business_legal_name: "Red or Nude",
   /** 15 digits from ZATCA. Empty until registration lands; the line is hidden. */
   vat_number: "",
-  /**
-   * When the wallet went live, as an ISO instant. Empty until then, and until
-   * then customers see none of it: her cancel still refunds the card, the
-   * salon's cancel moves no money (docs/WALLET-PLAN.md).
-   *
-   * Set once, at launch, and never cleared: clearing it would hide credit
-   * customers already hold. Never put on an admin screen.
-   */
-  wallet_launched_at: "" as string,
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

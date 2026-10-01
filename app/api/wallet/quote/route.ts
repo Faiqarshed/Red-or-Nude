@@ -13,7 +13,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentCustomer } from "@/lib/account/guard";
 import { clientIp, throttled } from "@/lib/throttle";
-import { giftCardValue, walletBalance, walletLaunched } from "@/lib/wallet";
+import { giftCardValue, walletBalance } from "@/lib/wallet";
 
 export const dynamic = "force-dynamic";
 
@@ -24,9 +24,9 @@ const body = z.object({
 });
 
 export async function GET() {
-  const [live, customer] = await Promise.all([walletLaunched(), currentCustomer()]);
-  const available = live && customer ? (await walletBalance(customer.email)).available : 0;
-  return NextResponse.json({ live, signedIn: Boolean(customer), available });
+  const customer = await currentCustomer();
+  const available = customer ? (await walletBalance(customer.email)).available : 0;
+  return NextResponse.json({ signedIn: Boolean(customer), available });
 }
 
 export async function POST(request: Request) {
@@ -35,7 +35,6 @@ export async function POST(request: Request) {
   if (throttled(`gift-card:${clientIp(request)}`, { max: 10 })) {
     return NextResponse.json({ error: "throttled" }, { status: 429 });
   }
-  if (!(await walletLaunched())) return NextResponse.json({ ok: false, error: "wallet-unavailable" });
 
   let payload: unknown;
   try {

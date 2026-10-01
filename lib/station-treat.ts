@@ -47,8 +47,6 @@ export type TreatRefusal =
   | "no-time"
   /** Her credit is not what the screen showed (another tab spent it). */
   | "wallet-changed"
-  /** Credit asked for before the wallet launched. */
-  | "wallet-unavailable"
   /** The gateway said no. Her card, not our problem to retry for her. */
   | "declined"
   /** Charged, and then it could not be added. See lib/payments/purchase.ts. */
@@ -159,9 +157,7 @@ export async function buyStationItems(input: {
   });
 
   if (!result.ok) {
-    if (result.error === "wallet-changed" || result.error === "wallet-unavailable") {
-      return { ok: false, reason: result.error };
-    }
+    if (result.error === "wallet-changed") return { ok: false, reason: result.error };
     // `declined` tells the screen a retry is safe. Once money has moved, it is not.
     return { ok: false, reason: result.error === "not-delivered" ? "paid-not-added" : "declined" };
   }

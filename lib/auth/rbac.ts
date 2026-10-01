@@ -47,7 +47,6 @@ export type Capability =
   | "content.manage"
   | "marketing.manage"
   | "payments.view"
-  | "payments.refund"
   | "settings.manage"
   | "audit.view"
   // The wallet's "Needs your decision" page, and the only way to correct a
@@ -80,7 +79,6 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "content.manage",
     "marketing.manage",
     "payments.view",
-    "payments.refund",
     "settings.manage",
     "audit.view",
     "wallet.decide",

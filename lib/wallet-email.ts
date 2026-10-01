@@ -13,7 +13,7 @@ import { esc } from "@/lib/email/html";
 import { brandedEmail, INK, RED, sendReceipt, side } from "@/lib/email/shell";
 import { formatSAR } from "@/lib/money";
 import { siteOrigin } from "@/lib/site";
-import { walletBalance, walletLaunched, walletOwner } from "@/lib/wallet";
+import { walletBalance, walletOwner } from "@/lib/wallet";
 
 type Lang = "ar" | "en";
 
@@ -158,10 +158,9 @@ export async function sendCancelCreditEmail(bookingIds: string[], salonReason: s
   }
 }
 
-/** Tell her the owner corrected her wallet, and why. Only once the wallet is live. Never throws. */
+/** Tell her the owner corrected her wallet, and why. Never throws. */
 export async function sendCorrectionEmail(ownerEmail: string, halalas: number, reason: string): Promise<void> {
   try {
-    if (!(await walletLaunched())) return;
     const customer = await walletOwner(ownerEmail);
     if (!customer) return;
     const { subject, html, text } = renderCorrectionEmail({

@@ -6,14 +6,14 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createHmac, randomUUID } from "node:crypto";
 import { eq, inArray, like, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { addons, bookings, customers, giftCardValues, giftCards, loyaltyTxns, payments, refunds, paymentEvents, settings, stations, streampayIds, walletTxns } from "@/lib/db/schema";
+import { addons, bookings, customers, giftCardValues, giftCards, loyaltyTxns, payments, refunds, paymentEvents, stations, streampayIds, walletTxns } from "@/lib/db/schema";
 import { createBookings, heldState, releaseWebHold } from "@/lib/bookings";
 import { getDayAvailability, stationFreeWindow, utcToLocalDate, utcToLocalTime } from "@/lib/availability";
 import { settleBookingPayment } from "@/lib/payments/confirm";
 import { CHAIR_CREDIT_MAX_HALALAS, redeliver, settlePurchase, startPurchase, type GiftIntent, type TreatIntent } from "@/lib/payments/purchase";
 import { compareWithGateway, paymentProblems, reconcilePayments } from "@/lib/payments/reconcile";
 import { revivePayment, settlePayment } from "@/lib/payments/settle";
-import { refundBookings, refundedOutside, refundRef } from "@/lib/payments/refund";
+import { refundedOutside, refundRef } from "@/lib/payments/refund";
 import { fakeDriver } from "@/lib/payments/fake";
 import { archiveRetiredProducts, RETIRE_AFTER_MIN, retireProduct, streampayCustomer, streampayDriver, syncProduct, syncProductQuietly } from "@/lib/payments/streampay";
 import { giftCardLine } from "@/lib/payments/lines";
@@ -599,7 +599,7 @@ describe("#9 strangers buying the same gift card", () => {
     const mine = await startPurchase({
       intent: { ...intent, attemptId: randomUUID() },
       amountHalalas: 7500,
-      lines: [giftCardLine(75, false)],
+      lines: [giftCardLine(75)],
       title: "Gift card",
       payer: {},
       back: "/gift-card/payment",
@@ -639,15 +639,7 @@ describe("#12 a chair purchase paid after her visit ended", () => {
     expect(row.status).toBe("refunded");
   });
 
-  describe("once the wallet is live", () => {
-    beforeEach(async () => {
-      await db.insert(settings).values({ key: "wallet_launched_at", value: new Date().toISOString() })
-        .onConflictDoUpdate({ target: settings.key, set: { value: new Date().toISOString() } });
-    });
-    afterEach(async () => {
-      await db.delete(settings).where(eq(settings.key, "wallet_launched_at"));
-    });
-
+  describe("into the wallet", () => {
     it("puts it in the wallet of the visit's email, once", async () => {
       const row = await lateTreat(CHAIR_CREDIT_MAX_HALALAS);
       await redeliver(row.providerRef!);
@@ -670,10 +662,6 @@ describe("#12 a chair purchase paid after her visit ended", () => {
     });
   });
 
-  it("puts nothing in a wallet before the wallet is live", async () => {
-    const row = await lateTreat(CHAIR_CREDIT_MAX_HALALAS);
-    expect(await db.select().from(walletTxns).where(eq(walletTxns.paymentId, row.id))).toHaveLength(0);
-  });
 });
 
 describe("#5 a refund made outside the app", () => {
@@ -939,34 +927,6 @@ describe("after the audit", () => {
     expect((await db.select().from(refunds).where(eq(refunds.paymentId, row.id))).map((r) => [r.reason, r.amountHalalas])).toEqual([
       ["wrong-amount", 7000],
     ]);
-  });
-
-  it("never refunds part of a bill", async () => {
-    const held = await createBookings({
-      branchId: f.branchA,
-      startsAt: new Date(FUTURE).toISOString(),
-      customer: { phone: TEST_PHONE },
-      source: "web",
-      status: "pending",
-      members: [{ serviceId: f.svcA.id, addonIds: [] }, { serviceId: f.svcA.id, addonIds: [] }],
-    });
-    if (!held.ok) throw new Error(held.error);
-    const guests = await db.select().from(bookings).where(inArray(bookings.id, held.bookings.map((b) => b.id)));
-    const ref = randomUUID();
-    await db.insert(payments).values(
-      guests.map((g) => ({
-        bookingId: g.id, provider: "fake", providerRef: ref, method: "card" as const,
-        amountHalalas: g.totalHalalas, status: "paid" as const, raw: { paymentId: "pay-under-test" },
-      })),
-    );
-    const refund = vi.spyOn(fakeDriver, "refund");
-
-    expect(await refundBookings([guests[0].id], "customer-cancelled")).toEqual({ ok: false });
-    expect(refund).not.toHaveBeenCalled();
-    expect((await rowsOf(ref)).map((r) => r.status)).toEqual(["paid", "paid"]);
-
-    expect((await refundBookings(guests.map((g) => g.id), "customer-cancelled")).ok).toBe(true);
-    expect((await rowsOf(ref)).map((r) => r.status)).toEqual(["refunded", "refunded"]);
   });
 });
 

@@ -300,7 +300,6 @@ export async function changeGiftCardEmail(raw: z.input<typeof changeEmailSchema>
     message: card.message,
     expiresAt: card.expiresAt,
     lang: "ar",
-    locked: true,
     inWallet,
   });
 

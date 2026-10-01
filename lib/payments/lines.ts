@@ -24,18 +24,16 @@ export function productName(name: Localized | null | undefined, fallback = "Item
  * Not one product repriced per sale: a link takes the product's price at the
  * moment it is made, so two buyers at once would get each other's amount.
  *
- * `taxed` from the wallet's launch (docs/WALLET-PLAN.md, VAT working approach):
- * the card is taxed when sold, VAT included in its price like every price here,
- * so spending it later as a discount is right. Before launch it is sold
- * VAT-exempt, as it always was. A taxed card is a different product version
- * (lib/payments/streampay.ts keys versions on the VAT flag).
+ * Taxed when sold, VAT included in its price like every price here (the owner,
+ * docs/WALLET-PLAN.md): a 300 SAR card costs 300 SAR and brings 300 SAR of
+ * credit. Spending it later as a discount is then right, since the tax was
+ * collected at sale.
  */
-export const giftCardLine = (amountSar: number, taxed: boolean): Line => ({
+export const giftCardLine = (amountSar: number): Line => ({
   key: `product:giftcard:${amountSar}`,
   name: `بطاقة هدية ${amountSar} ر.س | Gift card ${amountSar} SAR`,
   priceHalalas: amountSar * 100,
   qty: 1,
-  vatExempt: !taxed,
 });
 
 export async function bookingLines(

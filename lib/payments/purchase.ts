@@ -32,7 +32,6 @@ import {
   releasePaymentSpends,
   reSpendReleased,
   spendWallet,
-  walletLaunched,
 } from "@/lib/wallet";
 import { walletCovers } from "@/lib/money";
 import { sendChairCreditEmail } from "@/lib/wallet-email";
@@ -99,8 +98,6 @@ export type PurchaseResult =
         | "not-delivered"
         | "not-found"
         | "unverified"
-        /** Credit was asked for before the wallet launched. */
-        | "wallet-unavailable"
         /** The credit she was shown is not what she can spend now; `walletBalance` is. */
         | "wallet-changed";
       walletBalance?: number;
@@ -132,7 +129,6 @@ export async function startPurchase(input: {
   simulate?: "decline";
 }): Promise<PurchaseResult> {
   const walletHalalas = input.wallet?.halalas ?? 0;
-  if (walletHalalas > 0 && !(await walletLaunched())) return { ok: false, error: "wallet-unavailable" };
   // What the card is asked for: the rest, after her credit.
   const cardHalalas = input.amountHalalas - walletHalalas;
 
@@ -355,18 +351,15 @@ export async function refundOrCredit(ref: string, amountHalalas: number, intent:
   if (amountHalalas === 0) return true;
 
   if (intent.kind === "treat" && amountHalalas <= CHAIR_CREDIT_MAX_HALALAS) {
-    // Marked `owedCredit` either way, which is what tells the settle job it is
-    // handled. Once the wallet is live the credit is written with the mark;
-    // before that it stays marked only, and launch converts every mark whose
-    // payment is still paid (docs/WALLET-PLAN.md).
-    const launched = await walletLaunched();
+    // Marked `owedCredit` too, which is what tells the settle job it is handled.
+    // The credit is written with the mark, in one transaction.
     const credited = await db.transaction(async (tx) => {
       const [row] = await tx
         .update(payments)
         .set({ raw: mergeRaw(payments.raw, { owedCredit: amountHalalas }) })
         .where(eq(payments.providerRef, ref))
         .returning({ id: payments.id });
-      return launched && row ? creditChair(tx, row.id, intent.bookingId, amountHalalas) : false;
+      return row ? creditChair(tx, row.id, intent.bookingId, amountHalalas) : false;
     });
     if (credited) await sendChairCreditEmail(intent.bookingId, amountHalalas);
     return true;
@@ -422,11 +415,10 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number,
     });
     if (!card.ok) return null;
 
-    // Sent to an email with an account: straight into her wallet (from launch).
-    // The card is hers either way; a claim that fails leaves it a working code.
+    // Sent to an email with an account: straight into her wallet. The card is
+    // hers either way; a claim that fails leaves it a working code.
     let inWallet = false;
-    const locked = await walletLaunched();
-    if (locked && intent.recipientEmail) {
+    if (intent.recipientEmail) {
       try {
         inWallet = (await claimCardsFor(intent.recipientEmail)) > 0;
       } catch (err) {
@@ -448,7 +440,6 @@ async function deliver(paymentId: string, intent: Intent, amountHalalas: number,
       expiresAt: card.expiresAt,
       lang: intent.lang,
       inWallet,
-      locked,
     }));
     return { kind: "gift_card", code: card.code };
   }

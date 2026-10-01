@@ -60,12 +60,6 @@ const refundRows = (rows: MoneyRow[], reason: string) =>
     ? [{ paymentId: rows[0].id, amountHalalas: paidOn(rows), reason, actorId: null }]
     : rows.map((r) => ({ paymentId: r.id, amountHalalas: r.amountHalalas, reason, actorId: null }));
 
-/** Refund every paid payment attached to these bookings. See refundPaid. */
-export async function refundBookings(bookingIds: string[], reason: string): Promise<RefundOutcome> {
-  if (bookingIds.length === 0) return { ok: false };
-  return refundPaid(and(inArray(payments.bookingId, bookingIds), eq(payments.status, "paid"))!, reason, bookingIds.join(", "));
-}
-
 /**
  * Refund one whole attempt: a late-paid hold, a purchase that could not be
  * delivered, a payment for the wrong amount, or a booking paid twice.

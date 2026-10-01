@@ -34,8 +34,6 @@ export type GiftCardEmailInput = {
   message?: string | null;
   lang: Lang;
   expiresAt?: Date | null;
-  /** Sold after the wallet's launch: it works only with the recipient's email. */
-  locked?: boolean;
   /** Already moved into the wallet of the recipient's account on delivery. */
   inWallet?: boolean;
 };
@@ -119,19 +117,19 @@ export function renderGiftCardEmail(input: GiftCardEmailInput, forBuyer = false,
 
   const cardImage = imageSrc ?? cardImageUrl(input.amountSar);
 
-  // How to spend it, which is what changed with the wallet: before its launch
-  // the code is the card; after it, the code goes with her email, or it is in
-  // her wallet already. The buyer is told which.
+  // How to spend it: in her wallet already, or the code with her email (a card
+  // is locked to its recipient's). The buyer is told which. A card the desk
+  // issued with no email is the code alone.
   const to = input.recipientEmail?.trim() || "";
   const howTo = forBuyer
     ? input.inWallet && to
       ? t.buyerInWallet(to)
-      : input.locked && to
+      : to
         ? t.buyerLocked(to)
         : t.howTo
     : input.inWallet
       ? t.howToInWallet
-      : input.locked
+      : to
         ? t.howToLocked
         : t.howTo;
 

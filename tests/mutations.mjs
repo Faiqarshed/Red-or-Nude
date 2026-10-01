@@ -69,12 +69,7 @@ const PER_QUEUE_TICKETS = lines(
   "      const numbers: string[] = new Array(members.length);",
   "      for (const indexes of byQueue.values()) {",
   "        const lead = members[indexes[0]];",
-  "        const issued = await allocateTickets(",
-  "          tx,",
-  "          lead.branchId,",
-  "          utcToLocalDate(lead.startsAt),",
-  "          indexes.length,",
-  "        );",
+  "        const issued = await allocateTickets(tx, lead.branchId, utcToLocalDate(lead.startsAt), indexes.length);",
   "        indexes.forEach((at, k) => (numbers[at] = issued[k]));",
   "      }",
 );
@@ -129,12 +124,7 @@ const mutations = [
   {
     name: "refusal: drop the guest on the way out of the catch",
     expect: "tests/refusal.test.ts",
-    apply: () =>
-      mutate(
-        ENGINE,
-        "      return { ok: false, error: err.reason, guestIndex: err.guestIndex };",
-        "      return { ok: false, error: err.reason };",
-      ),
+    apply: () => mutate(ENGINE, "      return { ok: false, error: err.reason, guestIndex: err.guestIndex, walletBalance: err.walletBalance };", "      return { ok: false, error: err.reason, walletBalance: err.walletBalance };"),
   },
   {
     name: "refusal: drop the guest from the JSON the browser reads",
@@ -479,14 +469,9 @@ const mutations = [
   },
   // ---- a treat ordered from the chair ----------------------------------------
   {
-    name: "station: sell a service add-on from the chair, duration and all",
+    name: "station: let an add-on run past the time the chair is free",
     expect: "tests/station-treat.test.ts",
-    apply: () =>
-      mutate(
-        TREAT,
-        "    .where(and(eq(addons.id, input.addonId), eq(addons.active, true), eq(addons.atCheckout, true)))",
-        "    .where(eq(addons.id, input.addonId))",
-      ),
+    apply: () => mutate(TREAT, "  if (extraMin > 0 && (await stationFreeWindow(station.branchId, station.id, booking.endsAt)) < extraMin) {", "  if (false) {"),
   },
   {
     name: "station: charge the card before checking she has not already ordered",
@@ -511,12 +496,7 @@ const mutations = [
   {
     name: "station: put the treat's receipt in booking_id after all",
     expect: "tests/station-treat.test.ts",
-    apply: () =>
-      mutate(
-        TREAT,
-        "        treatBookingId: booking.id,",
-        "        bookingId: booking.id,",
-      ),
+    apply: () => mutate(PURCHASE, "      .set({ treatBookingId: intent.bookingId, updatedAt: new Date() })", "      .set({ bookingId: intent.bookingId, updatedAt: new Date() })"),
   },
   // ---- one active thing per name ---------------------------------------------
   {
@@ -653,17 +633,12 @@ const mutations = [
   {
     name: "wallet: spend without locking the wallet",
     expect: "tests/wallet.test.ts",
-    apply: () => mutate(WALLET, "  await lockWallet(tx, email);\n", ""),
+    apply: () => mutate(WALLET, "  const email = ownerEmail.trim().toLowerCase();\n  await lockWallet(tx, email);\n\n  if ((await walletBalance(email, tx)).available < halalas) return null;", "  const email = ownerEmail.trim().toLowerCase();\n\n  if ((await walletBalance(email, tx)).available < halalas) return null;"),
   },
   {
     name: "subtle: lock the row she books as, not her email",
     expect: "tests/wallet.test.ts",
-    apply: () =>
-      mutate(
-        WALLET,
-        "  await lockWallet(tx, email);",
-        "  await tx.execute(sql`select 1 from customers where id = ${customerId} for update`);",
-      ),
+    apply: () => mutate(WALLET, "  const email = ownerEmail.trim().toLowerCase();\n  await lockWallet(tx, email);\n\n  if ((await walletBalance(email, tx)).available < halalas) return null;", "  const email = ownerEmail.trim().toLowerCase();\n  await tx.execute(sql`select 1 from customers where id = ${customerId} for update`);\n\n  if ((await walletBalance(email, tx)).available < halalas) return null;"),
   },
   {
     name: "wallet: count another email's credit as hers",
@@ -775,9 +750,9 @@ const mutations = [
       mutate(STATUS, '    if (now >= cancelDeadline(before, cutoff)) return { ok: false, error: "held" };', ""),
   },
   {
-    name: "cancel credit: refund her card after launch as before",
+    name: "cancel credit: cancel without crediting her wallet",
     expect: "tests/cancel-credit.test.ts",
-    apply: () => mutate(CANCEL, "  if (await walletLaunched()) {", "  if (false) {"),
+    apply: () => mutate(CANCEL, "      creditedHalalas: await creditCancelled(tx, ids, \"cancel-customer\"),", "      creditedHalalas: 0,"),
   },
 
   // ---- taking credit back when its payment went back -----------------------
@@ -836,14 +811,9 @@ const mutations = [
 
   // ---- an undelivered chair purchase becomes credit -------------------------
   {
-    name: "chair credit: write it to the wallet before the wallet is live",
+    name: "chair credit: mark it owed and never put it in her wallet",
     expect: "tests/payment-hardening.test.ts",
-    apply: () =>
-      mutate(
-        PURCHASE,
-        "      return launched && row ? creditChair(tx, row.id, intent.bookingId, amountHalalas) : false;",
-        "      return row ? creditChair(tx, row.id, intent.bookingId, amountHalalas) : false;",
-      ),
+    apply: () => mutate(PURCHASE, "      return row ? creditChair(tx, row.id, intent.bookingId, amountHalalas) : false;", "      return false;"),
   },
 
   // ---- points follow the email -----------------------------------------------
@@ -916,11 +886,6 @@ const mutations = [
   },
 
   // ---- the wallet on her account screen --------------------------------------
-  {
-    name: "account wallet: show it before launch",
-    expect: "tests/account-wallet.test.ts",
-    apply: () => mutate(WALLET, "  if (!(await walletLaunched())) return null;\n  const email = ownerEmail", "  const email = ownerEmail"),
-  },
 
   // ---- credit and gift cards at the booking checkout ------------------------
   {
@@ -993,14 +958,9 @@ const mutations = [
 
   // ---- gift cards and the wallet --------------------------------------------
   {
-    name: "gift card: keep selling it tax-free after launch",
+    name: "gift card: sell it tax-free",
     expect: "tests/gift-card-wallet.test.ts",
-    apply: () => mutate(PAYLINES, "  vatExempt: !taxed,", "  vatExempt: true,"),
-  },
-  {
-    name: "gift card: pull a card sold before launch into a wallet",
-    expect: "tests/gift-card-wallet.test.ts",
-    apply: () => mutate(WALLET, "        gte(giftCards.createdAt, new Date(launchedAt)),\n", ""),
+    apply: () => mutate(PAYLINES, "  priceHalalas: amountSar * 100,\n  qty: 1,\n});", "  priceHalalas: amountSar * 100,\n  qty: 1,\n  vatExempt: true,\n});"),
   },
   {
     name: "gift card: put the recipient in debt for the buyer's chargeback",
@@ -1021,6 +981,11 @@ const mutations = [
     name: "gift card: sell one with no recipient email",
     expect: "tests/gift-card-wallet.test.ts",
     apply: () => mutate(GIFTROUTE, "  recipientEmail: emailField,", "  recipientEmail: emailField.optional().or(z.literal(\"\")),"),
+  },
+  {
+    name: "no email: refuse the cancel instead of sending the money to the owner",
+    expect: "tests/cancel-credit.test.ts",
+    apply: () => mutate(WALLET, "    if (!b.customerEmail) {", "    if (!b.customerEmail && false) {"),
   },
 ];
 

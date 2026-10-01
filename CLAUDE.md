@@ -66,16 +66,17 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
   the hold expired, paid for a slot already started, wrong amount, paid twice, gift
   card/membership could not be issued. Always the whole bill — no partial refunds.
 - Undelivered chair purchase ≤ 10 SAR → credit, not card (`CHAIR_CREDIT_MAX_HALALAS`).
-- Wallet (planned, being built): credit belongs to an **email**, never expires, never
-  shows negative, one cancel credit per booking, can pay bookings, memberships, chair
-  items and gift cards (the client, 2026-09-30), leaves ≥ 1 SAR to charge unless it
-  covers the whole bill. Only the owner (CEO) can correct a balance, with a reason,
-  audited. Staff actions never write to the ledger. A chargeback writes a `reversal`
-  row.
-- ⚠ Until `wallet_launched_at` is set, a customer cancel still refunds the card
-  (`refundBookings` in `app/api/my-bookings/cancel/route.ts`). That is legacy pending
-  the wallet — do not copy it anywhere new. After launch it credits the wallet
-  (`creditCancelled`, `lib/wallet.ts`).
+- Wallet (`lib/wallet.ts`, docs/WALLET-PLAN.md): always on, no launch switch
+  (production starts on an empty database). Credit belongs to an **email**, never
+  expires, never shows negative, one cancel credit per booking, can pay bookings,
+  memberships, chair items and gift cards (the client, 2026-09-30), leaves ≥ 1 SAR to
+  charge unless it covers the whole bill. Only the owner (CEO) can correct a
+  balance, with a reason, audited. Staff actions never write to the ledger. A
+  chargeback writes a `reversal` row.
+- Credit is VAT-inclusive at face value (the owner): a 100 SAR gift card is 100 SAR
+  of credit, a cancelled 115 SAR booking is 115 SAR. Never take VAT off a credit.
+- Her cancel credits the wallet (`creditCancelled`); there is no card refund for a
+  cancel. A booking with no email sends its money to "Needs your decision".
 
 **Cancel, reschedule, no-show**
 - Customer may cancel/reschedule only `pending`/`confirmed` bookings, until 3 h before
@@ -113,7 +114,9 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
   Points earned on a guest booking count on the account with that email
   (`loyaltyBalance`); spending needs her signed in. Never say to a guest whether
   an email has an account or points.
-- Gift cards: preset amounts only; charge first, issue second.
+- Gift cards: preset amounts only; charge first, issue second. Taxed when sold, VAT
+  included in the price (`giftCardLine`). Locked to the recipient's email: the code
+  works only with it, and the card goes into her wallet on delivery or sign-up.
 
 **Roles** (`lib/auth/rbac.ts` is the truth)
 - `ceo` > `admin` > `receptionist` > `technician`. Nobody grants above their own role;
@@ -126,10 +129,9 @@ Assert the rule (amounts, statuses, refusal reason), not just "no error thrown".
 - Email is the customer's identity. Sign-in code: 1 minute, 5 attempts.
 
 ## Open questions — ask, don't guess
-- VAT (waits on the accountant). Built meanwhile on the owner's working approach
-  (docs/WALLET-PLAN.md, Settled): gift cards taxed when sold from launch (a 100 SAR
-  card costs 100 incl. VAT), no credit note on a cancel, credit is a discount on
-  the next bill. Confirm with the accountant before launch.
+- None right now. VAT is the owner's decision (docs/WALLET-PLAN.md, Settled): every
+  price VAT-inclusive, gift cards taxed when sold, no credit note on a cancel,
+  credit a discount on the next bill.
 
 ## Verify before saying done
 - `npx tsc --noEmit` · `npm run lint` · `npm test` (real Postgres, serial)

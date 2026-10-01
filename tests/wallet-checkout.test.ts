@@ -11,7 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { and, eq, inArray, like } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, customers, giftCards, giftCardTxns, settings, walletTxns } from "@/lib/db/schema";
+import { bookings, customers, giftCards, giftCardTxns, walletTxns } from "@/lib/db/schema";
 import { createBookings, releaseWebHold } from "@/lib/bookings";
 import { giftCardValue, walletBalance } from "@/lib/wallet";
 import { vatIncludedIn } from "@/lib/money";
@@ -23,29 +23,15 @@ const SARA = "sara-wallet@test.local";
 const GUEST = "noura-wallet@test.local";
 let saraId: string;
 
-async function launch() {
-  const at = new Date().toISOString();
-  await db
-    .insert(settings)
-    .values({ key: "wallet_launched_at", value: at })
-    .onConflictDoUpdate({ target: settings.key, set: { value: at } });
-}
-
 async function credit(ownerEmail: string, halalas: number) {
   await db
     .insert(walletTxns)
     .values({ customerId: saraId, ownerEmail, deltaHalalas: halalas, reason: "correction", note: "test" });
 }
 
-/** A card; `old` means sold before launch, when the code alone was the card. */
-async function card(code: string, halalas: number, recipientEmail: string | null, old = false) {
-  await db.insert(giftCards).values({
-    code,
-    initialHalalas: halalas,
-    balanceHalalas: halalas,
-    recipientEmail,
-    createdAt: old ? new Date("2020-01-01T00:00:00Z") : new Date(Date.now() + 60_000),
-  });
+/** A card; with no recipient email (one the desk issued), the code alone is the card. */
+async function card(code: string, halalas: number, recipientEmail: string | null) {
+  await db.insert(giftCards).values({ code, initialHalalas: halalas, balanceHalalas: halalas, recipientEmail });
 }
 
 const cardRow = async (code: string) => (await db.select().from(giftCards).where(eq(giftCards.code, code)))[0];
@@ -82,7 +68,6 @@ beforeEach(async () => {
     .values({ phone: "0500000094", email: SARA, emailVerifiedAt: new Date() })
     .returning({ id: customers.id });
   saraId = sara.id;
-  await launch();
 });
 
 afterEach(async () => {
@@ -90,7 +75,6 @@ afterEach(async () => {
   const cards = db.select({ id: giftCards.id }).from(giftCards).where(like(giftCards.code, "WALL-%"));
   await db.delete(giftCardTxns).where(inArray(giftCardTxns.giftCardId, cards));
   await db.delete(giftCards).where(like(giftCards.code, "WALL-%"));
-  await db.delete(settings).where(eq(settings.key, "wallet_launched_at"));
 });
 
 describe("her credit at the booking checkout", () => {
@@ -146,12 +130,6 @@ describe("her credit at the booking checkout", () => {
     expect((await walletBalance(SARA)).total).toBe(0);
   });
 
-  it("is refused before launch", async () => {
-    await db.delete(settings).where(eq(settings.key, "wallet_launched_at"));
-    await credit(SARA, 5_000);
-    expect(await book("sara", { walletHalalas: 5_000 })).toMatchObject({ ok: false, error: "wallet-unavailable" });
-  });
-
   it("can't be spent by a guest who only typed the email it belongs to", async () => {
     await credit(GUEST, 5_000);
     expect(await book("guest", { walletHalalas: 5_000 })).toMatchObject({ ok: false, error: "wallet-changed" });
@@ -188,7 +166,7 @@ describe("a gift card at the booking checkout", () => {
   });
 
   it("brings back what is left of it when she types it again, and only to her email", async () => {
-    await card("WALL-ETTE-ST00-0004", 5_000, null, true);
+    await card("WALL-ETTE-ST00-0004", 5_000, null);
     const first = await book("guest", { giftCardCode: "WALL-ETTE-ST00-0004", walletHalalas: 5_000 }, 0);
     if (!first.ok) throw new Error(first.error);
     // She goes back to change her service: the hold is let go, the card's value
@@ -232,8 +210,8 @@ describe("a gift card at the booking checkout", () => {
     ).toMatchObject({ ok: false, error: "gift-card-claimed" });
   });
 
-  it("works with any email when it was sold before launch", async () => {
-    await card("WALL-ETTE-ST00-0005", 5_000, "whoever@test.local", true);
+  it("works with any email when it was issued with no recipient email", async () => {
+    await card("WALL-ETTE-ST00-0005", 5_000, null);
     const r = await book("guest", { giftCardCode: "WALL-ETTE-ST00-0005", walletHalalas: 5_000 });
     expect(r.ok).toBe(true);
   });
@@ -262,14 +240,6 @@ describe("a gift card at the booking checkout", () => {
     expect(await cardRow("WALL-ETTE-ST00-0008")).toMatchObject({ balanceHalalas: 5_000, status: "active" });
   });
 
-  it("is refused before launch", async () => {
-    await db.delete(settings).where(eq(settings.key, "wallet_launched_at"));
-    await card("WALL-ETTE-ST00-0007", 5_000, GUEST);
-    expect(await book("guest", { giftCardCode: "WALL-ETTE-ST00-0007", walletHalalas: 5_000 })).toMatchObject({
-      ok: false,
-      error: "wallet-unavailable",
-    });
-  });
 });
 
 describe("a hold that ends unpaid gives its credit back", () => {

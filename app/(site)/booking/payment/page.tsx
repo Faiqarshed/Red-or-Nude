@@ -111,11 +111,10 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
   const [redeemDiscountSar, setRedeemDiscountSar] = useState(0);
   const [redeemError, setRedeemError] = useState<string | null>(null);
   /**
-   * The wallet (docs/WALLET-PLAN.md): shown only once it is live. Her balance
-   * when signed in, in halalas; a guest spends only a gift card she types, and
-   * only one sent to the email she books with.
+   * The wallet (docs/WALLET-PLAN.md): her balance when signed in, in halalas; a
+   * guest spends only a gift card she types, and only one sent to the email she
+   * books with.
    */
-  const [walletLive, setWalletLive] = useState(false);
   const [walletAvailable, setWalletAvailable] = useState(0);
   const [useCredit, setUseCredit] = useState(false);
   const [giftInput, setGiftInput] = useState("");
@@ -248,15 +247,12 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       });
   }, []);
 
-  // The wallet, once it is live: her balance when signed in. Nothing of it
-  // shows before launch, and a checkout must still work without it.
+  // Her balance when signed in. A checkout must still work without it.
   useEffect(() => {
     void fetch("/api/wallet/quote")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!d?.live) return;
-        setWalletLive(true);
-        setWalletAvailable(d.available ?? 0);
+        if (d?.signedIn) setWalletAvailable(d.available ?? 0);
       })
       .catch(() => {
         /* an extra; the checkout works without it */
@@ -318,7 +314,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
    * the booking, which works it out again and refuses if the two differ.
    */
   const walletSpendable = signedIn ? (useCredit ? walletAvailable + (gift?.halalas ?? 0) : 0) : (gift?.halalas ?? 0);
-  const walletHalalas = walletLive ? walletCovers(Math.round(beforeCredit * 100), walletSpendable) : 0;
+  const walletHalalas = walletCovers(Math.round(beforeCredit * 100), walletSpendable);
   const walletSar = walletHalalas / 100;
   const payableTotal = Math.round((beforeCredit - walletSar) * 100) / 100;
 
@@ -1020,11 +1016,11 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
             );
           })()}
 
-          {/* Her wallet and gift cards, once the wallet is live. A way of paying,
+          {/* Her wallet and gift cards. A way of paying,
               so beside the others; outside the card-form branch for the same
               reason the points are: credit that clears the bill hides the card
               form, and the way to turn it off must not go with it. */}
-          {walletLive && hasSelection && (
+          {hasSelection && (
             <section className="rounded-[20px] bg-white p-5 text-start ring-1 ring-black/[0.04]">
               <p className="font-display text-base font-extrabold text-ink">{p.walletTitle}</p>
 

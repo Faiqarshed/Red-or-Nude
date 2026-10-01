@@ -342,21 +342,11 @@ export default function BookingCard({
       const data = await res.json().catch(() => ({}));
 
       if (res.ok) {
-        // A cancelled booking is gone either way; `refunded: false` only means
-        // the money needs a human, and saying so beats a silent "cancelled".
         setGate(null);
         setConfirmCancel(false);
         setDetails(null);
         setSuccessMsg(
-          what === "cancel"
-            ? row.cancelToWallet
-              ? data.credited
-                ? h.cancelledToWallet
-                : h.cancelledNothingPaid
-              : data.refunded
-                ? h.cancelled
-                : h.cancelledNoRefund
-            : h.rescheduled,
+          what === "cancel" ? (data.credited ? h.cancelledToWallet : h.cancelledNothingPaid) : h.rescheduled,
         );
         onChanged();
         return null;
@@ -785,10 +775,8 @@ export default function BookingCard({
           // question has to say so — "this booking" was about to cancel four.
           message={
             row.groupSize > 1
-              ? (row.cancelToWallet ? h.cancelConfirmGroupWallet : h.cancelConfirmGroup).replace("{n}", String(row.groupSize))
-              : row.cancelToWallet
-                ? h.cancelConfirmWallet
-                : h.cancelConfirm
+              ? h.cancelConfirmGroupWallet.replace("{n}", String(row.groupSize))
+              : h.cancelConfirmWallet
           }
           icon={
             <svg viewBox="0 0 24 24" width={32} height={32} fill="none" stroke="#B80007" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">

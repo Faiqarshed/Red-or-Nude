@@ -70,7 +70,7 @@ export async function POST(request: Request) {
     // `not-delivered` is paid-and-refunded; kept as its own code because the
     // screen must not offer a retry that reads like nothing happened.
     const error = result.error === "not-delivered" ? "paid-not-granted" : result.error;
-    const status = result.error === "payment-declined" ? 402 : result.error === "wallet-unavailable" ? 400 : 500;
+    const status = result.error === "payment-declined" ? 402 : 500;
     return NextResponse.json({ error }, { status });
   }
   if ("checkout" in result) return NextResponse.json({ checkout: result.checkout });

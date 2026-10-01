@@ -41,7 +41,7 @@ import { formatTicketNo } from "@/lib/tickets";
 import { assignIfToday } from "@/lib/assign";
 import { mediaUrl } from "@/lib/storage";
 import { checkoutOpen, PAY_WINDOW_MIN } from "@/lib/payments";
-import { claimGiftCard, lockedBalance, releaseBookingSpends, spendWallet, walletLaunched } from "@/lib/wallet";
+import { claimGiftCard, lockedBalance, releaseBookingSpends, spendWallet } from "@/lib/wallet";
 import type { BookingSummary } from "@/lib/booking";
 
 /** What one guest is booking. */
@@ -193,8 +193,6 @@ export type CreateBookingError =
    * moved between the preview and the charge. `rewardReason` says which.
    */
   | "reward-invalid"
-  /** Credit or a gift card was asked for before the wallet launched. */
-  | "wallet-unavailable"
   /** The credit she was shown is not what she can spend now. `walletBalance` says what she has. */
   | "wallet-changed"
   /** The same words for a wrong code, a wrong email, a used or expired card. */
@@ -569,10 +567,9 @@ export async function bookingSummaries(
 
   const bookingIds = rows.map((r) => r.id);
 
-  const [spentOn, { cancel_cutoff_hours: cutoff }, cancelToWallet, addonRows] = await Promise.all([
+  const [spentOn, { cancel_cutoff_hours: cutoff }, addonRows] = await Promise.all([
     claimedWindows(bookingIds),
     getSettings(["cancel_cutoff_hours"]),
-    walletLaunched(),
     bookingIds.length
       ? db
           .select({
@@ -637,7 +634,6 @@ export async function bookingSummaries(
       // `cancelBy` is sent even once the window has shut, so the screen can
       // explain *why* the buttons are gone rather than silently omitting them.
       canCancel: canCancel(r, cutoff, now),
-      cancelToWallet,
       cancelBy: cancelDeadline(r, cutoff).toISOString(),
       branchId: r.branchId,
       durationMin: Math.round((r.endsAt.getTime() - r.startsAt.getTime()) / 60_000),
@@ -1170,10 +1166,7 @@ export async function createBookings(input: CreateBookingsInput): Promise<Create
     rewardShares = shareAmount(afterPromo, quote.discountHalalas);
   }
 
-  // Credit and gift cards are the wallet's, and none of it works before launch.
-  // Refused rather than ignored, as a bad promo code is.
   const wantsWallet = Boolean(input.giftCardCode?.trim()) || (input.walletHalalas ?? 0) > 0;
-  if (wantsWallet && !(await walletLaunched())) return { ok: false, error: "wallet-unavailable" };
 
   const status = input.status ?? "confirmed";
   const groupId = isGroup ? randomUUID() : null;

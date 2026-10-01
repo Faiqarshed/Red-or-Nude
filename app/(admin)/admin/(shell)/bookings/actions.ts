@@ -11,7 +11,7 @@ import { can } from "@/lib/auth/rbac";
 import { recordAudit } from "@/lib/audit";
 import { returnPackCredits } from "@/lib/packs";
 import { cancelDeadline, SALON_CAN_CANCEL } from "@/lib/cancellation";
-import { creditCancelled, walletLaunched, WalletHeld } from "@/lib/wallet";
+import { creditCancelled } from "@/lib/wallet";
 import { sendCancelCreditEmail } from "@/lib/wallet-email";
 import { rescheduleBooking as moveBooking } from "@/lib/bookings";
 import { inviteReview } from "@/lib/reviews/invite";
@@ -112,10 +112,10 @@ export async function setBookingStatus(
     if (credited) return { ok: false, error: "has-credit" };
   }
 
-  // After launch a salon cancel credits her wallet in full. Inside her own
-  // cancel window, whether it should is open question 1 (CLAUDE.md): held,
-  // not guessed. Before launch it moves no money, as it always has.
-  const credit = entering("cancelled") && (await walletLaunched());
+  // A salon cancel credits her wallet in full (only reachable with
+  // SALON_CAN_CANCEL switched back on). Inside her own cancel window, whether it
+  // should is a question for the client again then: held, not guessed.
+  const credit = entering("cancelled");
   if (credit) {
     const { cancel_cutoff_hours: cutoff } = await getSettings(["cancel_cutoff_hours"]);
     if (now >= cancelDeadline(before, cutoff)) return { ok: false, error: "held" };
@@ -179,7 +179,6 @@ export async function setBookingStatus(
       return true;
     });
   } catch (err) {
-    if (err instanceof WalletHeld) return { ok: false, error: "held" };
     console.error("[bookings] status change failed", err);
     return { ok: false, error: "failed" };
   }

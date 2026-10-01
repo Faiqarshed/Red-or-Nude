@@ -1,14 +1,9 @@
 // Cancelling into the wallet (docs/WALLET-PLAN.md, step 2c).
 //
 // Once a booking is confirmed, money never goes back to the card: a cancel
-// credits her wallet with everything she paid on it, card and wallet alike.
-// Behind `wallet_launched_at`: until it is set, her cancel still refunds the
-// card and the salon's cancel moves no money, exactly as before.
-//
-// Two answers are still owed, and until they come the code refuses rather than
-// guessing (WalletHeld, "held"): a salon cancel inside the 3 h window (open
-// question 1), and a booking made before bookings kept their email (open
-// question 6). Nothing reaches a customer until launch, and launch waits on both.
+// credits her wallet with everything she paid on it, card and wallet alike,
+// VAT included, as she paid it. A booking that kept no email has nobody's
+// wallet to go to, so the owner is sent it; her cancel goes through either way.
 
 import "./as-staff";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,8 +26,8 @@ vi.mock("@/lib/email", () => ({
 
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookings, payments, settings, walletDecisions, walletTxns } from "@/lib/db/schema";
-import { bookingSummaries, createBookings } from "@/lib/bookings";
+import { bookings, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
+import { createBookings } from "@/lib/bookings";
 import { formatSAR } from "@/lib/money";
 import { spendWallet, walletBalance } from "@/lib/wallet";
 import { refundedOutside } from "@/lib/payments/refund";
@@ -45,14 +40,6 @@ const { setBookingStatus } = await import("@/app/(admin)/admin/(shell)/bookings/
 let f: Fixtures;
 const EMAIL = "sara@test.local";
 
-async function launch() {
-  const at = new Date().toISOString();
-  await db
-    .insert(settings)
-    .values({ key: "wallet_launched_at", value: at })
-    .onConflictDoUpdate({ target: settings.key, set: { value: at } });
-}
-
 beforeEach(async () => {
   mail.sent = [];
   f = await fixtures();
@@ -61,9 +48,8 @@ beforeEach(async () => {
   await db.delete(payments).where(eq(payments.provider, "test-wallet"));
 });
 
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks();
-  await db.delete(settings).where(eq(settings.key, "wallet_launched_at"));
 });
 
 /**
@@ -105,9 +91,8 @@ const cancel = (code: string) =>
 
 const creditsOn = (ids: string[]) => db.select().from(walletTxns).where(inArray(walletTxns.bookingId, ids));
 
-describe("her cancel, after launch", () => {
+describe("her cancel", () => {
   it("credits what she paid, card and wallet, to the booking's email", async () => {
-    await launch();
     const [b] = await paidParty(1, { walletPart: 5_000 });
 
     const res = await cancel(b.code);
@@ -131,7 +116,6 @@ describe("her cancel, after launch", () => {
   });
 
   it("credits once however many times she presses cancel", async () => {
-    await launch();
     const [b] = await paidParty();
 
     await cancel(b.code);
@@ -140,7 +124,6 @@ describe("her cancel, after launch", () => {
   });
 
   it("credits each guest of a group her own bill", async () => {
-    await launch();
     const rows = await paidParty(2);
 
     await cancel(rows[0].code);
@@ -153,7 +136,6 @@ describe("her cancel, after launch", () => {
   });
 
   it("credits nothing for a hold she never paid", async () => {
-    await launch();
     const made = await createBookings({
       branchId: f.branchA,
       startsAt: new Date(FUTURE).toISOString(),
@@ -169,7 +151,6 @@ describe("her cancel, after launch", () => {
   });
 
   it("sends money on a booking with no customer to the owner instead", async () => {
-    await launch();
     const [b] = await paidParty();
     await db.update(bookings).set({ customerId: null }).where(eq(bookings.id, b.id));
 
@@ -180,25 +161,22 @@ describe("her cancel, after launch", () => {
     expect(decision).toMatchObject({ kind: "no-customer", amountHalalas: b.totalHalalas });
   });
 
-  it("refuses, rather than guess, on a booking made before bookings kept their email", async () => {
-    await launch();
+  it("cancels a booking that kept no email, and sends its money to the owner", async () => {
     const [b] = await paidParty();
     await db.update(bookings).set({ customerEmail: null }).where(eq(bookings.id, b.id));
 
-    const res = await cancel(b.code);
+    expect((await cancel(b.code)).status).toBe(200);
 
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ error: "held" });
     const [row] = await db.select().from(bookings).where(eq(bookings.id, b.id));
-    expect(row.status).toBe("confirmed");
+    expect(row.status).toBe("cancelled");
     expect(await creditsOn([b.id])).toHaveLength(0);
+    const [decision] = await db.select().from(walletDecisions).where(eq(walletDecisions.bookingId, b.id));
+    expect(decision).toMatchObject({ kind: "no-email", amountHalalas: b.totalHalalas });
   });
-  it.todo("credits a booking made before bookings kept their email (open question 6)");
 });
 
 describe("telling her", () => {
-  it("emails her the credit after launch, to the booking's email", async () => {
-    await launch();
+  it("emails her the credit, to the booking's email", async () => {
     const [b] = await paidParty();
 
     await cancel(b.code);
@@ -209,7 +187,6 @@ describe("telling her", () => {
   });
 
   it("emails her when the salon cancels, with its reason", async () => {
-    await launch();
     const [b] = await paidParty();
 
     await setBookingStatus(b.id, "cancelled", "Technician off sick", "confirmed");
@@ -217,34 +194,10 @@ describe("telling her", () => {
     expect(mail.sent.filter((m) => m.text.includes("Technician off sick"))).toHaveLength(1);
   });
 
-  it("sends no credit email before launch", async () => {
-    const [b] = await paidParty();
-    await cancel(b.code);
-    expect(mail.sent.filter((m) => /wallet|المحفظة/i.test(m.subject))).toHaveLength(0);
-  });
-
-  it("warns her before she cancels that it goes to her wallet, only after launch", async () => {
-    const [b] = await paidParty();
-    expect((await bookingSummaries({ code: b.code }))[0].cancelToWallet).toBe(false);
-    await launch();
-    expect((await bookingSummaries({ code: b.code }))[0].cancelToWallet).toBe(true);
-  });
 });
 
-describe("before launch", () => {
-  it("writes nothing to the wallet", async () => {
-    const [b] = await paidParty();
-
-    expect((await cancel(b.code)).status).toBe(200);
-    expect(await creditsOn([b.id])).toHaveLength(0);
-    expect(await setBookingStatus((await paidParty(1, { startsAt: new Date(FUTURE + 7_200_000) }))[0].id, "cancelled", "Branch closed", "confirmed")).toEqual({ ok: true });
-    expect(await db.select().from(walletTxns)).toHaveLength(0);
-  });
-});
-
-describe("the salon's cancel, after launch", () => {
+describe("the salon's cancel, when switched back on", () => {
   it("credits her in full, with the salon's reason", async () => {
-    await launch();
     const [b] = await paidParty(1, { walletPart: 2_000 });
 
     expect(await setBookingStatus(b.id, "cancelled", "Technician off sick", "confirmed")).toEqual({ ok: true });
@@ -259,7 +212,6 @@ describe("the salon's cancel, after launch", () => {
   });
 
   it("refuses to set a credited cancel back to confirmed", async () => {
-    await launch();
     const [b] = await paidParty();
     await setBookingStatus(b.id, "cancelled", "Branch closed", "confirmed");
 
@@ -272,7 +224,6 @@ describe("the salon's cancel, after launch", () => {
   });
 
   it("refuses, rather than guess, inside the 3 h window", async () => {
-    await launch();
     const [b] = await paidParty(1, { startsAt: new Date(Date.now() + 3_600_000) });
 
     expect(await setBookingStatus(b.id, "cancelled", "Technician off sick", "confirmed")).toEqual({
@@ -281,7 +232,6 @@ describe("the salon's cancel, after launch", () => {
     });
     expect(await creditsOn([b.id])).toHaveLength(0);
   });
-  it.todo("credits (or not) a salon cancel inside the 3 h window (open question 1)");
 });
 
 describe("when the payment behind a credit goes back to her card", () => {
@@ -291,7 +241,6 @@ describe("when the payment behind a credit goes back to her card", () => {
   const refOf = (groupId: string | null) => `test-wallet-${groupId}`;
 
   it("takes back what went to her card, outside the app or by chargeback", async () => {
-    await launch();
     const [b] = await paidParty();
     await cancel(b.code);
 
@@ -304,7 +253,6 @@ describe("when the payment behind a credit goes back to her card", () => {
   });
 
   it("takes back each part once, however often StreamPay reports it", async () => {
-    await launch();
     const [b] = await paidParty();
     await cancel(b.code);
 
@@ -320,7 +268,6 @@ describe("when the payment behind a credit goes back to her card", () => {
   });
 
   it("takes back a group's refund once, not once per guest", async () => {
-    await launch();
     const rows = await paidParty(2);
     await cancel(rows[0].code);
 
@@ -333,7 +280,6 @@ describe("when the payment behind a credit goes back to her card", () => {
   });
 
   it("never takes back what her wallet paid, only what went to her card", async () => {
-    await launch();
     const [b] = await paidParty(1, { walletPart: 5_000 });
     await cancel(b.code);
 
@@ -344,7 +290,6 @@ describe("when the payment behind a credit goes back to her card", () => {
   });
 
   it("shows her nothing below zero when she already spent it, and tells the owner", async () => {
-    await launch();
     const [b, later] = [...(await paidParty()), ...(await paidParty(1, { startsAt: new Date(FUTURE + 7_200_000) }))];
     await cancel(b.code);
     await db.transaction((tx) => spendWallet(tx, later.customerId!, EMAIL, b.totalHalalas, { bookingId: later.id }));
@@ -358,7 +303,6 @@ describe("when the payment behind a credit goes back to her card", () => {
   });
 
   it("touches no wallet when the refunded payment funded no credit", async () => {
-    await launch();
     const [b] = await paidParty();
 
     refunded(b.totalHalalas);

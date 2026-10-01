@@ -1,25 +1,16 @@
 // The wallet on her account screen (docs/WALLET-PLAN.md, build step 3).
 //
-// Nothing shows before launch. After it: what she can spend, never a negative
-// number, and her own email's last ten movements, newest first.
+// What she can spend, never a negative number, and her own email's last ten
+// movements, newest first.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { customers, settings, walletTxns } from "@/lib/db/schema";
+import { customers, walletTxns } from "@/lib/db/schema";
 import { accountWallet } from "@/lib/wallet";
 import { fixtures, reset } from "./helpers";
 
 const EMAIL = "wallet-screen@test.local";
 let customerId: string;
-
-async function launch() {
-  const at = new Date().toISOString();
-  await db
-    .insert(settings)
-    .values({ key: "wallet_launched_at", value: at })
-    .onConflictDoUpdate({ target: settings.key, set: { value: at } });
-}
 
 /** One ledger row, `seconds` after a fixed moment so the order is certain. */
 async function row(
@@ -45,18 +36,8 @@ beforeEach(async () => {
   customerId = c.id;
 });
 
-afterEach(async () => {
-  await db.delete(settings).where(eq(settings.key, "wallet_launched_at"));
-});
-
 describe("the wallet on her account", () => {
-  it("shows nothing before launch, even with credit in the ledger", async () => {
-    await row(30_000, "cancel-customer", 1);
-    expect(await accountWallet(EMAIL)).toBeNull();
-  });
-
-  it("after launch, shows what she can spend and her movements newest first", async () => {
-    await launch();
+  it("shows what she can spend and her movements newest first", async () => {
     await row(30_000, "cancel-customer", 1);
     await row(-10_000, "spend", 2);
 
@@ -70,7 +51,6 @@ describe("the wallet on her account", () => {
   });
 
   it("never shows a debt as a negative balance", async () => {
-    await launch();
     await row(10_000, "cancel-customer", 1);
     await row(-10_000, "spend", 2);
     await row(-10_000, "reversal", 3);
@@ -79,7 +59,6 @@ describe("the wallet on her account", () => {
   });
 
   it("shows only her own email's rows, and only the last ten", async () => {
-    await launch();
     for (let s = 0; s < 12; s++) await row(100, "correction", s);
     await row(99_900, "correction", 30, "someone-else@test.local");
 

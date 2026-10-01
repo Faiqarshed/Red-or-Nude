@@ -3,7 +3,7 @@
 ## Context
 Once a booking is confirmed, money never goes back to the card. It becomes **wallet credit** (decided in PAYMENT-HARDENING-PLAN.md, "Refund rule"). Gift cards also become wallet credit. Today:
 - no money wallet exists (the /account "wallet" holds loyalty points);
-- her own cancel still refunds the card (`refundBookings`);
+- her own cancel refunded the card (`refundBookings`, now removed);
 - a salon cancel moves no money;
 - nothing can spend a gift card: `adjustGiftCardBalance` is called only by the admin adjust action.
 
@@ -14,12 +14,13 @@ Fixed decisions:
 - **Never expires (confirmed by the client).** An unclaimed gift card keeps its own `expiresAt`. Once claimed into the wallet, the credit never expires.
 - **Walk-ins are retired.** Every booking comes through the online app, with an email. The desk's walk-in flow (`WalkInDrawer`) is hidden. Old walk-in records (a phone, no email) are joined by her first online booking with that phone.
 - **A guest is her email.** Every credit is tagged with the email of the booking or card it came from, and only a sign-in with that email reaches it.
-- **A gift card is locked to its recipient's email.** At checkout the code works only together with that email, and anything left over is tagged to it. Someone who sees the code alone can't use it or lock it. Cards sold before launch stay unlocked: they were sold as "the code is the card".
+- **A gift card is locked to its recipient's email.** At checkout the code works only together with that email, and anything left over is tagged to it. Someone who sees the code alone can't use it or lock it. A card the desk issued with no email is the code alone.
 - **Only the booker cancels, and nobody refunds from StreamPay's dashboard.** Both are policy. The code still handles a dashboard refund or a chargeback safely (`reverseCredit`), because a rule is not a lock and a bank can reverse a payment whatever we decide.
 - **Every change is a row.** Spends, releases, reversals and corrections are all written to the ledger, so "why did my balance change?" is answered from the table alone.
 - **She never sees a negative balance.** Shown and spendable: `max(0, sum)`. Only a customer who paid and then got that money back can owe the wallet; the debt is kept in the table and paid off by her next credits first. A gift card's recipient never owes anything for the buyer's payment.
 - **Only the owner corrects, with a reason.** No staff action writes to the ledger. The owner can add a `correction` row from the "Needs your decision" page, with a required reason, recorded in the audit log.
-- **It goes live all at once, and only once.** Built in steps, but customers see nothing (no "added to your wallet", no wallet card, no credit switch) until every step is done. A `wallet_launched_at` setting, empty until the last step, gates it. It is set once and never cleared (clearing it would hide credit customers already hold), and it is never put on an admin screen. It also dates the launch, which is what tells an old, unlocked gift card from a new one.
+- **Always on, no launch switch** (the owner, 2026-10-01). Production starts on an empty database (Azure), so there is no live site to move over: no old bookings without an email, no old gift cards, no old chair refunds. The before-the-wallet behaviour (card refund on cancel, tax-free gift cards, `wallet_launched_at`) was deleted rather than kept behind a switch someone could forget to set.
+- **Credit is VAT-inclusive at face value** (the owner): a 100 SAR gift card is 100 SAR of credit; a cancelled 115 SAR booking is 115 SAR. Every price is shown with VAT, as Saudi rules require, and VAT is never taken off a credit.
 - **Gift card email:** the brand card image goes inline (cid attachment), so it shows without "load images".
 
 ## Open questions
@@ -28,7 +29,7 @@ Fixed decisions:
 
 **For the client (sent, waiting):**
 1. ~~Salon cancel inside 3 h~~: answered, see Settled.
-2. **VAT** (the accountant): not answered yet. Built on the working approach in Settled (the owner, 2026-09-30); the accountant's confirmation is wanted before launch.
+2. ~~VAT~~: the owner's decision, see Settled.
 3. **One sentence for the refund policy.** Card refunds still happen when she pays late, pays the wrong amount, pays twice, or buys something we can't deliver. Proposed: "A payment that bought nothing goes back to the card; everything else goes to the wallet." Written into PAYMENTS-STATUS.md once agreed.
 4. ~~Invoice wording~~: answered, see Settled.
 
@@ -41,19 +42,14 @@ Fixed decisions:
 **Settled:**
 - **A group cancels as one** (the client, 2026-09-30), by the booker, never guest by guest. One payment, one credit, of what was paid after the 10% group discount. `creditCancelled` already credits what was paid.
 - **Invoice wording** (the client, 2026-09-30): "Wallet credit" and "Gift card" as discount lines on StreamPay's tax invoice, as promo codes are.
-- **VAT, working approach** (the owner, 2026-09-30), until the accountant answers:
-  - gift cards are taxed when sold: a "100 SAR" card costs 100 SAR including VAT, like every price here. Spending one later as a discount is then right, since the tax was collected at sale. Switches at launch (`wallet_launched_at`), not before: it changes live sales;
+- **VAT** (the owner, 2026-09-30 and 2026-10-01): every price VAT-inclusive, as Saudi rules require; customers only ever see the inclusive price.
+  - gift cards are taxed when sold: a "100 SAR" card costs 100 SAR including VAT, like every price here, and brings 100 SAR of credit. Spending one later as a discount is then right, since the tax was collected at sale;
   - a cancelled booking gets no credit note and keeps its VAT; her credit is a discount on the next bill (option A);
-  - gift cards already sold tax-free stay as they are;
   - buying a gift card with credit is allowed (the client), on the same footing.
 - **The salon never cancels a booking** (the client, 2026-09-30), inside 3 h or not. Only she cancels. Switched off by `SALON_CAN_CANCEL = false` (`lib/cancellation.ts`), not deleted: the desk's cancel stays built and tested, for the day the client wants it back (a technician off sick). Switching it back on reopens the 3 h question with the client.
 - Credit never expires (the client).
 - StreamPay's payment page has no field for typing a coupon (checked in the sandbox). If one appears, a payment below our amount is already refunded and nothing is given for it (`confirm.ts` "wrong-amount", `purchase.ts` "wrong-amount").
 
-## Launch blockers
-Built around, not decided. Each is a refusal (`WalletHeld`, "held") or an `it.todo` in the tests, and `wallet_launched_at` is not set until every one is answered:
-- **Open question 6:** a booking with no `customer_email` is refused with "held" when cancelling after launch (`creditCancelled`).
-- **Open question 2 (VAT):** the accountant confirms the working approach (Settled). Steps 4 and 5 are built on it meanwhile.
 
 ## How money enters and leaves
 
@@ -65,7 +61,7 @@ Built around, not decided. Each is a refusal (`WalletHeld`, "held") or an `it.to
 | A cancelled booking with a cancel credit set back to confirmed | Refused. The desk makes a new booking |
 | No-show (`resolveNoShow`, marked no-show) | Nothing. Her points on it stand: what it earned counts, what it spent stays spent |
 | Gift card bought for an email that has an account | **+** full card value on delivery. The card becomes `redeemed` |
-| Gift card code + its recipient email entered at checkout | **+** the card's whole balance, tagged to the recipient email, then spent on the bill. Anything left stays in that email's wallet. A card sold before launch needs the code alone, and its leftover goes to the email she books with |
+| Gift card code + its recipient email entered at checkout | **+** the card's whole balance, tagged to the recipient email, then spent on the bill. Anything left stays in that email's wallet. A card issued with no email needs the code alone, and its leftover goes to the email she books with |
 | Gift card's email signs up later | **+** every active card sent to that email is claimed at `createAccount` |
 | Chair purchase of 10 SAR or less we couldn't deliver | **+** amount (turns `owedCredit` into credit) |
 | Her own payment behind a cancel or chair credit is refunded outside the app or charged back | **−** what went back to her card, less what was already taken back, never more than the credit that payment gave. May go below 0: shown as 0, owner alerted |
@@ -82,7 +78,7 @@ Examples:
 
 ## Gaps found in the code (and how each is closed)
 1. **No way to spend a gift card.** Closed by the claim-into-wallet step at checkout. `adjustGiftCardBalance` (`lib/giftcards.ts:124`) doesn't check `status` or `expiresAt`, so the claim checks both.
-2. **No cancellation email exists.** `notifyCustomer("booking-cancelled")` only logs to the console (`lib/notify/log.ts`). **Built (step 2d):** after launch, both cancels send `sendCancelCreditEmail` (`lib/wallet-email.ts`): the amount, her balance, the salon's reason when it cancelled, and for a guest the email to sign in with. It carries no tax document (open question 2). Before launch nothing changes.
+2. **No cancellation email exists.** `notifyCustomer("booking-cancelled")` only logs to the console (`lib/notify/log.ts`). **Built (step 2d):** both cancels send `sendCancelCreditEmail` (`lib/wallet-email.ts`): the amount, her balance, the salon's reason when it cancelled, and for a guest the email to sign in with. It carries no tax document (StreamPay's invoice is the only one).
 3. **A guest row is one per phone, and its email is overwritten.** Each guest booking overwrites the row's email (`createBookings`, `lib/bookings.ts:1155-1187`), and bookings save no email of their own. Two people sharing a phone share a row, so credit tagged from the row's email can name the wrong person, and `createAccount` turns the whole row into whoever signs up. Walk-ins may have no email at all (`WalkInDrawer.tsx` sends one only if typed). Closed:
    - walk-ins are retired (the desk flow hidden), so every new booking has an email, and a guest is found by it;
    - an old walk-in record (a phone, no email) is not left behind: an online booking whose email has no guest record yet, but whose phone matches one with no email, gives that record the email instead of making a new one, so her walk-in visits and points join her. The risk (a sister's walk-in history on her record) touches visits and points only, never wallet money: walk-ins paid at the desk;
@@ -98,7 +94,7 @@ Examples:
 11. **The salon cancel is two separate writes.** `setBookingStatus` (`bookings/actions.ts:103-140`) saves the status with no transaction and no check of the previous status, then returns pack credits in a try/catch that only logs. A crash between them leaves a cancelled booking with no credit. Closed in Cancellation below.
 12. **Purchases take no customer lock.** `startPurchase` (`purchase.ts:88`) has no transaction, so two tabs could spend one balance twice. Closed by `spendWallet` below.
 13. **A chargeback reverses nothing.** Chargebacks reach us only through the daily comparison (`reconcile.ts` `compareWithGateway`, 120 days back), which calls `refundedOutside` like the refund webhook does. `refundedOutside` only freezes gift cards. Closed by `reverseCredit` below.
-14. **A gift card code alone is enough to use it.** The buyer sees the code on the success screen and shares it (WhatsApp); anyone holding it could claim the card into their own wallet, even by starting a checkout and abandoning it. Closed by the recipient-email lock. `recipientEmail` (and `buyerEmail`) are optional today (`app/api/gift-cards/route.ts:35`, `purchase.ts:37-39`): the recipient's becomes required on the form. Cards sold before launch have no lock and work with the code alone, as they were sold.
+14. **A gift card code alone is enough to use it.** The buyer sees the code on the success screen and shares it (WhatsApp); anyone holding it could claim the card into their own wallet, even by starting a checkout and abandoning it. Closed by the recipient-email lock. `recipientEmail` (and `buyerEmail`) are optional today (`app/api/gift-cards/route.ts:35`, `purchase.ts:37-39`): the recipient's becomes required on the form. A card the desk issues with no email has no lock and works with the code alone.
 15. **A group cancels only as a unit** (`app/api/my-bookings/cancel/route.ts:75`), because the 10% exists only while 2 or more book together. Kept as the rule (the client, 2026-09-30): no dropping guests.
 
 ## Design
@@ -119,8 +115,7 @@ Examples:
   - `customers_guest_email_unique` on `lower(email)` where not verified **and email is not null**;
   - `customers_guest_phone_unique` narrowed to guest rows **with no email** (old walk-in records; no new ones are made);
   - `createBookings`, with her email: the guest record with that email; else an email-less record with her phone, which takes the email; else a new record. The migration first merges guest rows that already share an email, the way `createAccount` merges them. No wallet rows exist yet, so no money moves.
-- Card claim: set the card to `redeemed` with balance 0, and add a `gift_card_txns` row (`reason: "to-wallet"`). No new gift card column: the lock email is `recipientEmail` on a card created after `wallet_launched_at`; an older card has none.
-- `wallet_launched_at` in `lib/settings.ts`, default empty. Not on any admin screen.
+- Card claim: set the card to `redeemed` with balance 0, and add a `gift_card_txns` row (`reason: "to-wallet"`). No new gift card column: the lock email is `recipientEmail`; a card with none is the code alone.
 
 ### `lib/wallet.ts` (one file)
 - `walletBalance(ownerEmail, executor?)`: SUM(delta) over every row whose `owner_email` matches, **whatever customer row it sits on**. A wallet is an email: an account holder who books signed out gets a guest row with her own address (an account is never found from a typed email), and credit from that booking must still reach her account. Returns `{ total, available }`, `available = max(0, total)`. Nothing is derived from payment status: releases are rows.
@@ -128,7 +123,7 @@ Examples:
 - `releaseSpend(tx, spendId)`: writes the matching `release` row. Called in the same transaction as every write that ends a checkout: `markFailed` (`purchase.ts:435`), `releaseWebHold` (`lib/bookings.ts:748`) and the hold sweep (`payment-timeout`), and the undelivered-zero-bill path (gap 7).
 - `claimGiftCard(tx, code, email, customerId, signedIn)` and `giftCardValue` (the preview), **built (step 4)**, share one check (`usableCard`):
   - lock the card (the claim);
-  - require `active`, not expired, balance > 0, and `email` equal to the card's recipient email when it was sold after launch (an older card: any email);
+  - require `active`, not expired, balance > 0, and `email` equal to the card's recipient email (a card with none: any email);
   - insert `+balance` with `owner_email` = `email`, and zero the card;
   - already claimed by `email`: no new row, and it brings what is left of the card (the claim, less the guest spends tagged with it, plus their releases). Once an account exists for the email, a guest gets `gift-card-claimed` ("sign in to use it");
   - anything else answers the same: `gift-card-invalid`. Nothing tells a stranger which part was wrong, and no email is shown.
@@ -141,18 +136,17 @@ Examples:
   - Called from `refundedOutside` (`refund.ts`) for full **and** partial refunds, which covers dashboard refunds, the refund webhooks and chargebacks found by the daily comparison.
   - **Built (step 7a)** for cancel and chair credit.
 - `reverseGiftCards(tx, paymentIds, refundedSoFarHalalas)`: **built (step 6)**, beside `reverseCredit` in `refundedOutside`. A claimed card's value is in a wallet, so freezing the card does nothing; what is left of it there is taken back instead, never below zero, and the rest is the salon's loss (`gift-card-loss` on "Needs your decision"). A card the buyer bought for her own email is taken back in full, as her own credit would be. The running total less what was taken and what was lost, so a repeat writes nothing.
-- `creditChair(tx, paymentId, bookingId, halalas)`: **built (step 7b).** After launch, `refundOrCredit` (`purchase.ts`) writes a `chair-credit` to the visit's email in the transaction that marks `owedCredit`, and emails her. The mark stays, since it is what tells the settle job the payment is handled. Before launch it marks only. **Launch (step 9)** still owes a one-off pass converting existing `owedCredit` marks **only where the payment is still `paid`**, emailing each.
+- `creditChair(tx, paymentId, bookingId, halalas)`: **built (step 7b).** `refundOrCredit` (`purchase.ts`) writes a `chair-credit` to the visit's email in the transaction that marks `owedCredit`, and emails her. The mark stays, since it is what tells the settle job the payment is handled.
 
 ### Checkout
 - **Bookings. Built (step 4).** `/api/bookings` takes `walletHalalas` (what the screen showed credit paying) and `giftCardCode`. In `createBookings`' transaction, after points, under the wallet's lock:
   1. the wallet is the checkout's email: her account's when signed in, the one she typed otherwise;
-  2. a gift card is claimed into that email's wallet (`claimGiftCard`). A card sold after launch works only when that email is its recipient's; the code plus the email is the proof, so there is no separate email field;
+  2. a gift card is claimed into that email's wallet (`claimGiftCard`). It works only when that email is its recipient's; the code plus the email is the proof, so there is no separate email field;
   3. what she can spend: signed in, her whole balance; a guest, only what the card just brought (a typed email proves no wallet);
   4. `walletCovers` (`lib/money.ts`, the same function the screen uses): all it can, but never leaving the card under 1 SAR;
   5. if that differs from `walletHalalas`, refused with `wallet-changed` and her real figure: another tab spent it, and she is never charged more in silence;
   6. split across member rows (`wallet_discount_halalas`), and one `spend` row on the first booking. VAT comes out of the lower total, as with a promo.
   - `bookingLines` (`lib/payments/lines.ts`) already names the "Wallet credit" coupon. A bill fully covered goes down the existing zero path.
-  - Before launch, credit or a card is refused (`wallet-unavailable`).
   - A lapsed hold (the sweep) or one she let go (`releaseWebHold`) writes a `release` for its spend in the same transaction (`releaseBookingSpends`).
   - **A card's leftover.** A guest's spend is tagged with her card (`gift_card_id`), and its release carries the tag back, so typing the code again with the same email brings what is left of that card: after going back to change her service, or on her next visit. Never more than that, so a used card's code and email reach nothing else on that email. Once an account exists for the email, its credit is spent signed in, untagged, so a guest typing the code is told to sign in (`gift-card-claimed`). Any other refusal reads the same (`gift-card-invalid`), and no email is shown.
 - **Preview. Built:** `/api/wallet/quote`. GET: live or not, and her balance when signed in. POST `{ code, email }`: what a card brings, without claiming; signed in, the email is always her account's. Throttled per IP like the promo route.
@@ -165,21 +159,21 @@ Examples:
   - a gift card is issued for its full value, not for what the card paid;
   - routes: `app/api/packs`, `app/api/gift-cards` (the client allows credit there) and `app/api/station/treat`. A gift card code is not taken on the gift card route: a card doesn't buy a card.
 - **Revive. Built:** before a written-off payment that turns up paid is delivered (`settlePurchase`), `reSpendReleased` takes its released credit again (`reSpendOf`). She no longer has it: nothing is delivered, and the card's part is refunded as a late payment. A booking's credit is never released while its hold stands, so only purchases need this.
-- **Purchase pages. Built (step 5):** the same switch (`components/WalletCredit.tsx`, one hook for the three) on the membership, gift card and chair pages, with what is left to pay; a purchase the credit covers shows no card form. All of it hidden until `wallet_launched_at` is set.
+- **Purchase pages. Built (step 5):** the same switch (`components/WalletCredit.tsx`, one hook for the three) on the membership, gift card and chair pages, with what is left to pay; a purchase the credit covers shows no card form.
 
 ### Cancellation
-- **Customer** (`app/api/my-bookings/cancel/route.ts`), **built (step 2c):** after launch, `creditCancelled(..., "cancel-customer")` replaces `refundBookings`, in one transaction with the guarded status update and the pack credit return. Before launch the old path runs unchanged. Copy in `lib/dictionary.ts` (`cancelConfirm`, `cancelConfirmGroup`, `cancelled`, `cancelledNoRefund`) changes from "back to your card" to "to your wallet". **Built (step 2d):** the `*Wallet` strings show when `BookingSummary.cancelToWallet` is true, which the server sets from `wallet_launched_at`. Until then the card refund and its copy stay.
+- **Customer** (`app/api/my-bookings/cancel/route.ts`), **built (step 2c):** `creditCancelled(..., "cancel-customer")` in one transaction with the guarded status update and the pack credit return; there is no card refund for a cancel. The confirm and done copy (`cancelConfirmWallet`, `cancelConfirmGroupWallet`, `cancelledToWallet`, `cancelledNothingPaid`) says it goes to her wallet.
 - **Only the booker cancels.** Signed in, the party's customer; a guest, the booking email proved by its code, as today.
 - **A group cancels as one, by the booker** (the client, 2026-09-30). One payment, one credit: what was paid for the party, after the 10% group discount (a 100 SAR service billed at 90 gives 90). There is no dropping guests.
 - **Salon** (`setBookingStatus`, `app/(admin)/admin/(shell)/bookings/actions.ts`):
   - **switched off (the client, 2026-09-30):** `SALON_CAN_CANCEL = false` refuses any `cancelled` from the salon (`salon-cannot-cancel`), re-saving one included, so her own reason can't be overwritten; `drawerStatuses` offers no cancel button to any role (`tests/salon-never-cancels.test.ts`). Everything below stays built, and its tests switch it back on;
   - **built (step 2a):** the admin form sends the status it showed; the update is `where status = <that status>`, and zero rows back answers "This booking changed. Reload." instead of acting twice;
   - **built (step 2a):** entering `cancelled` requires a reason, and the status change and `returnPackCredits` run in **one transaction**, so a crash leaves all or none. `creditCancelled(..., "cancel-salon", reason)` joins that transaction in step 2c;
-  - **built (step 2c):** after launch, `creditCancelled(..., "cancel-salon", reason)` runs in that transaction;
+  - **built (step 2c):** `creditCancelled(..., "cancel-salon", reason)` runs in that transaction;
   - **built (step 2c):** leaving `cancelled` is refused while the booking has a cancel credit;
-  - inside `cancel_cutoff_hours`: refused with "held" after launch. Only reachable if the salon cancel is switched back on, and then a question for the client again.
+  - inside `cancel_cutoff_hours`: refused with "held". Only reachable if the salon cancel is switched back on, and then a question for the client again.
 - **No-show (built, step 2b):** `isDead` (`lib/rewards.ts`) no longer voids a `no_show` or no-show-resolved booking. She paid for it, so what it earned counts and what it spent stays spent (the owner, 2026-09-29).
-- **Remove** `refundBookings` and the `payments.refund` permission (`lib/auth/rbac.ts:42,70`) at launch, once `wallet_launched_at` is set.
+- **Removed** (step 9): `refundBookings` and the `payments.refund` permission.
 
 ### Walk-ins retired
 - **Built (step 1).** The walk-in button, `WalkInDrawer`, the `createWalkIn` action and the catalogue the drawer loaded are gone. Removed, not hidden: a hidden button leaves the action reachable.
@@ -188,16 +182,16 @@ Examples:
 
 ### Gift card delivery and emails
 - **Built (step 6).** `app/api/gift-cards`: `recipientEmail` required (the form already asked for it).
-- **Tax from launch:** `giftCardLine(amountSar, taxed)` (`lib/payments/lines.ts`); the route passes `walletLaunched()`. A taxed card is a new StreamPay product version (the VAT flag is part of the version).
-- **Into her wallet:** `claimCardsFor(email)` (`lib/wallet.ts`) moves every card sold after launch to that email, still active and unexpired, into the wallet of the account with that email. Called by `deliver()` right after a card is issued, and by `createAccount` after the account commits. Neither can fail the sale or the sign-up: a card that doesn't move stays a working code. A card sold before launch stays a code, as it was sold.
-- **Recipient email** (`lib/giftcard/email.ts`): already in her wallet ("sign in and switch on Use my credit"), or the code with her email ("booking with this email; what's left stays yours; or sign in and it goes into your wallet now"). Before launch, the old wording.
+- **Tax:** `giftCardLine(amountSar)` (`lib/payments/lines.ts`): taxed, VAT included in the price.
+- **Into her wallet:** `claimCardsFor(email)` (`lib/wallet.ts`) moves every card sent to that email, still active and unexpired, into the wallet of the account with that email. Called by `deliver()` right after a card is issued, and by `createAccount` after the account commits. Neither can fail the sale or the sign-up: a card that doesn't move stays a working code.
+- **Recipient email** (`lib/giftcard/email.ts`): already in her wallet ("sign in and switch on Use my credit"), or the code with her email ("booking with this email; what's left stays yours; or sign in and it goes into your wallet now"). A card with no recipient email: the code alone.
 - **Buyer receipt** says which: in the recipient's wallet, or that it works only with the recipient's email.
 - **Inline image:** `SendMailInput.attachments` gains `cid`, which nodemailer passes through. The PNG is fetched from `/api/gift-card-image` (5 s at most), falling back to the remote `<img>`.
 - **`lib/wallet-email.ts`** (built with steps 2 and 7): the cancel credit email, the chair credit email, the owner correction email. Not built: a separate "gift card leftover" email; her wallet on /account shows it.
 - **`createAccount`** (`lib/account/create.ts`): nothing moves between rows; a wallet is its email (`walletBalance`), so guest-row credit is hers on sign-up. Then `claimCardsFor`.
 
 ### Account screen
-- **Built (step 3).** `accountWallet(email)` (`lib/wallet.ts`): null before launch; after it, `available` and her email's last 10 rows, newest first. `app/(site)/account/page.tsx` adds it to its `Promise.all`, by the email she signs in with.
+- **Built (step 3).** `accountWallet(email)` (`lib/wallet.ts`): `available` and her email's last 10 rows, newest first. `app/(site)/account/page.tsx` adds it to its `Promise.all`, by the email she signs in with.
 - `AccountView.tsx` shows a "Wallet" card above the points card (the old `Wallet` component is renamed `Points`): the amount she can spend, never a negative number, and each movement with its reason and date. Strings (`account.money*`) in both languages. Tests: `tests/account-wallet.test.ts`.
 
 ### Admin: "Needs your decision"
@@ -208,22 +202,22 @@ Examples:
   - a customer saying her email was mistyped (staff add it with the booking code and phone they checked);
   - a revived payment that could not be confirmed or delivered.
 - Each item has **Correct**: an amount (+ or −), a required reason, written as a `correction` row and to the audit log, and emailed to her. Marking an item done without a correction also needs a reason.
-- **Built (step 8a):** `/admin/wallet-decisions`, the `wallet.decide` capability (CEO only), `decideWallet` (closes the case and writes the correction in one transaction, guarded on the case being open, so a double submit writes one), `correctWallet` and `walletOwner` in `lib/wallet.ts`, and the correction email (sent only after launch). Not yet: the staff form for a mistyped email, and changing a gift card's email (with step 6).
+- **Built (step 8a):** `/admin/wallet-decisions`, the `wallet.decide` capability (CEO only), `decideWallet` (closes the case and writes the correction in one transaction, guarded on the case being open, so a double submit writes one), `correctWallet` and `walletOwner` in `lib/wallet.ts`, and the correction email. Not yet: the staff form for a mistyped email, and changing a gift card's email (with step 6).
 - **Change a gift card's email. Built:** `changeGiftCardEmail` (`gift-cards/actions.ts`) and a section in the card drawer, for a buyer's typo in the recipient email. `wallet.decide` (the owner), a required reason, audited, and only while the card is still an unused code (the update is guarded on `active`). The new address is sent the card, and it goes into her wallet if she has an account.
 - Skipped: a read-only balance in the admin customer screen. Add it when support asks.
 
 ## Build order
 One commit per step, docs in the same commit. Nothing reaches customers until step 9.
 0. VAT: the working approach (Settled). Steps 4 and 5 go ahead on it; the accountant's confirmation is wanted before step 9.
-1. **Built.** Migration 0031 (guest rows merged by email, guest identity, `customer_email`, `wallet_discount_halalas`, `wallet_txns`, `wallet_decisions`); `lib/wallet.ts` with `walletBalance`, `spendWallet`, `releaseSpend`; `guestRow` in `createBookings`; `tests/wallet.test.ts` and its mutants; the walk-in flow removed. `wallet_launched_at` moves to step 2, where the first thing reads it.
-2. **Built**, except what is held (see Launch blockers). Cancellation: customer, and salon (switched off; one transaction, guarded status, reason, no un-cancel), no-show points, the cancel email. Behind `wallet_launched_at`. A group cancels as one (the client): there is no dropping guests.
+1. **Built.** Migration 0031 (guest rows merged by email, guest identity, `customer_email`, `wallet_discount_halalas`, `wallet_txns`, `wallet_decisions`); `lib/wallet.ts` with `walletBalance`, `spendWallet`, `releaseSpend`; `guestRow` in `createBookings`; `tests/wallet.test.ts` and its mutants; the walk-in flow removed.
+2. **Built.** Cancellation: customer, and salon (switched off; one transaction, guarded status, reason, no un-cancel), no-show points, the cancel email. A group cancels as one (the client): there is no dropping guests.
 3. **Built.** Account screen: the wallet card and its history.
 4. **Built.** Booking checkout: gift card and wallet, quote route, UI.
 5. **Built.** Purchase checkouts: `startPurchase` wallet in one transaction and zero path, three routes, releases, revive re-spend, UI.
-6. **Built.** Gift cards: required recipient email, taxed from launch, delivery and sign-up claim, chargeback reversal (`reverseGiftCards`), inline image, emails.
-7. **Built:** `reverseCredit` in `refundedOutside`, and chair credit after launch; the gift card case is `reverseGiftCards` (step 6). Left for launch: converting `owedCredit` marks made before it.
+6. **Built.** Gift cards: required recipient email, taxed when sold, delivery and sign-up claim, chargeback reversal (`reverseGiftCards`), inline image, emails.
+7. **Built:** `reverseCredit` in `refundedOutside`, and chair credit; the gift card case is `reverseGiftCards` (step 6).
 8. **Built.** "Needs your decision" page, owner correction, and changing a gift card's email.
-9. Launch: set `wallet_launched_at`, remove `refundBookings` and `payments.refund`, PAYMENTS-STATUS.md §2 updated to "built".
+9. **Built (Option B, the owner, 2026-10-01).** No launch switch: `wallet_launched_at`, `walletLaunched`, `refundBookings`, `payments.refund`, the card-refund cancel copy and the tax-free gift card line are deleted, and the wallet is always on. A booking with no email sends its cancel credit to "Needs your decision" (`no-email`) instead of refusing the cancel. PAYMENTS-STATUS.md §2 updated to "built". Left for go-live: the StreamPay sandbox checks below.
 
 ## Verification
 **Tests** (`tests/wallet.test.ts`, fake driver as in `tests/streampay.test.ts`):
@@ -240,7 +234,7 @@ One commit per step, docs in the same commit. Nothing reaches customers until st
 - **shared phone**: Sara books with phone 050 and sara@, cancels; Noura books with 050 and noura@; Noura signs up → Noura has no credit; Sara signs up → she has it;
 - **old walk-in record**: a record with phone 055 and no email; an online booking with 055 and fatima@ → that record takes the email, no new row, her visits and points stay with her; a later sign-up with fatima@ gets them;
 - the walk-in button is not shown at the desk;
-- **gift card lock**: the right code with the wrong email → "This card can't be used", card untouched; the right pair → claimed, leftover tagged to the recipient email; the right pair again after an abandoned checkout → "This card's value is in the wallet of this email"; a card sold before launch → the code alone works;
+- **gift card lock**: the right code with the wrong email → "This card can't be used", card untouched; the right pair → claimed, leftover tagged to the recipient email; the right pair again after an abandoned checkout → what is left of it; a card issued with no email → the code alone works;
 - owner changes an unclaimed card's email with a reason → audited, the new email works and the old one doesn't; on a claimed card → refused;
 - **group partial refund**: one 400 payment for 4 guests, all cancelled; running total 100 → one reversal of 100 (not 400);
 - signup claims an active card locked to that email and skips an expired one;
@@ -250,7 +244,7 @@ One commit per step, docs in the same commit. Nothing reaches customers until st
 - **two partial refunds**: 400 credit, StreamPay's running total 100 then 250 → reversals of 100 then 150; the same total reported again → nothing written;
 - **gift card fraud**: 500 card claimed, 400 spent, the buyer's payment charged back → reversal of 100, balance 0, a `wallet_decisions` row for 400; her own later 300 cancel credit → 300 available;
 - owner correction without a reason → refused; with one → row + audit entry;
-- `wallet_launched_at` empty → her cancel still refunds the card, and no wallet copy, card or switch shows;
+- a booking with no email → her cancel goes through, and its money goes to "Needs your decision";
 - `owedCredit` on a `paid` payment converts once; on a `refunded` one it doesn't.
 
 **Checks:** `npx tsc --noEmit`, `npm test`, `next build`.

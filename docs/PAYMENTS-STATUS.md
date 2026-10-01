@@ -128,54 +128,24 @@ the booking suites) unless it says otherwise.
 
 ## 2. Limitations — what does not work yet
 
-**Refund policy: decided Sept 2026, not built yet**
+**Refund policy: decided Sept 2026, built (docs/WALLET-PLAN.md)**
 
-Money goes back to a card only *before* a booking is confirmed. Once it is
-confirmed, money never goes back to the card. It becomes wallet credit (like
-Foodpanda credits) that she spends on a later booking.
+Money goes back to a card only when she paid and got nothing. Once a booking is
+confirmed, money never goes back to the card: it becomes wallet credit, VAT
+included at face value, that she spends at any checkout. There is no launch
+switch; the wallet is always on.
 
 | Case | What happens |
 | --- | --- |
-| Paid after her hold expired, or paid for something we could not deliver (booking never confirmed) | Card refund, automatic. **Already built, stays as it is.** |
-| She cancels, more than 3 h before the appointment | The amount she paid goes to her **wallet**. No card refund. |
-| She cancels within 3 h | Not allowed (already enforced, `cancel_cutoff_hours` = 3). |
+| Paid after her hold expired, wrong amount, paid twice, or paid for something we could not deliver | Card refund, automatic. What her wallet paid goes back to her wallet. |
+| She cancels, more than 3 h before the appointment | What she paid (card and wallet) goes to her **wallet** (`creditCancelled`). No card refund. |
+| She cancels within 3 h | Not allowed (`cancel_cutoff_hours` = 3). |
 | The salon cancels | **Never** (the client, 2026-09-30). Only she cancels. Switched off by `SALON_CAN_CANCEL` in `lib/cancellation.ts`; the code is kept. |
-| She does not come / the salon marks a no-show | She gets **nothing**. |
-| The salon reschedules | Up to the salon, and no money moves. Already works. |
-| The wallet balance | **Admin cannot edit it.** Cancellations, gift cards and small chair refunds add to it, and every checkout can spend it. See `docs/WALLET-PLAN.md`. |
-
-What the code does today, and what has to change:
-
-- **Her own cancel refunds the card.** `app/api/my-bookings/cancel/route.ts`
-  calls `refundBookings(...)`. It must credit the wallet instead. The copy
-  "the amount goes back to your card" (`cancelConfirm`, `cancelConfirmGroup`,
-  `cancelled`, `cancelledNoRefund` in `lib/dictionary.ts`) changes with it.
-- **The salon's cancel moves no money and has no time limit.**
-  `updateBookingStatus` in `app/(admin)/admin/(shell)/bookings/actions.ts` must
-  refuse a cancel inside `cancel_cutoff_hours` (reuse `cancelRefusal` from
-  `lib/cancellation.ts`), and credit the wallet otherwise. Pack credits already
-  come back there.
-- **There is no money wallet.** The account "wallet" is loyalty points only.
-  Needed:
-  - a `wallet_txns` ledger (customer, booking, amount, reason), with no admin
-    editing;
-  - the balance shown on /account;
-  - a "Use my credit" option at checkout, sent to StreamPay as a coupon, the same
-    way loyalty points are.
-  - Credit per cancelled booking = what was paid by card for it + the wallet
-    credit spent on it.
-  - A guest's credit sits on her customer row, so she can spend it once she
-    signs in with that email.
-- **No-show gives back spent loyalty points.** The points ledger ignores rows on
-  `cancelled` / `no_show` bookings (`isDead` in `lib/rewards.ts`), so points spent
-  on a no-show come back. Under "no-show gets nothing" they should not.
-- **Unused after the change:** `refundBookings` in `lib/payments/refund.ts`, and
-  the `payments.refund` permission (`lib/auth/rbac.ts`). Remove both.
-- **Chair-QR treats** are bought during the visit, when the booking can no longer
-  be cancelled, so they never need crediting.
-- **Ask the accountant:** a cancelled booking already has StreamPay's tax invoice.
-  Should the wallet credit get a credit note? And spending it at checkout shows
-  as a discount on the next invoice. Is that right for VAT?
+| She does not come / the salon marks a no-show | She gets **nothing**, and spent points stay spent. |
+| The salon reschedules | Up to the salon, and no money moves. |
+| A chair purchase of 10 SAR or less we couldn't deliver | Wallet credit, not a card refund. |
+| The payment behind a credit is refunded in StreamPay's dashboard or charged back | That credit is taken back (`reverseCredit`, `reverseGiftCards`); a gift card's recipient never goes below zero for the buyer's chargeback. |
+| The wallet balance | **Staff cannot edit it.** Only the owner corrects it, with a reason, audited ("Needs your decision"). Never shown below 0. |
 
 **Things that are handled, but not the ideal way**
 
@@ -234,13 +204,10 @@ What the code does today, and what has to change:
 
 **Not built**
 
-- **Paying with a gift card at checkout.** A gift card is a payment method, not a
-  discount; sending it as a coupon would likely under-report VAT. Needs the
-  accountant's answer on gift-card VAT first.
 - **Walk-ins and pay-at-desk.** Walk-ins are confirmed with no `payments` row, so
   the day's takings miss them and they earn no loyalty points.
-- **An admin payments screen.** The `payments.view` / `payments.refund`
-  permissions exist and nothing checks them. StreamPay's dashboard covers refunds
+- **An admin payments screen.** The `payments.view` permission exists and
+  nothing checks it. StreamPay's dashboard covers refunds
   and lookups meanwhile; the report email covers "what needs attention".
 - **Station-treat revenue** is not in the dashboard totals, which read
   `bookings.total_halalas` (`dashboard-data.ts`).

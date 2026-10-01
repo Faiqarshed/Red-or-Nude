@@ -34,7 +34,6 @@ const STATUS: Record<TreatRefusal, number> = {
   "already-added": 409,
   "no-time": 409,
   "wallet-changed": 409,
-  "wallet-unavailable": 400,
   declined: 402,
   // Charged and not delivered. A 500 so nothing treats it as retryable.
   "paid-not-added": 500,

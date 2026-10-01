@@ -19,7 +19,6 @@ import {
   packServices,
   packs,
   payments,
-  settings,
   walletTxns,
 } from "@/lib/db/schema";
 import { settlePurchase, startPurchase, type Intent } from "@/lib/payments/purchase";
@@ -31,14 +30,6 @@ const SARA = "sara-purchase@test.local";
 let saraId: string;
 let packId: string;
 const PRICE = 30_000;
-
-async function launch() {
-  const at = new Date(Date.now() - 60_000).toISOString();
-  await db
-    .insert(settings)
-    .values({ key: "wallet_launched_at", value: at })
-    .onConflictDoUpdate({ target: settings.key, set: { value: at } });
-}
 
 async function credit(halalas: number) {
   await db
@@ -78,7 +69,6 @@ beforeEach(async () => {
     .returning({ id: packs.id });
   packId = pack.id;
   await db.insert(packServices).values({ packId, serviceId: f.svcA.id, quantity: 1 });
-  await launch();
 });
 
 afterEach(async () => {
@@ -97,7 +87,6 @@ afterEach(async () => {
   await db.delete(packServices).where(eq(packServices.packId, packId));
   await db.delete(packs).where(eq(packs.id, packId));
   await reset(f.branchA, f.branchB);
-  await db.delete(settings).where(eq(settings.key, "wallet_launched_at"));
 });
 
 describe("her credit on a purchase", () => {
@@ -201,11 +190,6 @@ describe("her credit on a purchase", () => {
     expect(card).toMatchObject({ initialHalalas: 30_000, balanceHalalas: 30_000 });
   });
 
-  it("is refused before launch", async () => {
-    await db.delete(settings).where(eq(settings.key, "wallet_launched_at"));
-    await credit(10_000);
-    expect(await buy(10_000)).toMatchObject({ ok: false, error: "wallet-unavailable" });
-  });
 });
 
 describe("a payment written off, then found paid", () => {

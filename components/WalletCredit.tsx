@@ -1,8 +1,8 @@
 "use client";
 
 // "Use my credit" on a purchase (docs/WALLET-PLAN.md, step 5): a membership, a
-// gift card, a treat from the chair. Shown only once the wallet is live, to a
-// signed-in customer with credit to spend.
+// gift card, a treat from the chair. Shown to a signed-in customer with credit
+// to spend.
 //
 // What it pays is walletCovers (lib/money.ts), the rule the server applies to
 // the same price. The purchase sends that figure and is refused if the server's
@@ -22,7 +22,7 @@ export function useWalletCredit(priceHalalas: number) {
     void fetch("/api/wallet/quote")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d?.live && d.signedIn) setAvailable(d.available ?? 0);
+        if (d?.signedIn) setAvailable(d.available ?? 0);
       })
       .catch(() => {
         /* an extra; paying by card works without it */

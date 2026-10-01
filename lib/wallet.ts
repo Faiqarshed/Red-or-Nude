@@ -10,22 +10,9 @@
 // index on that table rather than by a read before it.
 
 import "server-only";
-import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
 import { bookings, customers, giftCards, giftCardTxns, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
-import { getSettings } from "@/lib/settings";
-
-/** Whether the wallet is live (`wallet_launched_at`). */
-export async function walletLaunched(): Promise<boolean> {
-  return (await getSettings(["wallet_launched_at"])).wallet_launched_at !== "";
-}
-
-/**
- * A case the salon has not decided yet (docs/WALLET-PLAN.md, open questions).
- * Thrown rather than guessed at; the caller refuses with "held". Only reachable
- * after launch, and launch waits for every one to be answered.
- */
-export class WalletHeld extends Error {}
 
 /**
  * What she holds. `total` can be below zero, when a payment behind her credit
@@ -45,11 +32,9 @@ export async function walletBalance(
 
 /**
  * Her wallet for the account screen: what she can spend, and her last ten
- * movements, newest first. Null before launch, so nothing of it shows until
- * the whole wallet does.
+ * movements, newest first.
  */
 export async function accountWallet(ownerEmail: string) {
-  if (!(await walletLaunched())) return null;
   const email = ownerEmail.trim().toLowerCase();
   const [{ available }, rows] = await Promise.all([
     walletBalance(email),
@@ -66,7 +51,7 @@ export async function accountWallet(ownerEmail: string) {
   };
 }
 
-export type AccountWallet = NonNullable<Awaited<ReturnType<typeof accountWallet>>>;
+export type AccountWallet = Awaited<ReturnType<typeof accountWallet>>;
 
 /** Serialise every write that reads a wallet's balance. Held to the end of `tx`. */
 async function lockWallet(tx: Tx, ownerEmail: string) {
@@ -97,10 +82,9 @@ export type GiftCardClaim =
   | { ok: false; error: "gift-card-invalid" | "gift-card-claimed" };
 
 /**
- * The card this code names, if the checkout's email may use it now. A card sold
- * after launch is locked to its recipient's email and works with no other; a
- * card sold before it was sold as "the code is the card" and works with any
- * (docs/WALLET-PLAN.md). One rule for the preview and the claim.
+ * The card this code names, if the checkout's email may use it now. A card is
+ * locked to its recipient's email and works with no other (docs/WALLET-PLAN.md).
+ * One rule for the preview and the claim.
  */
 async function usableCard(
   ex: Pick<typeof db, "select">,
@@ -113,9 +97,9 @@ async function usableCard(
   const [card] = forUpdate ? await found.for("update") : await found;
   if (!card) return invalid;
 
-  const { wallet_launched_at: launchedAt } = await getSettings(["wallet_launched_at"]);
-  const lock =
-    launchedAt && card.createdAt >= new Date(launchedAt) ? card.recipientEmail?.trim().toLowerCase() || null : null;
+  // Sent to someone, it works with her email alone. A card the desk issued with
+  // no email has nobody to lock to: the code is the card.
+  const lock = card.recipientEmail?.trim().toLowerCase() || null;
   if (lock && lock !== owner) return invalid;
 
   // Already in the wallet of the email that claimed it. The code still brings
@@ -192,12 +176,10 @@ export async function claimGiftCard(
 /**
  * Every card sent to `email` still waiting as a code, into the wallet of the
  * account with that email: on delivery when she has one, and when she signs
- * up otherwise. Only cards sold after launch (locked to her email) and still
- * spendable. Nothing before launch, or without an account. Returns what came in.
+ * up otherwise. Only cards still spendable, and nothing without an account.
+ * Returns what came in.
  */
 export async function claimCardsFor(email: string): Promise<number> {
-  const { wallet_launched_at: launchedAt } = await getSettings(["wallet_launched_at"]);
-  if (!launchedAt) return 0;
   const owner = email.trim().toLowerCase();
   const [account] = await db
     .select({ id: customers.id })
@@ -214,7 +196,6 @@ export async function claimCardsFor(email: string): Promise<number> {
         sql`lower(${giftCards.recipientEmail}) = ${owner}`,
         eq(giftCards.status, "active"),
         sql`${giftCards.balanceHalalas} > 0`,
-        gte(giftCards.createdAt, new Date(launchedAt)),
         sql`(${giftCards.expiresAt} is null or ${giftCards.expiresAt} > now())`,
       ),
     );
@@ -395,7 +376,19 @@ export async function creditCancelled(
       });
       continue;
     }
-    if (!b.customerEmail) throw new WalletHeld(`booking ${b.id} has no email (open question 6)`);
+    // No email, no wallet to put it in: the owner is sent it, as with no
+    // customer. Only a booking made outside the website can lack one.
+    if (!b.customerEmail) {
+      await tx.insert(walletDecisions).values({
+        kind: "no-email",
+        customerId: b.customerId,
+        bookingId: b.id,
+        paymentId: b.paymentId,
+        amountHalalas: amount,
+        detail: { reason },
+      });
+      continue;
+    }
 
     await lockWallet(tx, b.customerEmail);
     const [row] = await tx

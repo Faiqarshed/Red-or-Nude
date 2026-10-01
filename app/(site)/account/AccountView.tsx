@@ -60,7 +60,7 @@ type Credit = {
   expiresAt: string;
 };
 
-/** Her money in the salon (accountWallet, lib/wallet.ts). Null before launch. */
+/** Her money in the salon (accountWallet, lib/wallet.ts). */
 type MoneyWallet = {
   available: number;
   history: { reason: string; halalas: number; at: string }[];
@@ -72,13 +72,13 @@ export default function AccountView({
   credits = [],
   history = [],
   rules,
-  wallet = null,
+  wallet,
 }: {
   customer?: Customer;
   balance?: number;
   credits?: Credit[];
   history?: BookingSummary[];
-  wallet?: MoneyWallet | null;
+  wallet?: MoneyWallet;
   /** The loyalty scheme's four numbers. Needed signed out too — the advert at
    *  the bottom of the sign-in screen quotes the offer, and that is the whole
    *  reason to make an account. */
@@ -130,7 +130,7 @@ function SignedIn({
   credits: Credit[];
   history: BookingSummary[];
   rules: LoyaltyRules;
-  wallet: MoneyWallet | null;
+  wallet?: MoneyWallet;
 }) {
   const { c, lang } = useI18n();
   const a = c.account;
