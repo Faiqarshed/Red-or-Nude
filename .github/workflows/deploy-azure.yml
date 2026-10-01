@@ -1,0 +1,58 @@
+# Deploys to Azure App Service on every push to `staging`, into the `staging`
+# slot of redornude-prod. Production (`main`) is added once its settings exist.
+#
+# The zip holds only tracked files (git archive), so .env files never leave the
+# repo. Azure installs and builds it itself (SCM_DO_BUILD_DURING_DEPLOYMENT=true).
+#
+# Database migrations are NOT run here: run them by hand before merging a change
+# that adds a file under drizzle/.
+#
+# Signs in as the `redornude-deploy` managed identity through GitHub's OIDC
+# token; it only trusts this repo's `staging` and `production` environments.
+
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+# Production and staging share one S1 VM, so never build two at once.
+concurrency:
+  group: azure-deploy
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  staging:
+    # The old personal repo (still feeding Vercel) skips this instead of failing.
+    if: github.repository == 'Dahna-OG/red-or-nude' && github.ref_name == 'staging'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://redornude-prod-staging.azurewebsites.net
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package source
+        run: |
+          git archive --format=zip -o ron-app.zip HEAD
+          unzip -l ron-app.zip | grep -E " package.json$"
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to staging slot
+        run: |
+          az webapp deploy \
+            -g rg-redornude-prod -n redornude-prod --slot staging \
+            --src-path ron-app.zip --type zip \
+            --timeout 1800000
