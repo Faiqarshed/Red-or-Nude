@@ -6,6 +6,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { Almarai, IBM_Plex_Sans_Arabic } from "next/font/google";
 import "../globals.css";
+import { agnadeen } from "../fonts";
 import { AdminLangProvider } from "@/lib/admin/i18n";
 import { ADMIN_LANG_COOKIE } from "@/lib/localized";
 
@@ -34,7 +35,7 @@ export default function AdminRootLayout({ children }: { children: React.ReactNod
   // Her language, from the first byte. See lib/admin/i18n.tsx.
   const lang = cookies().get(ADMIN_LANG_COOKIE)?.value === "en" ? "en" : "ar";
   return (
-    <html lang={lang} dir={lang === "ar" ? "rtl" : "ltr"} className={`${almarai.variable} ${plexArabic.variable}`}>
+    <html lang={lang} dir={lang === "ar" ? "rtl" : "ltr"} className={`${agnadeen.variable} ${almarai.variable} ${plexArabic.variable}`}>
       <body className="bg-cream font-ui text-ink antialiased">
         <AdminLangProvider initialLang={lang}>{children}</AdminLangProvider>
       </body>

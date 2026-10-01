@@ -27,9 +27,9 @@ const config: Config = {
       },
       fontFamily: {
         // DG Agnadeen is the Figma font, used site-wide (body + display). It is
-        // self-hosted (see globals.css @font-face); Almarai is the load/fallback face.
-        ar: ["'DG Agnadeen'", "var(--font-almarai)", "sans-serif"],
-        display: ["'DG Agnadeen'", "var(--font-almarai)", "sans-serif"],
+        // self-hosted through next/font (app/fonts.ts); Almarai is the fallback face.
+        ar: ["var(--font-agnadeen)", "var(--font-almarai)", "sans-serif"],
+        display: ["var(--font-agnadeen)", "var(--font-almarai)", "sans-serif"],
         latin: ["var(--font-poppins)", "sans-serif"],
         // Admin UI face. Bilingual coverage plus real tabular numerals, so
         // prices and times align down a column in dense tables.

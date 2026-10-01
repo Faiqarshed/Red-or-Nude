@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { Almarai, Tajawal, Poppins } from "next/font/google";
 import "../globals.css";
+import { agnadeen } from "../fonts";
 import { LanguageProvider } from "@/lib/i18n";
 import { LANG_COOKIE } from "@/lib/localized";
 import { AccountProvider } from "@/lib/account/context";
@@ -53,7 +54,7 @@ export default async function RootLayout({
     <html
       lang={lang}
       dir={lang === "ar" ? "rtl" : "ltr"}
-      className={`${almarai.variable} ${tajawal.variable} ${poppins.variable}${lang === "en" ? " lang-en" : ""}`}
+      className={`${agnadeen.variable} ${almarai.variable} ${tajawal.variable} ${poppins.variable}${lang === "en" ? " lang-en" : ""}`}
     >
       <body className="font-ar bg-cream text-ink">
         <LanguageProvider initialLang={lang}>
