@@ -1044,7 +1044,12 @@ const mutations = [
   {
     name: "payment status: keep a decided answer too",
     expect: "tests/payment-status.test.ts",
-    apply: () => mutate(STATUSROUTE, '  if (answer.status === "pending") recent.set(ref.data, { at: Date.now(), answer });', "  recent.set(ref.data, { at: Date.now(), answer });"),
+    apply: () =>
+      mutate(
+        STATUSROUTE,
+        lines('  if (answer.status === "pending") recent.set(ref.data, { at: Date.now(), answer });', "  else recent.delete(ref.data);"),
+        "  recent.set(ref.data, { at: Date.now(), answer });",
+      ),
   },
   {
     name: "payment status: ask StreamPay on every poll",
