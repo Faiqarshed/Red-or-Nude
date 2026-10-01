@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import SiteHeader from "@/components/SiteHeader";
@@ -20,6 +20,7 @@ import type { Localized } from "@/lib/localized";
 // Type-only, so it is erased before bundling and the `server-only` guard in
 // lib/availability.ts is never actually imported into this client component.
 import type { StationChoice } from "@/lib/availability";
+import Modal from "@/components/booking/Modal";
 
 // The scan-to-add screen (brief §2.7): what the QR sticker on her table opens.
 //
@@ -462,58 +463,45 @@ export default function StationAddOnView({
 function PaidModal({ items, onClose }: { items: NowItem[]; onClose: () => void }) {
   const { c, lang } = useI18n();
   const s = c.station;
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
   const total = items.reduce((n, i) => n + i.price, 0);
   const extra = items.reduce((n, i) => n + i.durationMin, 0);
 
   return (
-    <div role="presentation" onClick={onClose} className="fixed inset-0 z-[60] grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="paid-title"
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-[420px] rounded-[24px] bg-white p-7 text-center shadow-[0_40px_100px_rgba(0,0,0,0.25)]"
+    <Modal onClose={onClose} chrome={false} className="max-w-[420px] p-7 text-center">
+      <span aria-hidden className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-[#2f7d4f] text-2xl font-bold text-white">
+        ✓
+      </span>
+      <h3 id="paid-title" className="font-display text-xl font-extrabold text-ink">
+        {s.paidDone}
+      </h3>
+      <ul className="mt-5 divide-y divide-black/[0.06] rounded-[16px] bg-cream px-4 text-start">
+        {items.map((i) => (
+          <li key={i.id} className="flex items-center justify-between gap-3 py-3 text-sm">
+            <span className="font-semibold text-ink">
+              {pick(i.name, lang)}
+              {i.durationMin > 0 && <span className="ms-1 text-[12px] font-normal text-ink/50">{s.extraMin.replace("{n}", String(i.durationMin))}</span>}
+            </span>
+            <span className="flex shrink-0 items-center gap-1 text-ink/70">
+              <Riyal className="h-3 w-3" />
+              {i.price}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-4 flex items-center justify-center gap-1 font-display text-lg font-extrabold text-red">
+        {c.payment.total}: <Riyal className="h-4 w-4" />
+        {total}
+      </p>
+      <p className="mt-3 text-[13px] leading-relaxed text-ink/60">{extra > 0 ? s.paidNoteAddons : s.paidNote}</p>
+      <p className="mt-1 text-[12px] text-ink/45">{s.paidEmail}</p>
+      <button
+        type="button"
+        autoFocus
+        onClick={onClose}
+        className="mt-6 w-full rounded-[12px] bg-red-grad py-3.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
       >
-        <span aria-hidden className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-[#2f7d4f] text-2xl font-bold text-white">
-          ✓
-        </span>
-        <h3 id="paid-title" className="font-display text-xl font-extrabold text-ink">
-          {s.paidDone}
-        </h3>
-        <ul className="mt-5 divide-y divide-black/[0.06] rounded-[16px] bg-cream px-4 text-start">
-          {items.map((i) => (
-            <li key={i.id} className="flex items-center justify-between gap-3 py-3 text-sm">
-              <span className="font-semibold text-ink">
-                {pick(i.name, lang)}
-                {i.durationMin > 0 && <span className="ms-1 text-[12px] font-normal text-ink/50">{s.extraMin.replace("{n}", String(i.durationMin))}</span>}
-              </span>
-              <span className="flex shrink-0 items-center gap-1 text-ink/70">
-                <Riyal className="h-3 w-3" />
-                {i.price}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-4 flex items-center justify-center gap-1 font-display text-lg font-extrabold text-red">
-          {c.payment.total}: <Riyal className="h-4 w-4" />
-          {total}
-        </p>
-        <p className="mt-3 text-[13px] leading-relaxed text-ink/60">{extra > 0 ? s.paidNoteAddons : s.paidNote}</p>
-        <p className="mt-1 text-[12px] text-ink/45">{s.paidEmail}</p>
-        <button
-          type="button"
-          autoFocus
-          onClick={onClose}
-          className="mt-6 w-full rounded-[12px] bg-red-grad py-3.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
-        >
-          {c.payment.close}
-        </button>
-      </div>
-    </div>
+        {c.payment.close}
+      </button>
+    </Modal>
   );
 }

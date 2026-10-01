@@ -885,77 +885,67 @@ export function RefillDialog({ code, onClose }: { code: string; onClose: () => v
     : "";
 
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 px-4 py-10 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-[420px] rounded-[24px] bg-white p-7 text-start shadow-[0_40px_100px_rgba(0,0,0,0.25)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {details ? (
-          details.daysLeft > 0 ? (
-            <>
-              <h3 className="font-display text-xl font-extrabold text-ink">{h.refillBadge}</h3>
-              <div className="mt-5 space-y-3 rounded-[16px] bg-[#fbeaea] p-5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[13px] text-ink/55">{h.refillUntil}</span>
-                  <span className="text-[13px] font-semibold text-ink" dir="ltr">
-                    {details.expiresAt
-                      ? formatDateLabel(details.expiresAt.slice(0, 10), lang)
-                      : "—"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[13px] text-ink/55">{h.refillPrice}</span>
-                  <span className="flex items-center gap-1 font-display text-base font-extrabold text-red">
-                    <Riyal className="h-4 w-4" />
-                    {details.priceSar}
-                  </span>
-                </div>
-                <p className="text-[12px] font-semibold text-red">{countdown}</p>
+    <Modal onClose={onClose} chrome={false} className="max-w-[420px] p-7 text-start">
+      {details ? (
+        details.daysLeft > 0 ? (
+          <>
+            <h3 className="font-display text-xl font-extrabold text-ink">{h.refillBadge}</h3>
+            <div className="mt-5 space-y-3 rounded-[16px] bg-[#fbeaea] p-5">
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] text-ink/55">{h.refillUntil}</span>
+                <span className="text-[13px] font-semibold text-ink" dir="ltr">
+                  {details.expiresAt
+                    ? formatDateLabel(details.expiresAt.slice(0, 10), lang)
+                    : "—"}
+                </span>
               </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] text-ink/55">{h.refillPrice}</span>
+                <span className="flex items-center gap-1 font-display text-base font-extrabold text-red">
+                  <Riyal className="h-4 w-4" />
+                  {details.priceSar}
+                </span>
+              </div>
+              <p className="text-[12px] font-semibold text-red">{countdown}</p>
+            </div>
 
-              {details.bookUrl && (
-                <Link
-                  href={details.bookUrl}
-                  className="mt-5 block rounded-[12px] bg-red-grad py-3.5 text-center text-sm font-bold text-white transition-opacity hover:opacity-90"
-                >
-                  {h.refillCta}
-                </Link>
-              )}
-            </>
-          ) : (
-            // The window closed between listing and asking. Rare, but the
-            // server is the authority and it just said no.
-            <p className="text-sm text-ink/60">{h.refillGone}</p>
-          )
-        ) : needsCode ? (
-          <OtpSteps
-            code={code}
-            intro={h.verifyIntroRefill}
-            onSubmit={(otp) => load(otp)}
-          />
+            {details.bookUrl && (
+              <Link
+                href={details.bookUrl}
+                className="mt-5 block rounded-[12px] bg-red-grad py-3.5 text-center text-sm font-bold text-white transition-opacity hover:opacity-90"
+              >
+                {h.refillCta}
+              </Link>
+            )}
+          </>
         ) : (
-          <p className="text-sm text-ink/60">{h.loading}</p>
-        )}
+          // The window closed between listing and asking. Rare, but the
+          // server is the authority and it just said no.
+          <p className="text-sm text-ink/60">{h.refillGone}</p>
+        )
+      ) : needsCode ? (
+        <OtpSteps
+          code={code}
+          intro={h.verifyIntroRefill}
+          onSubmit={(otp) => load(otp)}
+        />
+      ) : (
+        <p className="text-sm text-ink/60">{h.loading}</p>
+      )}
 
-        {problem && (
-          <p role="alert" className="mt-4 rounded-[12px] bg-red/[0.08] px-4 py-3 text-xs text-red">
-            {problem}
-          </p>
-        )}
+      {problem && (
+        <p role="alert" className="mt-4 rounded-[12px] bg-red/[0.08] px-4 py-3 text-xs text-red">
+          {problem}
+        </p>
+      )}
 
-        <button
-          type="button"
-          onClick={onClose}
-          className="mt-5 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
-        >
-          {c.payment.close}
-        </button>
-      </div>
-    </div>
+      <button
+        type="button"
+        onClick={onClose}
+        className="mt-5 w-full rounded-[12px] bg-black/[0.05] py-3 text-center text-sm font-bold text-ink transition-colors hover:bg-black/[0.08]"
+      >
+        {c.payment.close}
+      </button>
+    </Modal>
   );
 }
