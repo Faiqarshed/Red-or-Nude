@@ -106,6 +106,16 @@ export function pointsValue(points: number, rules: LoyaltyRules): number {
   return Math.trunc(points) * Math.max(0, Math.trunc(rules.pointHalalas));
 }
 
+/**
+ * What her balance is worth to spend: whole steps only, so 468 points is 90
+ * riyals, not 93.60. The 18 over a step buy nothing until the next 50.
+ */
+export function spendableWorth(balance: number, rules: LoyaltyRules): number {
+  const step = Math.trunc(rules.stepPoints);
+  if (step <= 0) return 0;
+  return pointsValue(Math.floor(balance / step) * step, rules);
+}
+
 export type RewardRefusal =
   /** Not a positive whole multiple of the step. Also what a hand-edited request looks like. */
   | "unknown"

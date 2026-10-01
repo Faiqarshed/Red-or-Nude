@@ -437,6 +437,16 @@ const mutations = [
       ),
   },
   {
+    name: "rewards: show points over a whole step as riyals she cannot spend",
+    expect: "tests/points-worth.test.ts",
+    apply: () =>
+      mutate(
+        REWARDS,
+        "  return pointsValue(Math.floor(balance / step) * step, rules);",
+        "  return pointsValue(balance, rules);",
+      ),
+  },
+  {
     name: "subtle: accept any number of points, not whole steps",
     expect: "tests/branch.test.ts",
     apply: () =>

@@ -26,7 +26,7 @@ import type { Localized } from "@/lib/localized";
 import { formatDateLabel } from "@/lib/booking";
 import type { BookingSummary } from "@/lib/booking";
 import { toNationalDigits, toStoredPhone, validateSaudiMobile } from "@/lib/phone";
-import type { LoyaltyRules } from "@/lib/rewards";
+import { spendableWorth, type LoyaltyRules } from "@/lib/rewards";
 import TextInput from "@/components/TextInput";
 import {
   birthdayRange,
@@ -518,7 +518,7 @@ function Points({ balance, rules }: { balance: number; rules: LoyaltyRules }) {
                 balance in riyals says what you have. */}
             <p className="mt-3 flex items-baseline gap-1.5 font-display text-4xl font-extrabold text-red">
               <Riyal className="h-6 w-6 shrink-0" />
-              {formatSAR(balance * pointHalalas)}
+              {formatSAR(spendableWorth(balance, rules))}
             </p>
             <p className="mt-1 text-[13px] font-semibold text-ink/60">
               {a.walletPoints.replace("{n}", String(balance))}
