@@ -64,6 +64,9 @@ ever charged a number the screen didn't show.
   owner is emailed: a second coupon cannot take the name, and a "(2)" must never
   reach her invoice. Unlike a product, a coupon has no versions to retire — its
   amount is in its name.
+- A gift card amount is one product whose price never changes. When the salon
+  stops selling an amount, its product is archived after the hour, like a
+  service switched off; offered again within the hour, it is kept.
 - Promo rules (dates, max uses, minimum spend) stay entirely in our app — StreamPay
   coupons have none of those fields.
 - Prices are VAT-inclusive on both sides.

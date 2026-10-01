@@ -10,6 +10,8 @@ import { diffOf, recordAudit } from "@/lib/audit";
 import { halalasToSar, sarToHalalas } from "@/lib/money";
 import { adjustGiftCardBalance, issueGiftCard } from "@/lib/giftcards";
 import { claimCardsFor } from "@/lib/wallet";
+import { giftCardLine } from "@/lib/payments/lines";
+import { retireProduct, syncProductQuietly } from "@/lib/payments/streampay";
 import { sendGiftCardEmails } from "@/lib/giftcard/email";
 import { adminStrings } from "@/lib/admin/strings";
 import {
@@ -168,6 +170,8 @@ export async function addGiftValue(amountSar: number): Promise<Result> {
     .returning({ id: giftCardValues.id });
 
   await recordAudit(actor, { action: "create", entity: "gift_card_values", entityId: row.id, label: `${amountSar} SAR` });
+  // Its StreamPay product, made now, or kept if it was taken off sale within the hour.
+  await syncProductQuietly(giftCardLine(amountSar).key, { ...giftCardLine(amountSar), active: true });
   revalidate();
   return { ok: true };
 }
@@ -184,6 +188,9 @@ export async function deleteGiftValue(id: string): Promise<Result> {
     entityId: id,
     label: gone ? `${halalasToSar(gone.amount)} SAR` : null,
   });
+  // Archived after the hour, like a service switched off, so a checkout already
+  // open for this amount can still be paid.
+  if (gone) await retireProduct(giftCardLine(halalasToSar(gone.amount)).key);
   revalidate();
   return { ok: true };
 }

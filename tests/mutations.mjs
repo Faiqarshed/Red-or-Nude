@@ -1017,6 +1017,17 @@ const mutations = [
       mutate(SPAY, "    if (there.is_active === false || !couponMatches(there, d)) await repairCoupon(there.id, name, d);", "    if (false) await repairCoupon(there.id, name, d);"),
   },
 
+  // ---- a gift card amount taken off sale ------------------------------------
+  {
+    name: "gift card amount: leave its StreamPay product live when it is deleted",
+    expect: "tests/gift-card-wallet.test.ts",
+    apply: () => mutate(GIFTADMIN, "  if (gone) await retireProduct(giftCardLine(halalasToSar(gone.amount)).key);", ""),
+  },
+  {
+    name: "gift card amount: archive it anyway when it is offered again within the hour",
+    expect: "tests/gift-card-wallet.test.ts",
+    apply: () => mutate(GIFTADMIN, "  await syncProductQuietly(giftCardLine(amountSar).key, { ...giftCardLine(amountSar), active: true });", ""),
+  },
 ];
 
 const touched = [

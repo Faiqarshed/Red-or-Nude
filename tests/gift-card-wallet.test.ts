@@ -11,16 +11,17 @@ import "./as-staff";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray, like } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { auditLog, customers, giftCards, giftCardTxns, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
+import { auditLog, customers, giftCards, giftCardTxns, giftCardValues, payments, streampayIds, walletDecisions, walletTxns } from "@/lib/db/schema";
 import { startPurchase, type GiftIntent } from "@/lib/payments/purchase";
 import { giftCardLine } from "@/lib/payments/lines";
 import { refundedOutside } from "@/lib/payments/refund";
 import { fakeDriver } from "@/lib/payments/fake";
+import { archiveRetiredProducts, RETIRE_AFTER_MIN, syncProduct } from "@/lib/payments/streampay";
 import { createAccount } from "@/lib/account/create";
 import { walletBalance } from "@/lib/wallet";
 import { fixtures, reset } from "./helpers";
 
-const { changeGiftCardEmail } = await import("@/app/(admin)/admin/(shell)/gift-cards/actions");
+const { addGiftValue, changeGiftCardEmail, deleteGiftValue } = await import("@/app/(admin)/admin/(shell)/gift-cards/actions");
 const { POST } = await import("@/app/api/gift-cards/route");
 
 const NOURA = "noura-gift@test.local";
@@ -199,5 +200,83 @@ describe("the owner fixing a recipient's email", () => {
 
     const card = await buy("noura-typo@test.local");
     expect(await changeGiftCardEmail({ id: card.id, email: NOURA, reason: " " })).toMatchObject({ ok: false });
+  });
+});
+
+// An amount the salon stops selling: its StreamPay product is archived after the
+// hour, like a service or a membership switched off, so a checkout already open
+// can still pay for it. Offered again within the hour, it is kept.
+describe("a gift card amount taken off sale", () => {
+  const env = process.env as Record<string, string | undefined>;
+  const AMOUNT = 377;
+  const key = `product:giftcard:${AMOUNT}`;
+  let was: string | undefined;
+
+  beforeEach(async () => {
+    // Only this test's retirements: archiveRetiredProducts acts on every one due.
+    await db.delete(streampayIds).where(like(streampayIds.key, "%:retire:%"));
+    was = env.PAYMENT_DRIVER;
+    env.PAYMENT_DRIVER = "streampay";
+    env.STREAMPAY_API_KEY = "k";
+    env.STREAMPAY_API_SECRET = "s";
+  });
+  afterEach(async () => {
+    env.PAYMENT_DRIVER = was;
+    await db.delete(giftCardValues).where(eq(giftCardValues.amountHalalas, AMOUNT * 100));
+    await db.delete(streampayIds).where(like(streampayIds.key, `%:${key}@%`));
+    await db.delete(streampayIds).where(like(streampayIds.key, "%:retire:%"));
+  });
+
+  /** StreamPay's products endpoints: a fresh id per product made, and what was archived. */
+  function productsApi() {
+    const made: string[] = [];
+    const archived: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const path = String(url).split("/api/v2")[1];
+      if (init?.method === "POST" && path === "/products") {
+        made.push(crypto.randomUUID());
+        return new Response(JSON.stringify({ id: made.at(-1), prices: [] }));
+      }
+      if (init?.method === "PUT" && JSON.parse(String(init.body)).is_active === false) {
+        archived.push(path.slice("/products/".length));
+        return new Response("{}");
+      }
+      throw new Error(`unexpected ${init?.method} ${path}`);
+    });
+    return { made, archived };
+  }
+
+  const anHourLater = () =>
+    db
+      .update(streampayIds)
+      .set({ createdAt: new Date(Date.now() - (RETIRE_AFTER_MIN + 1) * 60_000) })
+      .where(like(streampayIds.key, "%:retire:%"));
+  const valueId = async () =>
+    (await db.select().from(giftCardValues).where(eq(giftCardValues.amountHalalas, AMOUNT * 100)))[0].id;
+
+  it("is archived at StreamPay after the hour", async () => {
+    const { made, archived } = productsApi();
+    await addGiftValue(AMOUNT);
+    await syncProduct(key, giftCardLine(AMOUNT)); // someone bought one
+
+    await deleteGiftValue(await valueId());
+    await archiveRetiredProducts();
+    expect(archived).toEqual([]); // a checkout open now can still pay
+    await anHourLater();
+    await archiveRetiredProducts();
+    expect(archived).toEqual([made[0]]);
+  });
+
+  it("is kept when offered again within the hour", async () => {
+    const { made, archived } = productsApi();
+    await addGiftValue(AMOUNT);
+    await syncProduct(key, giftCardLine(AMOUNT));
+
+    await deleteGiftValue(await valueId());
+    await addGiftValue(AMOUNT);
+    await anHourLater();
+    await archiveRetiredProducts();
+    expect(archived).toEqual([]);
+    expect(await syncProduct(key, giftCardLine(AMOUNT))).toBe(made[0]);
   });
 });
