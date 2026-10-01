@@ -21,14 +21,6 @@ export function formatSAR(halalas: number, opts: { decimals?: boolean } = {}): s
   });
 }
 
-/**
- * VAT on a VAT-exclusive subtotal. Rounds half-up to the halala, so
- * subtotal + vat always equals the total that gets charged.
- */
-export function vatOn(subtotalHalalas: number, percent = DEFAULT_VAT_PERCENT): number {
-  return Math.round((subtotalHalalas * percent) / 100);
-}
-
 /** Prices shown to customers are VAT-inclusive; split one back out. */
 export function vatIncludedIn(totalHalalas: number, percent = DEFAULT_VAT_PERCENT): number {
   return totalHalalas - Math.round((totalHalalas * 100) / (100 + percent));

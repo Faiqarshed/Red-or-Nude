@@ -151,10 +151,6 @@ export function can(role: StaffRole | undefined | null, cap: Capability): boolea
   return MATRIX[role]?.includes(cap) ?? false;
 }
 
-export function canAny(role: StaffRole | undefined | null, caps: Capability[]): boolean {
-  return caps.some((c) => can(role, c));
-}
-
 type BookingStatus = (typeof bookingStatus.enumValues)[number];
 
 /**

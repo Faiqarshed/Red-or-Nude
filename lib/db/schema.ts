@@ -9,7 +9,7 @@
 // Localized text is jsonb `{ ar, en }`, mirroring the Content shape in
 // lib/dictionary.ts so the site's existing bilingual discipline carries over.
 
-import { relations, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import {
   boolean,
   check,
@@ -1293,76 +1293,6 @@ export const settings = pgTable("settings", {
   value: jsonb("value").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
-
-// ------------------------------------------------------------ relations -----
-
-export const branchRelations = relations(branches, ({ many }) => ({
-  hours: many(branchHours),
-  stations: many(stations),
-  bookings: many(bookings),
-}));
-
-export const branchHoursRelations = relations(branchHours, ({ one }) => ({
-  branch: one(branches, { fields: [branchHours.branchId], references: [branches.id] }),
-}));
-
-export const stationRelations = relations(stations, ({ one, many }) => ({
-  branch: one(branches, { fields: [stations.branchId], references: [branches.id] }),
-  bookings: many(bookings),
-}));
-
-export const staffRelations = relations(staff, ({ one, many }) => ({
-  branch: one(branches, { fields: [staff.branchId], references: [branches.id] }),
-  timeOff: many(staffTimeOff),
-}));
-
-export const staffTimeOffRelations = relations(staffTimeOff, ({ one }) => ({
-  staff: one(staff, { fields: [staffTimeOff.staffId], references: [staff.id] }),
-}));
-
-export const bookingRelations = relations(bookings, ({ one, many }) => ({
-  branch: one(branches, { fields: [bookings.branchId], references: [branches.id] }),
-  customer: one(customers, { fields: [bookings.customerId], references: [customers.id] }),
-  station: one(stations, { fields: [bookings.stationId], references: [stations.id] }),
-  technician: one(staff, { fields: [bookings.technicianId], references: [staff.id] }),
-  service: one(services, { fields: [bookings.serviceId], references: [services.id] }),
-  removalType: one(removalTypes, {
-    fields: [bookings.removalTypeId],
-    references: [removalTypes.id],
-  }),
-  design: one(designs, { fields: [bookings.designId], references: [designs.id] }),
-  addons: many(bookingAddons),
-  payments: many(payments),
-}));
-
-export const bookingAddonRelations = relations(bookingAddons, ({ one }) => ({
-  booking: one(bookings, { fields: [bookingAddons.bookingId], references: [bookings.id] }),
-  addon: one(addons, { fields: [bookingAddons.addonId], references: [addons.id] }),
-}));
-
-export const customerRelations = relations(customers, ({ many }) => ({
-  bookings: many(bookings),
-}));
-
-export const designRelations = relations(designs, ({ one }) => ({
-  collection: one(designCollections, {
-    fields: [designs.collectionId],
-    references: [designCollections.id],
-  }),
-}));
-
-export const giftCardRelations = relations(giftCards, ({ one, many }) => ({
-  design: one(giftCardDesigns, {
-    fields: [giftCards.designId],
-    references: [giftCardDesigns.id],
-  }),
-  txns: many(giftCardTxns),
-}));
-
-export const paymentRelations = relations(payments, ({ one, many }) => ({
-  booking: one(bookings, { fields: [payments.bookingId], references: [bookings.id] }),
-  refunds: many(refunds),
-}));
 
 export type Staff = typeof staff.$inferSelect;
 export type Branch = typeof branches.$inferSelect;

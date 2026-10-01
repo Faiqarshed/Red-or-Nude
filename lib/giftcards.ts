@@ -172,12 +172,3 @@ export async function adjustGiftCardBalance(
     return { ok: false, error: "failed" };
   }
 }
-
-/** Ledger total — used to prove the cached balance hasn't drifted. */
-export async function ledgerBalance(giftCardId: string): Promise<number> {
-  const [row] = await db
-    .select({ total: sql<number>`coalesce(sum(${giftCardTxns.deltaHalalas}), 0)::int` })
-    .from(giftCardTxns)
-    .where(eq(giftCardTxns.giftCardId, giftCardId));
-  return row?.total ?? 0;
-}

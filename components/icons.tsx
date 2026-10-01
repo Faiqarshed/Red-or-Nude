@@ -8,33 +8,6 @@ const base = {
   strokeLinejoin: "round" as const,
 };
 
-export function SearchIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" width={24} height={24} {...base} {...props}>
-      <circle cx="11" cy="11" r="7" />
-      <path d="m20 20-3.2-3.2" />
-    </svg>
-  );
-}
-
-export function HeartIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" width={24} height={24} {...base} {...props}>
-      <path d="M12 20s-7-4.35-9.2-8.5C1.3 8.4 2.6 5 5.8 5 8 5 9.4 6.6 12 9.2 14.6 6.6 16 5 18.2 5c3.2 0 4.5 3.4 3 6.5C19 15.65 12 20 12 20Z" />
-    </svg>
-  );
-}
-
-export function CartIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" width={24} height={24} {...base} {...props}>
-      <path d="M3 4h2l2.2 11.2a1.5 1.5 0 0 0 1.5 1.2h8.3a1.5 1.5 0 0 0 1.5-1.2L21 8H6" />
-      <circle cx="9.5" cy="20" r="1.3" />
-      <circle cx="18" cy="20" r="1.3" />
-    </svg>
-  );
-}
-
 // Saudi Riyal symbol (simplified glyph).
 export function Riyal(props: SVGProps<SVGSVGElement>) {
   return (
