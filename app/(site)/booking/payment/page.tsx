@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Coffee, Sparkles } from "lucide-react";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
-import PaymentMethods from "@/components/PaymentMethods";
+import { PayLogos } from "@/components/PaymentMethods";
 import { declineMessage, usePaymentReturn, type PaymentOutcome } from "@/components/StreamPayCheckout";
 import { CheckingModal, PayNoticeModal, PayStep, Steps } from "@/components/PayFlow";
 import PhoneField from "@/components/PhoneField";
@@ -768,6 +768,12 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
   };
   const checkingPayment = usePaymentReturn(onPaid, returning);
 
+  /** Her removal, design and own time, as one line under her service. */
+  const details = (m: (typeof booking.members)[number]) =>
+    [m.removal, m.design, m.timeLabel ? `${m.branch ? `${m.branch} · ` : ""}${m.timeLabel}` : null]
+      .filter(Boolean)
+      .join(" · ");
+
   /** A card the server priced, with the way to take it off. */
   const giftChip = gift && (
     <div className="flex items-center justify-between rounded-[12px] border border-red/20 bg-red/[0.04] px-4 py-3">
@@ -829,9 +835,13 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
           was ticked. Adding a treat is a small decision and it was rearranging
           the whole screen — which reads as something going wrong, not as ten
           riyals being added. The columns stay; what changes is a number. */}
-      <div className="mx-auto flex max-w-page justify-center px-6 pt-[112px] md:px-12 lg:justify-start lg:px-16">
-        <Steps current={paying ? 2 : 1} labels={[p.stepDetails, p.stepPay]} />
-      </div>
+      {/* Step 1 carries it in its left column, so the bill beside it starts
+          at the top of the screen and its button stays in view. */}
+      {paying && (
+        <div className="mx-auto flex max-w-page justify-center px-6 pt-[112px] md:px-12 lg:justify-start lg:px-16">
+          <Steps current={2} labels={[p.stepDetails, p.stepPay]} />
+        </div>
+      )}
 
       {/* Step 2: only what paying needs. The form, extras and points are
           settled once the chair is held, so they leave the screen instead of
@@ -886,7 +896,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
           </aside>
         </div>
       ) : (
-        <div className="mx-auto max-w-page space-y-6 px-4 pb-24 pt-6 sm:px-6 md:px-12 lg:px-16">
+        <div className="mx-auto max-w-page px-4 pb-24 pt-[112px] sm:px-6 md:px-12 lg:px-16">
           {loaded && !hasSelection ? (
             <div className="rounded-[24px] bg-white p-8 text-center shadow-[0_20px_50px_rgba(184,0,7,0.06)]">
               <p className="text-sm text-ink/70">{p.noSelection}</p>
@@ -898,457 +908,475 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
               </Link>
             </div>
           ) : (
-            <>
-              {/* What she is booking, across the page rather than down a side
-                column: each service with its picture, then when and for whom.
-                A guest's three details sit on one row under it. */}
-              <section className="rounded-[24px] bg-white p-5 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] sm:p-6">
-                <h1 className="font-display text-2xl font-extrabold text-ink">{p.summaryTitle}</h1>
+            // Two columns: what she is booking on the left, and on the right,
+            // sticky, everything that turns it into a bill and pays it. Every
+            // list wraps or scrolls on its own, so a group of four with add-ons
+            // and treats grows the page, never breaks it.
+            <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
+              <div className="space-y-4">
+                <div className="flex justify-center lg:justify-start">
+                  <Steps current={1} labels={[p.stepDetails, p.stepPay]} />
+                </div>
+                {/* What she is booking: each service with its picture and her
+                add-ons', then when and for whom, then the treats. */}
+                <section className="rounded-[24px] bg-white p-5 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] sm:p-6">
+                  <h1 className="font-display text-2xl font-extrabold text-ink">{p.summaryTitle}</h1>
 
-                <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_320px]">
-                  <ul className="space-y-3">
-                    {booking.members.map((m, i) => (
-                      <li key={i} className="flex items-center gap-4 rounded-[16px] border border-black/[0.05] p-3">
-                        <ServiceThumb img={m.serviceImg} className="h-20 w-20" />
-                        <div className="min-w-0 flex-1">
-                          {booking.members.length > 1 && (
-                            <p className="text-[11px] font-bold uppercase tracking-wider text-red/70">
-                              {m.guestName || c.booking.guestN.replace("{n}", String(i + 1))}
+                  <div className="mt-5 space-y-3">
+                    <ul className="space-y-3">
+                      {booking.members.map((m, i) => (
+                        <li key={i} className="flex items-start gap-4 rounded-[16px] border border-black/[0.05] p-3">
+                          <ServiceThumb img={m.serviceImg} className="h-20 w-20" />
+                          <div className="min-w-0 flex-1">
+                            {booking.members.length > 1 && (
+                              <p className="text-[11px] font-bold uppercase tracking-wider text-red/70">
+                                {m.guestName || c.booking.guestN.replace("{n}", String(i + 1))}
+                              </p>
+                            )}
+                            <p className="truncate font-display text-base font-extrabold text-ink">
+                              {m.service ?? "—"}
                             </p>
-                          )}
-                          <p className="truncate font-display text-base font-extrabold text-ink">{m.service ?? "—"}</p>
-                          <p className="mt-0.5 text-[12px] text-ink/50">
-                            {[
-                              m.addons.length ? m.addons.join("، ") : null,
-                              m.removal,
-                              m.design,
-                              m.timeLabel ? `${m.branch ? `${m.branch} · ` : ""}${m.timeLabel}` : null,
-                            ]
-                              .filter(Boolean)
-                              .join(" · ") || `${c.booking.addons}: ${c.booking.none}`}
+                            {details(m) && <p className="mt-0.5 text-[12px] text-ink/50">{details(m)}</p>}
+                            {/* Her add-ons, each with its picture; they wrap. */}
+                            {m.addons.length > 0 && (
+                              <ul className="mt-2 flex flex-wrap gap-1.5">
+                                {m.addons.map((name, k) => (
+                                  <li
+                                    key={k}
+                                    className="flex items-center gap-1.5 rounded-full bg-cream/80 py-1 pe-3 ps-1 text-[12px] font-semibold text-ink/70"
+                                  >
+                                    <ServiceThumb img={m.addonImgs?.[k]} className="h-6 w-6" small />
+                                    {name}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                          <span className="flex shrink-0 items-center gap-1 font-display text-lg font-extrabold text-ink">
+                            <Riyal className="h-4 w-4" />
+                            {m.price}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-[16px] bg-cream/70 p-4">
+                        <p className="text-[11px] text-ink/45">{c.booking.appointment}</p>
+                        <p className="mt-0.5 text-sm font-semibold text-ink">
+                          {booking.dateLabel && booking.timeLabel
+                            ? `${booking.dateLabel} · ${booking.timeLabel}`
+                            : c.booking.notSelected}
+                        </p>
+                        {booking.branch && <p className="mt-0.5 text-[12px] text-ink/50">{booking.branch}</p>}
+                      </div>
+                      {/* Signed in, her account already answered who this is for.
+                      She changes it on /account, where the change sticks. */}
+                      {signedIn && (
+                        <div className="rounded-[16px] bg-cream/70 p-4">
+                          <p className="text-[11px] text-ink/45">{p.bookingFor}</p>
+                          <p className="mt-0.5 truncate text-sm font-semibold text-ink">{name || email}</p>
+                          <p dir="ltr" className="mt-0.5 truncate text-start text-[12px] text-ink/50">
+                            {email}
                           </p>
                         </div>
-                        <span className="flex shrink-0 items-center gap-1 font-display text-lg font-extrabold text-ink">
-                          <Riyal className="h-4 w-4" />
-                          {m.price}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  <div className="space-y-3">
-                    <div className="rounded-[16px] bg-cream/70 p-4">
-                      <p className="text-[11px] text-ink/45">{c.booking.appointment}</p>
-                      <p className="mt-0.5 text-sm font-semibold text-ink">
-                        {booking.dateLabel && booking.timeLabel
-                          ? `${booking.dateLabel} · ${booking.timeLabel}`
-                          : c.booking.notSelected}
-                      </p>
-                      {booking.branch && <p className="mt-0.5 text-[12px] text-ink/50">{booking.branch}</p>}
+                      )}
                     </div>
-                    {/* Signed in, her account already answered who this is for.
-                      She changes it on /account, where the change sticks. */}
-                    {signedIn && (
-                      <div className="rounded-[16px] bg-cream/70 p-4">
-                        <p className="text-[11px] text-ink/45">{p.bookingFor}</p>
-                        <p className="mt-0.5 truncate text-sm font-semibold text-ink">{name || email}</p>
-                        <p dir="ltr" className="mt-0.5 truncate text-start text-[12px] text-ink/50">
-                          {email}
-                        </p>
-                      </div>
-                    )}
                   </div>
-                </div>
 
-                {/* Required: the email carries the booking reference that is the
+                  {/* Required: the email carries the booking reference that is the
                   only key to /my-bookings, and the invoice goes there. */}
-                {!signedIn && (
-                  <div className="mt-5 grid gap-3 border-t border-black/[0.05] pt-5 sm:grid-cols-3">
-                    <label className="block text-start">
-                      <span className="mb-1.5 block text-[12px] text-ink/55">{p.customerName}</span>
-                      <input
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        maxLength={120}
-                        autoComplete="name"
-                        className="w-full rounded-[12px] border border-black/[0.08] px-4 py-3 text-sm text-ink outline-none focus:border-red/40"
+                  {!signedIn && (
+                    <div className="mt-5 grid grid-cols-[repeat(auto-fit,minmax(min(220px,100%),1fr))] gap-3 border-t border-black/[0.05] pt-5">
+                      <label className="block text-start">
+                        <span className="mb-1.5 block text-[12px] text-ink/55">{p.customerName}</span>
+                        <input
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          maxLength={120}
+                          autoComplete="name"
+                          className="w-full rounded-[12px] border border-black/[0.08] px-4 py-3 text-sm text-ink outline-none focus:border-red/40"
+                        />
+                      </label>
+                      <PhoneField
+                        label={p.customerPhone}
+                        value={phone}
+                        onChange={setPhone}
+                        required
+                        showError={phoneTouched}
+                        onBlur={() => setPhoneTouched(true)}
                       />
-                    </label>
-                    <PhoneField
-                      label={p.customerPhone}
-                      value={phone}
-                      onChange={setPhone}
-                      required
-                      showError={phoneTouched}
-                      onBlur={() => setPhoneTouched(true)}
-                    />
-                    <label className="block text-start">
-                      <span className="mb-1.5 block text-[12px] text-ink/55">{p.customerEmail} *</span>
-                      <input
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        dir="ltr"
-                        type="email"
-                        inputMode="email"
-                        autoComplete="email"
-                        maxLength={200}
-                        placeholder="sarah@example.com"
-                        className="w-full rounded-[12px] border border-black/[0.08] px-4 py-3 text-left text-sm text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
-                      />
-                      <span className="mt-1.5 block text-[11px] text-ink/40">{p.emailNote}</span>
-                    </label>
-                  </div>
-                )}
-              </section>
-
-              {/* Coffee and a cookie, one tile per guest, so one can take it and
-                another skip it. Frozen once the chairs are held: the retry after
-                a declined card re-uses that hold and never re-prices it, so a
-                treat added now would be shown and not charged. */}
-              {(booking.checkoutAddons?.length ?? 0) > 0 && (
-                <section className="rounded-[24px] bg-white p-5 text-start ring-1 ring-black/[0.04] sm:p-6">
-                  <h2 className="font-display text-base font-extrabold text-ink">{p.treatLabel}</h2>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {booking.members.map((_, i) =>
-                      (booking.checkoutAddons ?? []).map((a) => {
-                        const key = `${i}:${a.id}`;
-                        const taken = treats.includes(key);
-                        return (
-                          <label
-                            key={key}
-                            className={`flex items-center gap-3 rounded-[14px] border p-2.5 pe-4 text-[13px] ${
-                              taken
-                                ? "border-red/40 bg-red/[0.04] text-red"
-                                : heldCode
-                                  ? "cursor-not-allowed border-black/[0.05] text-ink/35"
-                                  : "cursor-pointer border-black/[0.08] text-ink hover:border-red/30"
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={taken}
-                              disabled={heldCode !== null}
-                              onChange={() =>
-                                setTreats((prev) =>
-                                  prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
-                                )
-                              }
-                              className="ms-1.5 h-4 w-4 shrink-0 accent-red"
-                            />
-                            {/* The salon's photo, or a drawn cup on beige: never an
-                              empty box that reads as a broken image. */}
-                            <span
-                              className="grid h-14 w-20 shrink-0 place-items-center rounded-[10px] bg-[#e7d9c9] bg-cover bg-center bg-no-repeat text-[#8a6a4a]"
-                              style={a.img ? { backgroundImage: `url(${a.img})` } : undefined}
-                            >
-                              {!a.img && <Coffee className="h-6 w-6" strokeWidth={1.75} aria-hidden />}
-                            </span>
-                            <span className="min-w-0 flex-1 font-semibold">
-                              {booking.members.length > 1
-                                ? `${c.booking.guestN.replace("{n}", String(i + 1))} — ${pick(a.name, lang)}`
-                                : pick(a.name, lang)}
-                            </span>
-                            <span className="flex shrink-0 items-center gap-1">
-                              <Riyal className="h-3 w-3" />
-                              {a.price}
-                            </span>
-                          </label>
-                        );
-                      }),
-                    )}
-                  </div>
-                </section>
-              )}
-
-              <div className="grid items-start gap-6 lg:grid-cols-[1fr_440px]">
-                {/* Everything that lowers the bill, in the order it comes off:
-                  the code, her points, then her wallet or a guest's gift card. */}
-                <section className="space-y-5 rounded-[24px] bg-white p-5 text-start ring-1 ring-black/[0.04] sm:p-6">
-                  <h2 className="font-display text-base font-extrabold text-ink">{p.discountsTitle}</h2>
-
-                  {/* Occasion codes (brief §2.10). Not offered against a bill a
-                    membership already cleared: a percentage of zero is zero. */}
-                  {!fullyCovered && (
-                    <div>
-                      <span className="mb-1.5 block text-[12px] text-ink/55">{p.promoLabel}</span>
-                      {promoApplied ? (
-                        <div className="flex items-center justify-between rounded-[12px] border border-red/20 bg-red/[0.04] px-4 py-3">
-                          <span className="text-sm font-semibold text-red" dir="ltr">
-                            {promoApplied}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={clearPromo}
-                            className="text-[12px] font-semibold text-ink/50 underline underline-offset-4 hover:text-ink"
-                          >
-                            {p.promoRemove}
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex gap-2">
-                          <input
-                            value={promoInput}
-                            onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                void applyPromo();
-                              }
-                            }}
-                            dir="ltr"
-                            maxLength={40}
-                            placeholder={p.promoPlaceholder}
-                            className="min-w-0 flex-1 rounded-[12px] border border-black/[0.08] px-4 py-3 text-left text-sm uppercase text-ink outline-none placeholder:normal-case placeholder:text-ink/30 focus:border-red/40"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => void applyPromo()}
-                            disabled={!promoInput.trim() || promoChecking}
-                            className="shrink-0 rounded-[12px] bg-black/[0.06] px-5 text-sm font-bold text-ink transition-colors hover:bg-black/[0.1] disabled:cursor-not-allowed disabled:text-ink/40"
-                          >
-                            {promoChecking ? p.promoApplying : p.promoApply}
-                          </button>
-                        </div>
-                      )}
-                      {promoError && (
-                        <p role="alert" className="mt-1.5 text-[11px] text-red">
-                          {promoError}
-                        </p>
-                      )}
+                      <label className="block text-start">
+                        <span className="mb-1.5 block text-[12px] text-ink/55">{p.customerEmail} *</span>
+                        <input
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          dir="ltr"
+                          type="email"
+                          inputMode="email"
+                          autoComplete="email"
+                          maxLength={200}
+                          placeholder="sarah@example.com"
+                          className="w-full rounded-[12px] border border-black/[0.08] px-4 py-3 text-left text-sm text-ink outline-none placeholder:text-ink/30 focus:border-red/40"
+                        />
+                        <span className="mt-1.5 block text-[11px] text-ink/40">{p.emailNote}</span>
+                      </label>
                     </div>
                   )}
 
-                  {/* Her points, as one step of paying: what she can take off
+                  {/* Coffee and a cookie, one tile per guest, so one can take it and
+                another skip it. Frozen once the chairs are held: the retry after
+                a declined card re-uses that hold and never re-prices it, so a
+                treat added now would be shown and not charged. */}
+                  {(booking.checkoutAddons?.length ?? 0) > 0 && (
+                    <div className="mt-6 border-t border-black/[0.05] pt-5">
+                      <h2 className="font-display text-base font-extrabold text-ink">{p.treatLabel}</h2>
+                      <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] gap-2">
+                        {booking.members.map((_, i) =>
+                          (booking.checkoutAddons ?? []).map((a) => {
+                            const key = `${i}:${a.id}`;
+                            const taken = treats.includes(key);
+                            return (
+                              <label
+                                key={key}
+                                className={`flex items-center gap-3 rounded-[14px] border p-2.5 pe-4 text-[13px] ${
+                                  taken
+                                    ? "border-red/40 bg-red/[0.04] text-red"
+                                    : heldCode
+                                      ? "cursor-not-allowed border-black/[0.05] text-ink/35"
+                                      : "cursor-pointer border-black/[0.08] text-ink hover:border-red/30"
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={taken}
+                                  disabled={heldCode !== null}
+                                  onChange={() =>
+                                    setTreats((prev) =>
+                                      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+                                    )
+                                  }
+                                  className="ms-1.5 h-4 w-4 shrink-0 accent-red"
+                                />
+                                {/* The salon's photo, or a drawn cup on beige: never an
+                              empty box that reads as a broken image. */}
+                                <span
+                                  className="grid h-14 w-20 shrink-0 place-items-center rounded-[10px] bg-[#e7d9c9] bg-cover bg-center bg-no-repeat text-[#8a6a4a]"
+                                  style={a.img ? { backgroundImage: `url(${a.img})` } : undefined}
+                                >
+                                  {!a.img && <Coffee className="h-6 w-6" strokeWidth={1.75} aria-hidden />}
+                                </span>
+                                <span className="min-w-0 flex-1 font-semibold">
+                                  {booking.members.length > 1
+                                    ? `${c.booking.guestN.replace("{n}", String(i + 1))} — ${pick(a.name, lang)}`
+                                    : pick(a.name, lang)}
+                                </span>
+                                <span className="flex shrink-0 items-center gap-1">
+                                  <Riyal className="h-3 w-3" />
+                                  {a.price}
+                                </span>
+                              </label>
+                            );
+                          }),
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </section>
+              </div>
+
+              {/* The bill, built in the order it comes off: the code, her
+                  points, her wallet or a guest's gift card, then what is left,
+                  how it is paid, and the button. Sticky beside the booking while
+                  it fits; taller, it scrolls with the page like the rest. */}
+              <aside className="space-y-3 rounded-[24px] bg-white p-5 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] lg:sticky lg:top-28">
+                <h2 className="font-display text-lg font-extrabold text-ink">{p.payWith}</h2>
+
+                {/* Occasion codes (brief §2.10). Not offered against a bill a
+                    membership already cleared: a percentage of zero is zero. */}
+                {!fullyCovered && (
+                  <div>
+                    {promoApplied ? (
+                      <div className="flex items-center justify-between rounded-[12px] border border-red/20 bg-red/[0.04] px-4 py-2.5">
+                        <span className="text-sm font-semibold text-red" dir="ltr">
+                          {promoApplied}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={clearPromo}
+                          className="text-[12px] font-semibold text-ink/50 underline underline-offset-4 hover:text-ink"
+                        >
+                          {p.promoRemove}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <input
+                          value={promoInput}
+                          onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void applyPromo();
+                            }
+                          }}
+                          dir="ltr"
+                          maxLength={40}
+                          placeholder={`${p.promoLabel} · ${p.promoPlaceholder}`}
+                          aria-label={p.promoLabel}
+                          className="min-w-0 flex-1 rounded-[12px] border border-black/[0.08] px-4 py-2.5 text-start text-sm uppercase text-ink outline-none placeholder:normal-case placeholder:text-ink/30 focus:border-red/40"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void applyPromo()}
+                          disabled={!promoInput.trim() || promoChecking}
+                          className="shrink-0 rounded-[12px] bg-black/[0.06] px-5 text-sm font-bold text-ink transition-colors hover:bg-black/[0.1] disabled:cursor-not-allowed disabled:text-ink/40"
+                        >
+                          {promoChecking ? p.promoApplying : p.promoApply}
+                        </button>
+                      </div>
+                    )}
+                    {promoError && (
+                      <p role="alert" className="mt-1.5 text-[11px] text-red">
+                        {promoError}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Her points, as one step of paying: what she can take off
                     now, and what this booking earns for the next one. A guest
                     sees the earning, and the way to sign in and use it. The
                     rungs are only those she can afford, bounded by the bill:
                     150 points against a 20 SAR bill burns 30 SAR for 20 off. */}
-                  {rules !== null &&
-                    (() => {
-                      const affordable =
-                        balance !== null && !fullyCovered
-                          ? redeemable(balance, Math.round((booking.total - promoDiscountSar) * 100), rules)
-                          : [];
-                      const earned = payableTotal > 0 ? pointsEarned(Math.round(payableTotal * 100), rules) : 0;
-                      if (affordable.length === 0 && earned === 0 && !redeemError) return null;
-                      return (
-                        <div>
-                          <div className="mb-1.5 flex items-center justify-between gap-2">
-                            <span className="text-[12px] text-ink/55">{a.walletTitle}</span>
-                            {balance !== null && (
-                              <span className="text-[12px] font-semibold text-red">
-                                {a.redeemBalance.replace("{n}", String(balance))}
-                              </span>
-                            )}
-                          </div>
-                          {affordable.length > 0 && (
-                            <div className="relative">
-                              <select
-                                value={redeemPoints ?? ""}
-                                onChange={(e) => void pickReward(e.target.value === "" ? null : Number(e.target.value))}
-                                aria-label={a.redeemLabel}
-                                className={`w-full cursor-pointer appearance-none rounded-[12px] border px-4 py-3 pe-10 text-sm font-semibold outline-none focus:border-red/40 ${
-                                  redeemPoints !== null
-                                    ? "border-red/30 bg-red/[0.04] text-red"
-                                    : "border-black/[0.08] text-ink"
-                                }`}
-                              >
-                                <option value="">{a.redeemNone}</option>
-                                {affordable.map((points) => (
-                                  <option key={points} value={points}>
-                                    {`${a.rewardOff.replace("{sar}", String((points * rules.pointHalalas) / 100))} · ${a.rewardPoints.replace("{points}", String(points))}`}
-                                  </option>
-                                ))}
-                              </select>
-                              <span
-                                aria-hidden
-                                className="pointer-events-none absolute inset-y-0 end-4 flex items-center text-ink/40"
-                              >
-                                ▾
-                              </span>
-                            </div>
-                          )}
-                          {redeemError && (
-                            <p role="alert" className="mt-1.5 text-[11px] text-red">
-                              {redeemError}
-                            </p>
-                          )}
-                          {earned > 0 && (
-                            <p className="mt-2 rounded-[12px] bg-cream/70 px-4 py-3 text-[13px] font-semibold text-ink/70">
-                              {a.earnGives
-                                .replace("{value}", String((earned * rules.pointHalalas) / 100))
-                                .replace("{points}", String(earned))}
-                            </p>
-                          )}
-                          {/* A guest earns on this booking but spends signed in:
-                            the selection is saved, so nothing she picked is lost. */}
-                          {earned > 0 && !signedIn && (
-                            <Link
-                              href={`/account?next=${encodeURIComponent("/booking/payment")}`}
-                              className="mt-2 flex items-center justify-between gap-3 rounded-[12px] bg-[#fbeaea] px-4 py-3 text-[13px] font-bold text-red transition-colors hover:bg-[#f7dcdc]"
-                            >
-                              {a.earnSignIn}
-                              <span aria-hidden className="rtl:rotate-180">
-                                →
-                              </span>
-                            </Link>
+                {rules !== null &&
+                  (() => {
+                    const affordable =
+                      balance !== null && !fullyCovered
+                        ? redeemable(balance, Math.round((booking.total - promoDiscountSar) * 100), rules)
+                        : [];
+                    if (affordable.length === 0 && !redeemError) return null;
+                    return (
+                      <div>
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <span className="text-[12px] text-ink/55">{a.walletTitle}</span>
+                          {balance !== null && (
+                            <span className="text-[12px] font-semibold text-red">
+                              {a.redeemBalance.replace("{n}", String(balance))}
+                            </span>
                           )}
                         </div>
-                      );
-                    })()}
+                        {affordable.length > 0 && (
+                          <div className="relative">
+                            <select
+                              value={redeemPoints ?? ""}
+                              onChange={(e) => void pickReward(e.target.value === "" ? null : Number(e.target.value))}
+                              aria-label={a.redeemLabel}
+                              className={`w-full cursor-pointer appearance-none rounded-[12px] border px-4 py-2.5 pe-10 text-sm font-semibold outline-none focus:border-red/40 ${
+                                redeemPoints !== null
+                                  ? "border-red/30 bg-red/[0.04] text-red"
+                                  : "border-black/[0.08] text-ink"
+                              }`}
+                            >
+                              <option value="">{a.redeemNone}</option>
+                              {affordable.map((points) => (
+                                <option key={points} value={points}>
+                                  {`${a.rewardOff.replace("{sar}", String((points * rules.pointHalalas) / 100))} · ${a.rewardPoints.replace("{points}", String(points))}`}
+                                </option>
+                              ))}
+                            </select>
+                            <span
+                              aria-hidden
+                              className="pointer-events-none absolute inset-y-0 end-4 flex items-center text-ink/40"
+                            >
+                              ▾
+                            </span>
+                          </div>
+                        )}
+                        {redeemError && (
+                          <p role="alert" className="mt-1.5 text-[11px] text-red">
+                            {redeemError}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
 
-                  {/* Her wallet, or a guest's gift card. Signed in, her gift cards
+                {/* Her wallet, or a guest's gift card. Signed in, her gift cards
                     are already in her wallet, so she types how much of it to
                     spend, and the card field waits behind a link for a card sent
                     with no email. A guest has no wallet to show: she types the
                     card, sent to the email above, and it pays all it can. */}
-                  {hasSelection && billHalalas > 0 && (
-                    <div>
-                      {signedIn ? (
-                        <div className="space-y-2">
-                          {walletSpendable > 0 && (
-                            <WalletAmount
-                              available={walletSpendable}
-                              billHalalas={billHalalas}
-                              onChange={(halalas, ok) => setWalletPick({ halalas, ok })}
-                            />
-                          )}
-                          {gift ? (
-                            giftChip
-                          ) : giftOpen ? (
-                            giftField
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => setGiftOpen(true)}
-                              className="px-1 text-[12px] font-semibold text-red underline underline-offset-4 hover:opacity-70"
-                            >
-                              {p.giftHave}
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <>
-                          <span className="mb-1.5 block text-[12px] text-ink/55">{p.giftLabel}</span>
-                          {gift ? giftChip : giftField}
-                          {!gift && <span className="mt-1.5 block text-[11px] text-ink/40">{p.giftGuestNote}</span>}
-                        </>
-                      )}
-                      {giftError && (
-                        <p role="alert" className="mt-1.5 text-[11px] text-red">
-                          {giftError}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </section>
+                {hasSelection && billHalalas > 0 && (
+                  <div>
+                    {signedIn ? (
+                      <div className="space-y-2">
+                        {walletSpendable > 0 && (
+                          <WalletAmount
+                            available={walletSpendable}
+                            billHalalas={billHalalas}
+                            onChange={(halalas, ok) => setWalletPick({ halalas, ok })}
+                          />
+                        )}
+                        {gift ? (
+                          giftChip
+                        ) : giftOpen ? (
+                          giftField
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setGiftOpen(true)}
+                            className="px-1 text-[12px] font-semibold text-red underline underline-offset-4 hover:opacity-70"
+                          >
+                            {p.giftHave}
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        <span className="mb-1.5 block text-[12px] text-ink/55">{p.giftLabel}</span>
+                        {gift ? giftChip : giftField}
+                        {!gift && <span className="mt-1.5 block text-[11px] text-ink/40">{p.giftGuestNote}</span>}
+                      </>
+                    )}
+                    {giftError && (
+                      <p role="alert" className="mt-1.5 text-[11px] text-red">
+                        {giftError}
+                      </p>
+                    )}
+                  </div>
+                )}
 
-                {/* The bill and how it is paid, beside the button that pays it. */}
-                <aside className="h-fit space-y-4 rounded-[24px] bg-white p-5 text-start shadow-[0_20px_50px_rgba(184,0,7,0.06)] sm:p-6 lg:sticky lg:top-28">
-                  <h2 className="font-display text-base font-extrabold text-ink">{p.payWith}</h2>
+                <div className="border-t border-black/[0.06]" />
 
-                  {/* What the membership is covering, said before any card is
+                {/* What the membership is covering, said before any card is
                     asked for: she is not paying for it out of her own pocket. */}
-                  {covered.length > 0 && (
-                    <div className="rounded-[16px] bg-[#f2f7f2] p-4 ring-1 ring-[#2f6b3f]/15">
-                      <p className="text-[13px] font-extrabold text-[#2f6b3f]">{p.coveredTitle}</p>
-                      <ul className="mt-2 space-y-1.5">
-                        {covered.map((m, i) => (
-                          <li key={i} className="flex items-center justify-between gap-3 text-[13px]">
-                            <span className="truncate text-ink/70">
-                              {p.coveredService
-                                .replace("{service}", m.service ?? "")
-                                .replace("{pack}", m.packName ?? "")}
-                            </span>
-                            <span className="flex shrink-0 items-center gap-1 font-semibold text-[#2f6b3f]">
-                              −<Riyal className="h-3 w-3" />
-                              {m.creditSar}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                      <p className="mt-2 text-[12px] text-ink/50">{p.coveredNote}</p>
-                    </div>
-                  )}
+                {covered.length > 0 && (
+                  <div className="rounded-[16px] bg-[#f2f7f2] p-4 ring-1 ring-[#2f6b3f]/15">
+                    <p className="text-[13px] font-extrabold text-[#2f6b3f]">{p.coveredTitle}</p>
+                    <ul className="mt-2 space-y-1.5">
+                      {covered.map((m, i) => (
+                        <li key={i} className="flex items-center justify-between gap-3 text-[13px]">
+                          <span className="truncate text-ink/70">
+                            {p.coveredService.replace("{service}", m.service ?? "").replace("{pack}", m.packName ?? "")}
+                          </span>
+                          <span className="flex shrink-0 items-center gap-1 font-semibold text-[#2f6b3f]">
+                            −<Riyal className="h-3 w-3" />
+                            {m.creditSar}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-[12px] text-ink/50">{p.coveredNote}</p>
+                  </div>
+                )}
 
-                  {(booking.total < booking.grossTotal ||
-                    promoDiscountSar > 0 ||
-                    redeemDiscountSar > 0 ||
-                    walletSar > 0 ||
-                    treatsTotal > 0) && (
-                    <div className="space-y-1.5 rounded-[14px] bg-cream/60 p-4 text-[13px]">
-                      <BillLine label={p.subtotal} sar={booking.grossTotal + creditTotal} muted />
-                      {creditTotal > 0 && <BillLine label={p.membershipLine} sar={-creditTotal} green />}
-                      {booking.total < booking.grossTotal && (
-                        <BillLine label={p.groupDiscount} sar={-(booking.grossTotal - booking.total)} />
-                      )}
-                      {promoDiscountSar > 0 && <BillLine label={promoApplied ?? ""} sar={-promoDiscountSar} ltr />}
-                      {redeemDiscountSar > 0 && (
-                        <BillLine
-                          label={a.redeemApplied
-                            .replace("{sar}", String(redeemValueSar))
-                            .replace("{points}", String(redeemPoints ?? 0))}
-                          sar={-redeemDiscountSar}
-                        />
-                      )}
-                      {treatsTotal > 0 && <BillLine label={p.treatLabel} sar={treatsTotal} muted />}
-                      {walletSar > 0 && <BillLine label={signedIn ? p.walletLine : p.giftLine} sar={-walletSar} />}
-                    </div>
-                  )}
+                {(booking.total < booking.grossTotal ||
+                  promoDiscountSar > 0 ||
+                  redeemDiscountSar > 0 ||
+                  walletSar > 0 ||
+                  treatsTotal > 0) && (
+                  <div className="space-y-1 rounded-[14px] bg-cream/60 px-4 py-3 text-[13px]">
+                    <BillLine label={p.subtotal} sar={booking.grossTotal + creditTotal} muted />
+                    {creditTotal > 0 && <BillLine label={p.membershipLine} sar={-creditTotal} green />}
+                    {booking.total < booking.grossTotal && (
+                      <BillLine label={p.groupDiscount} sar={-(booking.grossTotal - booking.total)} />
+                    )}
+                    {promoDiscountSar > 0 && <BillLine label={promoApplied ?? ""} sar={-promoDiscountSar} ltr />}
+                    {redeemDiscountSar > 0 && (
+                      <BillLine
+                        label={a.redeemApplied
+                          .replace("{sar}", String(redeemValueSar))
+                          .replace("{points}", String(redeemPoints ?? 0))}
+                        sar={-redeemDiscountSar}
+                      />
+                    )}
+                    {treatsTotal > 0 && <BillLine label={p.treatLabel} sar={treatsTotal} muted />}
+                    {walletSar > 0 && <BillLine label={signedIn ? p.walletLine : p.giftLine} sar={-walletSar} />}
+                  </div>
+                )}
 
-                  <div className="flex items-center justify-between rounded-[16px] bg-[#fbeaea] p-4">
+                <div className="rounded-[16px] bg-[#fbeaea] px-4 py-3">
+                  <div className="flex items-center justify-between">
                     <p className="text-[13px] font-semibold text-ink/60">{creditTotal > 0 ? p.toPayNow : p.total}</p>
                     <div className="flex items-center gap-1 font-display text-2xl font-extrabold text-red">
                       <Riyal className="h-5 w-5" />
                       {formatSAR(Math.round(payableTotal * 100))}
                     </div>
                   </div>
+                  {/* What this bill earns, said as money. A guest earns it on her
+                      email's account and is shown the way to sign in for it;
+                      the selection is saved, so nothing she picked is lost. */}
+                  {rules !== null &&
+                    payableTotal > 0 &&
+                    (() => {
+                      const earned = pointsEarned(Math.round(payableTotal * 100), rules);
+                      if (earned === 0) return null;
+                      return (
+                        <p className="mt-1 text-[12px] text-ink/60">
+                          {a.earnGives
+                            .replace("{value}", String((earned * rules.pointHalalas) / 100))
+                            .replace("{points}", String(earned))}
+                          {!signedIn && (
+                            <>
+                              {" "}
+                              <Link
+                                href={`/account?next=${encodeURIComponent("/booking/payment")}`}
+                                className="font-semibold text-red underline underline-offset-2"
+                              >
+                                {a.earnSignIn}
+                              </Link>
+                            </>
+                          )}
+                        </p>
+                      );
+                    })()}
+                </div>
 
-                  {/* The card, for whatever is left. Asking for a card to charge
+                {/* The card, for whatever is left. Asking for a card to charge
                     nothing is a step she notices before the code does. */}
-                  {nothingToPay ? (
-                    <p className="rounded-[14px] bg-cream/70 p-4 text-sm font-semibold text-ink/70">{p.nothingLeft}</p>
-                  ) : (
-                    <>
-                      {covered.length > 0 && <p className="text-[12px] text-ink/50">{p.remainderNote}</p>}
-                      <PaymentMethods checkout={null} onDone={onPaid} heading={false} />
-                    </>
-                  )}
+                {nothingToPay ? (
+                  <p className="rounded-[14px] bg-cream/70 p-4 text-sm font-semibold text-ink/70">{p.nothingLeft}</p>
+                ) : (
+                  covered.length > 0 && <p className="text-[12px] text-ink/50">{p.remainderNote}</p>
+                )}
 
-                  {(error ?? payNotice) && (
-                    <p role="alert" className="rounded-[12px] bg-red/[0.08] px-4 py-3 text-start text-xs text-red">
-                      {error ?? payNotice}
-                    </p>
-                  )}
+                {(error ?? payNotice) && (
+                  <p role="alert" className="rounded-[12px] bg-red/[0.08] px-4 py-3 text-start text-xs text-red">
+                    {error ?? payNotice}
+                  </p>
+                )}
 
-                  <button
-                    type="button"
-                    onClick={confirm}
-                    disabled={submitting || !readyToConfirm}
-                    className={`block w-full rounded-[12px] py-3.5 text-center text-sm font-bold transition-opacity ${
-                      submitting || !readyToConfirm
-                        ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
-                        : "bg-red-grad text-white hover:opacity-90"
-                    }`}
-                  >
-                    {submitting ? p.confirming : nothingToPay ? p.confirmBooking : p.continueToPay}
-                  </button>
-                  {nothingToPay ? (
-                    creditTotal > 0 ? null : (
-                      <p className="text-center text-[12px] text-ink/55">{p.nothingToPay}</p>
-                    )
-                  ) : (
-                    <>
-                      <p className="text-center text-[11px] text-ink/40">{p.payFirstNote}</p>
-                      <p className="flex items-center justify-center gap-1.5 text-[12px] text-ink/45">
-                        <Lock className="h-3.5 w-3.5" />
+                <button
+                  type="button"
+                  onClick={confirm}
+                  disabled={submitting || !readyToConfirm}
+                  className={`block w-full rounded-[12px] py-3 text-center text-sm font-bold transition-opacity ${
+                    submitting || !readyToConfirm
+                      ? "cursor-not-allowed bg-black/[0.06] text-ink/40"
+                      : "bg-red-grad text-white hover:opacity-90"
+                  }`}
+                >
+                  {submitting ? p.confirming : nothingToPay ? p.confirmBooking : p.continueToPay}
+                </button>
+                {nothingToPay ? (
+                  creditTotal > 0 ? null : (
+                    <p className="text-center text-[12px] text-ink/55">{p.nothingToPay}</p>
+                  )
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5">
+                      <PayLogos small />
+                      <span className="flex items-center gap-1 text-[11px] text-ink/45">
+                        <Lock className="h-3 w-3" />
                         {p.secure}
-                      </p>
-                    </>
-                  )}
-                </aside>
-              </div>
-            </>
+                      </span>
+                    </div>
+                    <p className="text-center text-[11px] text-ink/40">{p.payFirstNote}</p>
+                  </>
+                )}
+              </aside>
+            </div>
           )}
         </div>
       )}
@@ -1376,13 +1404,13 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
 }
 
 /** A service's catalogue picture, or a drawn sparkle on beige when it has none. */
-function ServiceThumb({ img, className }: { img?: string | null; className: string }) {
+function ServiceThumb({ img, className, small }: { img?: string | null; className: string; small?: boolean }) {
   return (
     <span
-      className={`grid shrink-0 place-items-center rounded-[14px] bg-[#e7d9c9] bg-cover bg-center bg-no-repeat text-[#8a6a4a] ${className}`}
+      className={`grid shrink-0 place-items-center ${small ? "rounded-full" : "rounded-[14px]"} bg-[#e7d9c9] bg-cover bg-center bg-no-repeat text-[#8a6a4a] ${className}`}
       style={img ? { backgroundImage: `url(${img})` } : undefined}
     >
-      {!img && <Sparkles className="h-6 w-6" strokeWidth={1.75} aria-hidden />}
+      {!img && <Sparkles className={small ? "h-3 w-3" : "h-6 w-6"} strokeWidth={1.75} aria-hidden />}
     </span>
   );
 }

@@ -50,7 +50,7 @@ export function WalletAmount({
         : p.walletRest.replace("{sar}", formatSAR(billHalalas - typed));
 
   return (
-    <div className="rounded-[14px] border border-black/[0.08] p-4 text-start">
+    <div className="rounded-[14px] border border-black/[0.08] p-3 text-start">
       <div className="flex items-center justify-between gap-3">
         <span className="flex items-center gap-2 text-[14px] font-bold text-ink">
           <WalletIcon className="h-4 w-4 text-red" />
@@ -64,7 +64,7 @@ export function WalletAmount({
           </span>
         </span>
       </div>
-      <div className="mt-3 flex gap-2">
+      <div className="mt-2 flex gap-2">
         <label
           dir="ltr"
           className={`flex min-w-0 flex-1 items-center gap-2 rounded-[12px] border px-3.5 ${
@@ -78,7 +78,7 @@ export function WalletAmount({
             inputMode="decimal"
             placeholder="0"
             aria-label={p.walletPay}
-            className="min-w-0 flex-1 bg-transparent py-3 text-sm font-semibold text-ink outline-none placeholder:text-ink/30"
+            className="min-w-0 flex-1 bg-transparent py-2.5 text-sm font-semibold text-ink outline-none placeholder:text-ink/30"
           />
         </label>
         <button

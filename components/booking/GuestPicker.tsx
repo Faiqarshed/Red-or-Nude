@@ -73,6 +73,7 @@ export function toMemberSelection(
     service: service ? pick(service.name, lang) : null,
     serviceImg: service?.img ?? null,
     addons: addons.map((a) => pick(a.name, lang)),
+    addonImgs: addons.map((a) => a.img ?? null),
     removal: removal ? pick(removal.name, lang) : null,
     design: g.design,
     ...guestTotals(catalog, g),

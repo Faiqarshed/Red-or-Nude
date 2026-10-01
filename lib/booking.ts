@@ -85,6 +85,8 @@ export type MemberSelection = {
   service: string | null;
   /** The service's catalogue picture, for the checkout's summary. */
   serviceImg?: string | null;
+  /** Each add-on's picture, in the order of `addons`. */
+  addonImgs?: (string | null)[];
   addons: string[];
   removal: string | null;
   design: string | null;
