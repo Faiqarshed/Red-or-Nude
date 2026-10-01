@@ -701,8 +701,6 @@ function ProfileForm({ customer }: { customer: Customer }) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const say = (key: string | undefined): string =>
-    (a.errors as Record<string, string>)[toCamel(key ?? "failed")] ?? a.errors.failed;
 
   const dirty =
     name.trim() !== (customer.name ?? "") ||
@@ -731,7 +729,7 @@ function ProfileForm({ customer }: { customer: Customer }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(res.status === 429 ? a.errors.tooMany : say(data.error));
+        setError(res.status === 429 ? a.errors.tooMany : errorText(a.errors, data.error));
         return;
       }
       setSaved(true);
@@ -865,9 +863,6 @@ function SignedOut({ rules }: { rules: LoyaltyRules }) {
   const emailError = checkEmail(validationMessages[lang], a.emailLabel, email, { required: true });
   const errors = profileErrors(lang, a, { name, phone, birthday });
 
-  /** Map a server error code to a sentence. Unknown codes fall back rather than blank. */
-  const say = (key: string | undefined): string =>
-    (a.errors as Record<string, string>)[toCamel(key ?? "failed")] ?? a.errors.failed;
 
   const sendCode = async () => {
     if (busy) return;
@@ -883,7 +878,7 @@ function SignedOut({ rules }: { rules: LoyaltyRules }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(res.status === 429 ? a.errors.tooMany : say(data.error));
+        setError(res.status === 429 ? a.errors.tooMany : errorText(a.errors, data.error));
         return;
       }
       setSentTo(data.sentTo ?? null);
@@ -909,7 +904,7 @@ function SignedOut({ rules }: { rules: LoyaltyRules }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(res.status === 429 ? a.errors.tooMany : say(data.error));
+        setError(res.status === 429 ? a.errors.tooMany : errorText(a.errors, data.error));
         setCode("");
         return;
       }
@@ -950,7 +945,7 @@ function SignedOut({ rules }: { rules: LoyaltyRules }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(say(data.error));
+        setError(errorText(a.errors, data.error));
         // The ticket is spent or stale — send them back to the start rather
         // than leaving them on a form that can no longer submit.
         if (data.error === "ticket-expired" || data.error === "already-registered") {
@@ -1228,7 +1223,7 @@ function nextPath(): string {
   return url.origin === window.location.origin ? url.pathname + url.search : "/account";
 }
 
-/** `too-many` → `tooMany`, so an API error code indexes the strings directly. */
-function toCamel(key: string): string {
-  return key.replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
+/** A server error code as her sentence: `too-many` indexes `tooMany`. Unknown codes fall back, never blank. */
+function errorText(errors: Record<string, string> & { failed: string }, code: string | undefined): string {
+  return errors[(code ?? "failed").replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase())] ?? errors.failed;
 }
