@@ -49,6 +49,10 @@ const LOYALTY = "lib/loyalty.ts";
 const MONEY = "lib/money.ts";
 const PAYLINES = "lib/payments/lines.ts";
 const SPAY = "lib/payments/streampay.ts";
+const TREATROUTE = "app/api/station/treat/route.ts";
+const PACKROUTE = "app/api/packs/route.ts";
+const STATUSROUTE = "app/api/payments/status/route.ts";
+const SETTLECRON = "app/api/cron/settle-pending/route.ts";
 const GIFTADMIN = "app/(admin)/admin/(shell)/gift-cards/actions.ts";
 const GIFTROUTE = "app/api/gift-cards/route.ts";
 
@@ -1017,6 +1021,53 @@ const mutations = [
       mutate(SPAY, "    if (there.is_active === false || !couponMatches(there, d)) await repairCoupon(there.id, name, d);", "    if (false) await repairCoupon(there.id, name, d);"),
   },
 
+  // ---- whose credit a purchase route spends ----------------------------------
+  {
+    name: "chair treat: let the QR alone spend credit, signed out",
+    expect: "tests/wallet-routes.test.ts",
+    apply: () => mutate(TREATROUTE, '  if (d.walletHalalas && !customer) return NextResponse.json({ error: "signed-out" }, { status: 401 });\n', ""),
+  },
+  {
+    name: "membership: spend the wallet the request names",
+    expect: "tests/wallet-routes.test.ts",
+    apply: () => {
+      mutate(PACKROUTE, "const body = z.object({", "const body = z.object({\n  email: z.string().optional(),");
+      mutate(
+        PACKROUTE,
+        "    wallet: d.walletHalalas ? { customerId: customer.id, email: customer.email, halalas: d.walletHalalas } : undefined,",
+        "    wallet: d.walletHalalas ? { customerId: customer.id, email: d.email ?? customer.email, halalas: d.walletHalalas } : undefined,",
+      );
+    },
+  },
+
+  // ---- "did it go through?" ---------------------------------------------------
+  {
+    name: "payment status: keep a decided answer too",
+    expect: "tests/payment-status.test.ts",
+    apply: () => mutate(STATUSROUTE, '  if (answer.status === "pending") recent.set(ref.data, { at: Date.now(), answer });', "  recent.set(ref.data, { at: Date.now(), answer });"),
+  },
+  {
+    name: "payment status: ask StreamPay on every poll",
+    expect: "tests/payment-status.test.ts",
+    apply: () => mutate(STATUSROUTE, "  if (hit && Date.now() - hit.at < REUSE_MS) return NextResponse.json(hit.answer);", "  if (hit && false) return NextResponse.json(hit.answer);"),
+  },
+
+  {
+    name: "settle job: fail the whole run when archiving fails",
+    expect: "tests/settle-cron.test.ts",
+    apply: () =>
+      mutate(
+        SETTLECRON,
+        lines(
+          "  const archived = await archiveRetiredProducts().catch((err) => {",
+          '    console.error("[cron] could not archive retired StreamPay products", err);',
+          "    return 0;",
+          "  });",
+        ),
+        "  const archived = await archiveRetiredProducts();",
+      ),
+  },
+
   // ---- a gift card amount taken off sale ------------------------------------
   {
     name: "gift card amount: leave its StreamPay product live when it is deleted",
@@ -1033,7 +1084,7 @@ const mutations = [
 const touched = [
   CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, LINES, TREAT,
   DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS, DECIDE, RBAC, PURCHASE, LOYALTY, MONEY,
-  PAYLINES, GIFTADMIN, GIFTROUTE, SPAY,
+  PAYLINES, GIFTADMIN, GIFTROUTE, SPAY, TREATROUTE, PACKROUTE, STATUSROUTE, SETTLECRON,
 ];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));
