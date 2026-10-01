@@ -11,6 +11,7 @@ vi.mock("@/lib/account/guard", () => ({ currentCustomer: async () => signedIn })
 import { db } from "@/lib/db";
 import { customers, walletTxns } from "@/lib/db/schema";
 import { accountWallet } from "@/lib/wallet";
+import { signedSAR } from "@/lib/money";
 import { GET } from "@/app/api/wallet/quote/route";
 import { fixtures, reset } from "./helpers";
 
@@ -111,5 +112,12 @@ describe("the wallet in the header", () => {
       sources: { giftCards: 30_000 },
       history: [{ reason: "gift-card", halalas: 30_000 }],
     });
+  });
+});
+
+describe("a movement's amount", () => {
+  it("says which way it went, with the true minus sign", () => {
+    expect(signedSAR(28_000)).toBe("+280");
+    expect(signedSAR(-50_050)).toBe("−500.50");
   });
 });

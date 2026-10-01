@@ -9,12 +9,16 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
-import { formatSAR } from "@/lib/money";
+import { formatSAR, signedSAR } from "@/lib/money";
 import { formatDateLabel } from "@/lib/booking";
 import { riyadhDateKey } from "@/lib/time";
 import type { AccountWallet } from "@/lib/wallet";
 import { Riyal, WalletIcon } from "@/components/icons";
 import { useWalletHalalas } from "@/lib/account/context";
+
+/** Where her money came from, in order, leaving out what comes to nothing. */
+export const heldSources = (sources: AccountWallet["sources"]) =>
+  (Object.keys(sources) as (keyof AccountWallet["sources"])[]).filter((k) => sources[k] !== 0);
 
 /** Movements the menu lists; /account/wallet lists them all. */
 const MENU_ROWS = 4;
@@ -56,9 +60,7 @@ export default function WalletMenu() {
 
   if (available === null) return null;
 
-  const sources = wallet
-    ? (Object.keys(a.moneySources) as (keyof typeof a.moneySources)[]).filter((k) => wallet.sources[k] !== 0)
-    : [];
+  const sources = wallet ? heldSources(wallet.sources) : [];
 
   return (
     <div ref={box} className="relative">
@@ -144,8 +146,7 @@ function Row({ label, sub, halalas, strong }: { label: string; sub?: string; hal
         {sub && <span className="text-ink/40"> · {sub}</span>}
       </span>
       <span dir="ltr" className={`shrink-0 font-semibold ${halalas > 0 ? "text-red" : "text-ink"}`}>
-        {halalas > 0 ? "+" : "−"}
-        {formatSAR(Math.abs(halalas))}
+        {signedSAR(halalas)}
       </span>
     </li>
   );

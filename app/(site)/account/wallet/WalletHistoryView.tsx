@@ -10,9 +10,10 @@ import SiteFooter from "@/components/SiteFooter";
 import { Riyal } from "@/components/icons";
 import { useI18n } from "@/lib/i18n";
 import { formatDateLabel } from "@/lib/booking";
-import { formatSAR } from "@/lib/money";
+import { formatSAR, signedSAR } from "@/lib/money";
 import { riyadhDateKey } from "@/lib/time";
 import type { AccountWallet } from "@/lib/wallet";
+import { heldSources } from "@/components/WalletMenu";
 
 const FILTER_TEST = {
   all: () => true,
@@ -26,9 +27,7 @@ export default function WalletHistoryView({ wallet }: { wallet: AccountWallet })
   const a = c.account;
   const reasons = a.moneyReasons as Record<string, string>;
   const [filter, setFilter] = useState<Filter>("all");
-  const sources = (Object.keys(a.moneySources) as (keyof typeof a.moneySources)[]).filter(
-    (k) => wallet.sources[k] !== 0,
-  );
+  const sources = heldSources(wallet.sources);
   const shown = wallet.history.filter(FILTER_TEST[filter]);
 
   return (
@@ -71,8 +70,7 @@ export default function WalletHistoryView({ wallet }: { wallet: AccountWallet })
                       wallet.sources[k] > 0 ? "text-red" : "text-ink"
                     }`}
                   >
-                    {wallet.sources[k] > 0 ? "+" : "−"}
-                    {formatSAR(Math.abs(wallet.sources[k]))}
+                    {signedSAR(wallet.sources[k])}
                   </p>
                 </div>
               ))}
@@ -113,8 +111,7 @@ export default function WalletHistoryView({ wallet }: { wallet: AccountWallet })
                     dir="ltr"
                     className={`shrink-0 font-display text-base font-extrabold ${h.halalas > 0 ? "text-red" : "text-ink"}`}
                   >
-                    {h.halalas > 0 ? "+" : "−"}
-                    {formatSAR(Math.abs(h.halalas))}
+                    {signedSAR(h.halalas)}
                   </span>
                 </li>
               ))}

@@ -21,6 +21,9 @@ export function formatSAR(halalas: number, opts: { decimals?: boolean } = {}): s
   });
 }
 
+/** A wallet movement: "+280" in, "−500.50" out, with a true minus sign. */
+export const signedSAR = (halalas: number): string => `${halalas > 0 ? "+" : "−"}${formatSAR(Math.abs(halalas))}`;
+
 /** Prices shown to customers are VAT-inclusive; split one back out. */
 export function vatIncludedIn(totalHalalas: number, percent = DEFAULT_VAT_PERCENT): number {
   return totalHalalas - Math.round((totalHalalas * 100) / (100 + percent));

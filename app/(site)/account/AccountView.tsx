@@ -39,7 +39,7 @@ import {
   PERSON_TEXT,
 } from "@/lib/admin/validate";
 import { formatDateKey, riyadhDateKey } from "@/lib/time";
-import { formatSAR } from "@/lib/money";
+import { formatSAR, signedSAR } from "@/lib/money";
 import { validationMessages } from "@/lib/validation-messages";
 
 type Customer = {
@@ -583,8 +583,7 @@ function Wallet({ wallet }: { wallet: MoneyWallet }) {
                   <span className="text-ink/40"> · {formatDateLabel(riyadhDateKey(new Date(h.at)), lang)}</span>
                 </span>
                 <span dir="ltr" className={`shrink-0 font-semibold ${h.halalas > 0 ? "text-red" : "text-ink"}`}>
-                  {h.halalas > 0 ? "+" : "−"}
-                  {formatSAR(Math.abs(h.halalas))}
+                  {signedSAR(h.halalas)}
                 </span>
               </li>
             ))}
