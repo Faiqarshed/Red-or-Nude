@@ -15,6 +15,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { ChatIcon } from "@/components/icons";
 
 type Turn = { role: "user" | "model"; text: string };
 
@@ -149,9 +150,13 @@ export default function ChatWidget() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed bottom-5 end-5 z-40 [body:has([data-pay-bar])_&]:bottom-[calc(6.5rem+env(safe-area-inset-bottom,0px))] rounded-full bg-red-grad px-6 py-3.5 text-sm font-bold text-white shadow-[0_18px_40px_rgba(0,0,0,0.22)] transition-opacity hover:opacity-90"
+        aria-label={t.open}
+        // A round icon on a phone, the words from sm up: the pill sat over a
+        // third of a card's width and covered its buttons as the page scrolled.
+        className="fixed bottom-4 end-4 z-40 [body:has([data-pay-bar])_&]:bottom-[calc(6.5rem+env(safe-area-inset-bottom,0px))] grid h-12 w-12 place-items-center rounded-full bg-red-grad text-sm font-bold text-white shadow-[0_18px_40px_rgba(0,0,0,0.22)] transition-opacity hover:opacity-90 sm:bottom-5 sm:end-5 sm:h-auto sm:w-auto sm:px-6 sm:py-3.5"
       >
-        {t.open}
+        <ChatIcon className="h-5 w-5 sm:hidden" aria-hidden />
+        <span className="hidden sm:inline">{t.open}</span>
       </button>
     );
   }

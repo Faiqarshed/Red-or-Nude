@@ -119,3 +119,11 @@ export function WalletIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+
+export function ChatIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" width={24} height={24} {...base} {...props}>
+      <path d="M20 11.5a7.5 7.5 0 0 1-11.2 6.5L4 19.5l1.5-4.3A7.5 7.5 0 1 1 20 11.5Z" />
+    </svg>
+  );
+}
