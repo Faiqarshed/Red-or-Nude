@@ -15,6 +15,7 @@ import { ACCOUNT_COOKIE, SESSION_TTL_S, mintSession, readSignupTicket } from "@/
 import { birthdayField, nameField } from "@/lib/account/fields";
 import { createAccount } from "@/lib/account/create";
 import { clientIp, throttled } from "@/lib/throttle";
+import { readBody } from "@/lib/read-body";
 
 export const dynamic = "force-dynamic";
 
@@ -35,20 +36,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "too-many" }, { status: 429 });
   }
 
-  let payload: unknown;
-  try {
-    payload = await request.json();
-  } catch {
-    return NextResponse.json({ error: "invalid-json" }, { status: 400 });
-  }
-
-  const parsed = body.safeParse(payload);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "invalid", issues: parsed.error.issues.map((i) => i.path.join(".")) },
-      { status: 400 },
-    );
-  }
+  const parsed = await readBody(request, body);
+  if (!parsed.ok) return parsed.res;
 
   const email = await readSignupTicket(parsed.data.ticket);
   // Expired, tampered with, or a session token someone tried to reuse here.

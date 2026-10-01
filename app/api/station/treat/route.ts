@@ -10,6 +10,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { buyStationItems, type TreatRefusal } from "@/lib/station-treat";
 import { currentCustomer } from "@/lib/account/guard";
+import { readBody } from "@/lib/read-body";
 
 export const dynamic = "force-dynamic";
 // The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
@@ -40,15 +41,8 @@ const STATUS: Record<TreatRefusal, number> = {
 };
 
 export async function POST(request: Request) {
-  let payload: unknown;
-  try {
-    payload = await request.json();
-  } catch {
-    return NextResponse.json({ error: "invalid-json" }, { status: 400 });
-  }
-
-  const parsed = body.safeParse(payload);
-  if (!parsed.success) return NextResponse.json({ error: "invalid" }, { status: 400 });
+  const parsed = await readBody(request, body);
+  if (!parsed.ok) return parsed.res;
   const d = parsed.data;
 
   // Credit is hers only when the session says who she is: the sticker proves

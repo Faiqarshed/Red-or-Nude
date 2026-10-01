@@ -12,6 +12,7 @@ import { NextResponse } from "next/server";
 import { clientIp, throttled } from "@/lib/throttle";
 import { z } from "zod";
 import { confirmBookingPayment } from "@/lib/payments/confirm";
+import { readBody } from "@/lib/read-body";
 
 export const dynamic = "force-dynamic";
 // The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
@@ -46,17 +47,8 @@ export async function POST(request: Request) {
   if (throttled(`confirm:${clientIp(request)}`, { windowMs: 3_600_000, max: 30 })) {
     return NextResponse.json({ error: "too-many" }, { status: 429 });
   }
-  let payload: unknown;
-  try {
-    payload = await request.json();
-  } catch {
-    return NextResponse.json({ error: "invalid-json" }, { status: 400 });
-  }
-
-  const parsed = body.safeParse(payload);
-  if (!parsed.success) {
-    return NextResponse.json({ error: "invalid" }, { status: 400 });
-  }
+  const parsed = await readBody(request, body);
+  if (!parsed.ok) return parsed.res;
 
   const result = await confirmBookingPayment({
     code: parsed.data.code,

@@ -13,6 +13,7 @@ import { currentCustomer } from "@/lib/account/guard";
 import { birthdayField, nameField } from "@/lib/account/fields";
 import { isValidSaudiMobile, toStoredPhone } from "@/lib/phone";
 import { clientIp, throttled } from "@/lib/throttle";
+import { readBody } from "@/lib/read-body";
 
 export const dynamic = "force-dynamic";
 
@@ -35,20 +36,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "too-many" }, { status: 429 });
   }
 
-  let payload: unknown;
-  try {
-    payload = await request.json();
-  } catch {
-    return NextResponse.json({ error: "invalid-json" }, { status: 400 });
-  }
-
-  const parsed = body.safeParse(payload);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "invalid", issues: parsed.error.issues.map((i) => i.path.join(".")) },
-      { status: 400 },
-    );
-  }
+  const parsed = await readBody(request, body);
+  if (!parsed.ok) return parsed.res;
 
   // The phone is a contact detail on an account, not its identity, so another
   // row with the same number is no conflict and says nothing to anyone

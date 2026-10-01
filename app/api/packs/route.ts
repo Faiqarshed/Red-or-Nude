@@ -15,6 +15,7 @@ import { packs } from "@/lib/db/schema";
 import { currentCustomer } from "@/lib/account/guard";
 import { startPurchase } from "@/lib/payments/purchase";
 import { productName } from "@/lib/payments/lines";
+import { readBody } from "@/lib/read-body";
 
 export const dynamic = "force-dynamic";
 // The receipt it may send waits up to 20 s for StreamPay's invoice PDF.
@@ -33,15 +34,8 @@ export async function POST(request: Request) {
   const customer = await currentCustomer();
   if (!customer) return NextResponse.json({ error: "signed-out" }, { status: 401 });
 
-  let payload: unknown;
-  try {
-    payload = await request.json();
-  } catch {
-    return NextResponse.json({ error: "invalid-json" }, { status: 400 });
-  }
-
-  const parsed = body.safeParse(payload);
-  if (!parsed.success) return NextResponse.json({ error: "invalid" }, { status: 400 });
+  const parsed = await readBody(request, body);
+  if (!parsed.ok) return parsed.res;
   const d = parsed.data;
 
   const [pack] = await db

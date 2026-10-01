@@ -14,6 +14,7 @@ import { db } from "@/lib/db";
 import { stations } from "@/lib/db/schema";
 import { createBookings } from "@/lib/bookings";
 import { currentCustomer } from "@/lib/account/guard";
+import { readBody } from "@/lib/read-body";
 
 export const dynamic = "force-dynamic";
 
@@ -95,20 +96,8 @@ const body = z.object({
 });
 
 export async function POST(request: Request) {
-  let payload: unknown;
-  try {
-    payload = await request.json();
-  } catch {
-    return NextResponse.json({ error: "invalid-json" }, { status: 400 });
-  }
-
-  const parsed = body.safeParse(payload);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "invalid", issues: parsed.error.issues.map((i) => i.path.join(".")) },
-      { status: 400 },
-    );
-  }
+  const parsed = await readBody(request, body);
+  if (!parsed.ok) return parsed.res;
 
   const { stationToken, ...data } = parsed.data;
 
