@@ -424,139 +424,134 @@ export default function BookingCard({
 
   const title = row.serviceName ? pick(row.serviceName, lang) : row.code;
 
+  // One line under the reference about changing it, while the appointment is
+  // still live: until when, or that the window has shut and who to call. On a
+  // cancelled or finished one the status badge has already answered.
+  const changeNote = row.canCancel
+    ? h.changeUntil.replace("{date}", formatDateLabel(row.cancelBy.slice(0, 10), lang))
+    : row.status === "pending" || row.status === "confirmed"
+      ? h.changeClosed
+      : null;
+
   return (
-    // A column with the heading taking the slack (`mb-auto` below), so when a
-    // grid stretches this card to its neighbour's height, the cancel and
-    // reschedule buttons settle at the foot rather than floating mid-card.
+    // The same skeleton on every card — three single lines and a footer — so
+    // no card is ever taller than its neighbour, whatever it can do: lines
+    // truncate rather than wrap, and the footer always holds one thing.
     //
     // `relative` anchors the title's stretched tap layer: the whole card opens
     // the details through one control, and the few real actions on it sit above
-    // that layer on `z-10`. It used to be a role="button" div around the
-    // heading, which could not hold the refill button without nesting one
-    // control inside another.
-    <article className="relative flex flex-col rounded-[20px] bg-white p-5 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)] transition-shadow hover:shadow-[0_14px_36px_rgba(184,0,7,0.12)]">
-      <div className="mb-auto flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="font-display text-lg font-extrabold text-ink">
-              <button
-                type="button"
-                onClick={() => setDetails(row)}
-                aria-label={`${title} — ${h.detailsOpen}`}
-                className="text-start after:absolute after:inset-0 after:rounded-[20px] after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-red/40"
-              >
-                {title}
-              </button>
-            </h2>
-            {row.isRefill && (
-              <span className="rounded-full bg-[#f7e8e8] px-2.5 py-0.5 text-[10px] font-semibold text-red">
-                {h.refillBadge}
-              </span>
-            )}
-            {/* One reference now opens the whole party, so two cards appear
-                where the customer quoted one code. Without this badge that
-                reads like a duplicate. */}
-            {row.groupSize > 1 && (
-              <span className="rounded-full bg-[#e6f0f5] px-2.5 py-0.5 text-[10px] font-semibold text-[#2c6a88]">
-                {h.groupBadge}
-              </span>
-            )}
-          </div>
-          <p className="mt-1 text-[13px] text-ink/55">
-            {formatDateLabel(row.startsAt.slice(0, 10), lang)}
-            {row.ticketNo && (
-              <>
-                {" · "}
-                {h.ticket}{" "}
-                <span className="font-semibold text-ink" dir="ltr">
-                  {row.ticketNo}
-                </span>
-              </>
-            )}
-          </p>
-          <p className="mt-1 text-[11px] text-ink/40" dir="ltr">
-            {row.code}
-          </p>
-        </div>
-
-        <div className="flex flex-col items-end gap-2">
-          <span
-            className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
-              STATUS_TONE[row.status] ?? "bg-black/[0.06] text-ink/60"
-            }`}
+    // that layer on `z-10`.
+    <article className="relative flex h-full flex-col rounded-[20px] bg-white p-5 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)] transition-shadow hover:shadow-[0_14px_36px_rgba(184,0,7,0.12)]">
+      <div className="flex items-center gap-2">
+        <h2 className="min-w-0 font-display text-lg font-extrabold text-ink">
+          <button
+            type="button"
+            onClick={() => setDetails(row)}
+            aria-label={`${title} — ${h.detailsOpen}`}
+            title={title}
+            className="block max-w-full truncate text-start after:absolute after:inset-0 after:rounded-[20px] after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-red/40"
           >
-            {h.statuses[row.status] ?? row.status}
-          </span>
-          <span className="flex items-center gap-1 font-display text-base font-extrabold text-ink">
-            <Riyal className="h-3.5 w-3.5 text-red" />
-            {row.totalSar}
-          </span>
-
-          {/* The whole feature. Absent — not disabled — once the window lapses.
-              A pill in the corner the reference line leaves empty, rather than
-              a full-width bar: the bar made every card with a refill a row
-              taller than its neighbour. Still the one red thing on the card.
-
-              The countdown and price are deliberately NOT here: they come back
-              from the server only after the emailed code is verified, so a
-              forwarded reference alone reveals nothing about the offer. */}
-          {row.hasRefill && (
-            <button
-              type="button"
-              onClick={onOpenRefill}
-              className="relative z-10 -mt-0.5 inline-flex items-center gap-1 rounded-full bg-red-grad px-3 py-1 text-[11px] font-bold text-white transition-opacity hover:opacity-90"
-            >
-              {h.refillAvailable}
-              <span aria-hidden className="rtl:rotate-180">›</span>
-            </button>
-          )}
-        </div>
+            {title}
+          </button>
+        </h2>
+        <span
+          className={`ms-auto shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold ${
+            STATUS_TONE[row.status] ?? "bg-black/[0.06] text-ink/60"
+          }`}
+        >
+          {h.statuses[row.status] ?? row.status}
+        </span>
       </div>
 
-      {/* Absent rather than disabled once the window shuts, like the refill
-          button above — but the deadline stays on screen either way, so a
-          customer who lost the option can see what they missed instead of
-          wondering where the buttons went. */}
-      {row.canCancel && (
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mt-1 flex items-center gap-3">
+        <p className="min-w-0 flex-1 truncate text-[13px] text-ink/55">
+          {formatDateLabel(row.startsAt.slice(0, 10), lang)}
+          {row.ticketNo && (
+            <>
+              {" · "}
+              {h.ticket}{" "}
+              <span className="font-semibold text-ink" dir="ltr">
+                {row.ticketNo}
+              </span>
+            </>
+          )}
+        </p>
+        <span className="flex shrink-0 items-center gap-1 font-display text-base font-extrabold text-ink">
+          <Riyal className="h-3.5 w-3.5 text-red" />
+          {row.totalSar}
+        </span>
+      </div>
+
+      {/* The badges, then the reference and the deadline, which stays on
+          screen either way so a customer who lost the buttons sees why. Down
+          here rather than beside the title, which a phone would squeeze to
+          nothing. A fixed height, so a badge doesn't make the card taller. */}
+      <div className="mt-1 flex h-5 items-center gap-2">
+        {row.isRefill && (
+          <span className="shrink-0 rounded-full bg-[#f7e8e8] px-2.5 py-0.5 text-[10px] font-semibold text-red">
+            {h.refillBadge}
+          </span>
+        )}
+        {/* One reference now opens the whole party, so two cards appear
+            where the customer quoted one code. Without this badge that
+            reads like a duplicate. */}
+        {row.groupSize > 1 && (
+          <span className="shrink-0 rounded-full bg-[#e6f0f5] px-2.5 py-0.5 text-[10px] font-semibold text-[#2c6a88]">
+            {h.groupBadge}
+          </span>
+        )}
+        <p className="min-w-0 truncate text-[11px] text-ink/40" title={changeNote ?? undefined}>
+          <span dir="ltr">{row.code}</span>
+          {changeNote && ` · ${changeNote}`}
+        </p>
+      </div>
+
+      {/* The footer: what she can do with it, inline, else what the whole card
+          already does. `mt-auto` keeps it on the bottom edge of a stretched
+          card, and the fixed height keeps a card with buttons the size of one
+          without. A live booking can be changed and a finished one refilled,
+          never both, so there is only ever one of the three. */}
+      <div className="mt-auto flex h-11 items-end gap-2 border-t border-black/[0.06] pt-3">
+        {row.canCancel ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setPicking(true)}
+              disabled={busy !== null}
+              className="relative z-10 rounded-full px-3 py-1 text-[11px] font-bold text-ink ring-1 ring-black/[0.1] transition-colors hover:ring-red/40 disabled:opacity-40"
+            >
+              {busy === "reschedule" ? h.rescheduling : h.reschedule}
+            </button>
+            <button
+              type="button"
+              onClick={onCancelClick}
+              disabled={busy !== null}
+              className="relative z-10 rounded-full bg-red/[0.07] px-3 py-1 text-[11px] font-bold text-red transition-colors hover:bg-red/[0.12] disabled:opacity-40"
+            >
+              {busy === "cancel" ? h.cancelling : h.cancel}
+            </button>
+          </>
+        ) : row.hasRefill ? (
+          // The countdown and price are deliberately NOT here: they come back
+          // from the server only after the emailed code is verified, so a
+          // forwarded reference alone reveals nothing about the offer.
           <button
             type="button"
-            onClick={() => setPicking(true)}
-            disabled={busy !== null}
-            className="relative z-10 rounded-[12px] border border-black/[0.08] px-4 py-2 text-[13px] font-semibold text-ink transition-colors hover:border-red/40 disabled:opacity-40"
+            onClick={onOpenRefill}
+            className="relative z-10 inline-flex items-center gap-1 rounded-full bg-red-grad px-3 py-1 text-[11px] font-bold text-white transition-opacity hover:opacity-90"
           >
-            {busy === "reschedule" ? h.rescheduling : h.reschedule}
+            {h.refillAvailable}
+            <span aria-hidden className="rtl:rotate-180">
+              ›
+            </span>
           </button>
-          <button
-            type="button"
-            onClick={onCancelClick}
-            disabled={busy !== null}
-            className="relative z-10 rounded-[12px] px-4 py-2 text-[13px] font-semibold text-red transition-colors hover:bg-red/[0.06] disabled:opacity-40"
-          >
-            {busy === "cancel" ? h.cancelling : h.cancel}
-          </button>
-        </div>
-      )}
-
-      {/* The deadline stays on screen either way, which is what the note above
-          promises and what this block used to break: gated on `canCancel`, it
-          vanished at the same moment the buttons did, so a customer inside the
-          cutoff got a card with no buttons and no reason. Now the closed case
-          says so, and says what to do instead.
-
-          Only while the appointment is still live. On a cancelled or finished
-          one the status badge has already answered the question. */}
-      {row.canCancel ? (
-        <p className="mt-2 text-[11px] text-ink/40">
-          {h.changeBy} {formatDateLabel(row.cancelBy.slice(0, 10), lang)}
-        </p>
-      ) : row.status === "pending" || row.status === "confirmed" ? (
-        <p className="mt-2 text-[11px] text-ink/45">
-          {h.changeClosed} {formatDateLabel(row.cancelBy.slice(0, 10), lang)}
-          {" · "}
-          {h.changeCallUs}
-        </p>
-      ) : null}
+        ) : (
+          // Not a control: the title's tap layer covers the card. Only says so.
+          <span aria-hidden className="py-1 text-[11px] font-semibold text-ink/45">
+            {h.detailsOpen} <span className="inline-block rtl:rotate-180">›</span>
+          </span>
+        )}
+      </div>
 
       {problem && (
         <p role="alert" className="mt-3 text-[12px] text-red">
