@@ -5,8 +5,8 @@
 // Every page renders its own fixed SiteHeader and starts 120px down beneath it,
 // so a skeleton does the same. Without that the header vanished while a page
 // loaded, and the content dropped 80px when the page arrived. /booking,
-// /account and /my-bookings get their page's own container and columns, so what
-// fills in lands where the grey was.
+// /account, /account/wallet, /my-bookings, /memberships and /gift-card get their
+// page's own container and columns, so what fills in lands where the grey was.
 //
 // One loading.tsx for the whole site, choosing by the address she is going to.
 // A loading.tsx per route flashed the site's generic one first: loaders nest,
@@ -23,7 +23,10 @@ export function SiteSkeleton() {
   const path = usePathname();
   if (path === "/booking") return <BookingSkeleton />;
   if (path === "/account") return <AccountSkeleton />;
+  if (path === "/account/wallet") return <WalletHistorySkeleton />;
   if (path === "/my-bookings") return <MyBookingsSkeleton />;
+  if (path === "/memberships") return <MembershipsSkeleton />;
+  if (path === "/gift-card") return <GiftCardSkeleton />;
   return (
     <SkeletonPage className="max-w-5xl space-y-4">
       <Bone className="h-8 w-56 rounded-xl" />
@@ -137,6 +140,57 @@ function MyBookingsSkeleton() {
         <Bone className="h-[66px] flex-1 rounded-[12px]" />
         <Bone className="h-[46px] w-32 self-end rounded-[12px]" />
       </div>
+    </SkeletonPage>
+  );
+}
+
+/** WalletHistoryView: back link, the balance card with its sources, the filters, the list. */
+function WalletHistorySkeleton() {
+  return (
+    <SkeletonPage className="max-w-[760px]">
+      <Bone className="h-4 w-36 rounded-lg" />
+      <Bone className="mt-4 h-[300px] rounded-[20px]" />
+      <div className="mt-6 flex gap-2">
+        {Array.from({ length: 3 }, (_, i) => (
+          <Bone key={i} className="h-8 w-20 rounded-full" />
+        ))}
+      </div>
+      <Bone className="mt-4 h-[360px] rounded-[20px]" />
+    </SkeletonPage>
+  );
+}
+
+/** PacksView: the title, then the membership cards two across beside how it works. */
+function MembershipsSkeleton() {
+  return (
+    <SkeletonPage className="max-w-page lg:px-16">
+      <Bone className="h-9 w-48 rounded-xl" />
+      <Bone className="mt-2 h-4 w-full max-w-[420px] rounded-lg" />
+      <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_340px]">
+        <div className="grid gap-5 sm:grid-cols-2">
+          {Array.from({ length: 4 }, (_, i) => (
+            <Bone key={i} className="h-[533px] rounded-[20px]" />
+          ))}
+        </div>
+        <div className="space-y-5">
+          <Bone className="h-[227px] rounded-[20px]" />
+          <Bone className="h-[132px] rounded-[20px]" />
+        </div>
+      </div>
+    </SkeletonPage>
+  );
+}
+
+/** GiftCardView: amount, design and details cards beside the card preview and its button. */
+function GiftCardSkeleton() {
+  return (
+    <SkeletonPage className="grid max-w-page gap-8 lg:grid-cols-[1fr_460px] lg:px-16">
+      <div className="space-y-6">
+        <Bone className="h-[146px] rounded-[20px]" />
+        <Bone className="h-[120px] rounded-[20px]" />
+        <Bone className="h-[412px] rounded-[20px]" />
+      </div>
+      <Bone className="h-[430px] rounded-[24px]" />
     </SkeletonPage>
   );
 }
