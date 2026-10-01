@@ -71,6 +71,7 @@ export function toMemberSelection(
     removalTypeId: g.removal,
     designId: design?.id ?? null,
     service: service ? pick(service.name, lang) : null,
+    serviceImg: service?.img ?? null,
     addons: addons.map((a) => pick(a.name, lang)),
     removal: removal ? pick(removal.name, lang) : null,
     design: g.design,

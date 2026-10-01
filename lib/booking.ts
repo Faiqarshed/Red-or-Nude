@@ -83,6 +83,8 @@ export type MemberSelection = {
 
   // Display labels, captured in the language the customer booked in.
   service: string | null;
+  /** The service's catalogue picture, for the checkout's summary. */
+  serviceImg?: string | null;
   addons: string[];
   removal: string | null;
   design: string | null;
