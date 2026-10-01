@@ -73,6 +73,7 @@ function sample(lang: "ar" | "en"): InvoiceData {
         ],
       },
     ],
+    giftCardLeft: 2_000,
   };
 }
 

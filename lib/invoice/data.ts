@@ -29,6 +29,7 @@ import { discountParts } from "@/lib/money";
 import { getSettings } from "@/lib/settings";
 import type { PaymentMethod } from "@/lib/payments";
 import { membershipsLeft, packsSpentOn, type MembershipLeft } from "@/lib/packs";
+import { giftCardLeftAfter } from "@/lib/wallet";
 
 export type InvoiceLine = { label: Localized; amountHalalas: number };
 
@@ -87,6 +88,11 @@ export type InvoiceData = {
    * the booking the credit paid for is confirmed, so it is not sent twice.
    */
   memberships: MembershipLeft[];
+  /**
+   * What is left of the gift card a guest paid with (giftCardLeftAfter): it
+   * waits in her email's wallet, and this email tells her to sign in for it.
+   */
+  giftCardLeft: number;
 };
 
 /**
@@ -221,5 +227,6 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
     totalHalalas: sum((g) => g.totalHalalas),
     taxInvoiceUrl: typeof invoiceUrl === "string" ? invoiceUrl : null,
     memberships,
+    giftCardLeft: await giftCardLeftAfter(anchor.id),
   };
 }

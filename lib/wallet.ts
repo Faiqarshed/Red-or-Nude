@@ -10,7 +10,7 @@
 // index on that table rather than by a read before it.
 
 import "server-only";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { db, type Tx } from "@/lib/db";
 import { bookings, customers, giftCards, giftCardTxns, payments, walletDecisions, walletTxns } from "@/lib/db/schema";
 
@@ -163,6 +163,25 @@ export async function giftCardValue(
 ): Promise<{ ok: true; halalas: number } | Extract<GiftCardClaim, { ok: false }>> {
   const r = await usableCard(db, typed, email.trim().toLowerCase(), { forUpdate: false, signedIn });
   return r.ok ? { ok: true, halalas: r.halalas } : r;
+}
+
+/**
+ * What is left of the gift card a guest paid this booking with, or 0. Her
+ * booking email says it waits for her. Only a guest's spend is tagged with
+ * its card, so a signed-in booking has none.
+ */
+export async function giftCardLeftAfter(bookingId: string): Promise<number> {
+  const [spend] = await db
+    .select({ cardId: walletTxns.giftCardId })
+    .from(walletTxns)
+    .where(and(eq(walletTxns.bookingId, bookingId), eq(walletTxns.reason, "spend"), isNotNull(walletTxns.giftCardId)))
+    .limit(1);
+  if (!spend?.cardId) return 0;
+  const [{ left }] = await db
+    .select({ left: sql<number>`coalesce(sum(${walletTxns.deltaHalalas}), 0)::int` })
+    .from(walletTxns)
+    .where(and(eq(walletTxns.giftCardId, spend.cardId), inArray(walletTxns.reason, ["gift-card", "spend", "release"])));
+  return Math.max(0, left);
 }
 
 /**

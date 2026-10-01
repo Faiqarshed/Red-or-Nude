@@ -35,6 +35,7 @@ function invoice(lang: "ar" | "en", discounts: InvoiceData["guests"][number]["di
     totalHalalas: 20_000 - off,
     taxInvoiceUrl: null,
     memberships: [],
+    giftCardLeft: 0,
   };
 }
 
@@ -67,6 +68,20 @@ describe("the booking email's discounts", () => {
     const { text } = renderInvoiceEmail(invoice("ar", [{ kind: "group", halalas: 2_000 }]));
     expect(text).toContain("خصم الحجز الجماعي");
     expect(text).not.toContain("الثنائي");
+  });
+});
+
+describe("a guest's gift card with something left", () => {
+  it("says how much, and to sign in with her email to spend it", () => {
+    const { text, html } = renderInvoiceEmail({ ...invoice("en", [{ kind: "wallet", halalas: 5_000 }]), giftCardLeft: 2_000 });
+    expect(text).toContain("20 SAR is left on your gift card");
+    expect(text).toContain("sara@test.local");
+    expect(html).toContain("/account");
+  });
+
+  it("says nothing when the card is used up", () => {
+    const { text } = renderInvoiceEmail(invoice("en", [{ kind: "wallet", halalas: 5_000 }]));
+    expect(text).not.toContain("left on your gift card");
   });
 });
 

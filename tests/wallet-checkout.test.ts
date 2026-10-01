@@ -13,7 +13,7 @@ import { and, eq, inArray, like } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customers, giftCards, giftCardTxns, walletTxns } from "@/lib/db/schema";
 import { createBookings, releaseWebHold } from "@/lib/bookings";
-import { giftCardValue, walletBalance } from "@/lib/wallet";
+import { giftCardLeftAfter, giftCardValue, walletBalance } from "@/lib/wallet";
 import { vatIncludedIn } from "@/lib/money";
 import { FUTURE, fixtures, reset, type Fixtures } from "./helpers";
 
@@ -164,6 +164,20 @@ describe("a gift card at the booking checkout", () => {
 
     expect(r.totalHalalas).toBe(0);
     expect((await walletBalance(GUEST)).available).toBe(2_000);
+  });
+
+  it("says what is left of the card, for her booking email, and nothing for a signed-in spend", async () => {
+    await credit(GUEST, 3_000);
+    await card("WALL-ETTE-ST00-0010", price + 2_000, GUEST);
+    const r = await book("guest", { giftCardCode: "WALL-ETTE-ST00-0010", walletHalalas: price }, 0);
+    if (!r.ok) throw new Error(r.error);
+    // 2,000 of the card; the 3,000 already on her email is not the card's.
+    expect(await giftCardLeftAfter(r.bookings[0].id)).toBe(2_000);
+
+    await credit(SARA, 5_000);
+    const signedIn = await book("sara", { walletHalalas: 5_000 }, 1);
+    if (!signedIn.ok) throw new Error(signedIn.error);
+    expect(await giftCardLeftAfter(signedIn.bookings[0].id)).toBe(0);
   });
 
   it("works with no other email, and the card is left as it was", async () => {

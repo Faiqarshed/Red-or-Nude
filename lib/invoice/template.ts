@@ -15,6 +15,7 @@ import { formatSAR } from "@/lib/money";
 import { formatDateTime } from "@/lib/time";
 import { membershipHtml, membershipText } from "@/lib/membership-email";
 import { taxInvoiceHtml, taxInvoiceText } from "@/lib/email/shell";
+import { siteOrigin } from "@/lib/site";
 import type { InvoiceData, InvoiceDiscount } from "./data";
 
 const RED = "#b80007";
@@ -45,6 +46,9 @@ const T = {
     total: "الإجمالي المدفوع",
     vatNote: "الأسعار شاملة ضريبة القيمة المضافة.",
     membershipUsed: "استخدمتِ رصيداً من عضويتك. المتبقي لكِ:",
+    giftLeft: (sar: string, email: string) =>
+      `تبقّى ${sar} ر.س في بطاقة الهدية، وهو بانتظارك في محفظتك. سجّلي الدخول بـ ${email} لاستخدامه في زيارتك القادمة.`,
+    giftLeftCta: "سجّلي الدخول",
     footer: "هذه رسالة آلية، يُرجى عدم الرد عليها.",
     methods: { card: "بطاقة ائتمانية", mada: "مدى", stc: "STC Pay", apple: "Apple Pay" },
   },
@@ -69,6 +73,9 @@ const T = {
     total: "Total paid",
     vatNote: "All prices include VAT.",
     membershipUsed: "You used a credit from your membership. Here's what you have left:",
+    giftLeft: (sar: string, email: string) =>
+      `${sar} SAR is left on your gift card, waiting in your wallet. Sign in with ${email} to spend it on your next visit.`,
+    giftLeftCta: "Sign in",
     footer: "This is an automated message — please don't reply.",
     methods: { card: "Credit / debit card", mada: "Mada", stc: "STC Pay", apple: "Apple Pay" },
   },
@@ -227,6 +234,17 @@ ${
       </td></tr>`
     : ""
 }
+${
+  data.giftCardLeft > 0
+    ? `
+      <tr><td style="padding:22px 28px 0;">
+        <div style="background:${CREAM};border-radius:14px;padding:16px 18px;">
+          <p style="margin:0 0 12px;font-size:14px;color:${INK};text-align:${start};">${esc(t.giftLeft(formatSAR(data.giftCardLeft), data.customer.email))}</p>
+          <a href="${esc(`${siteOrigin()}/account`)}" style="display:inline-block;background:${RED};color:#ffffff;text-decoration:none;font-size:13px;font-weight:700;padding:10px 18px;border-radius:10px;">${esc(t.giftLeftCta)}</a>
+        </div>
+      </td></tr>`
+    : ""
+}
       <tr><td style="padding:22px 28px 26px;">
         <div style="border-top:1px solid rgba(0,0,0,0.06);padding-top:16px;">
           ${sellerLines
@@ -276,6 +294,9 @@ ${
     ...taxInvoiceText(lang, data.taxInvoiceUrl, pdfAttached),
     ...(data.memberships.length
       ? ["", t.membershipUsed, ...data.memberships.flatMap((m) => membershipText(m, lang))]
+      : []),
+    ...(data.giftCardLeft > 0
+      ? ["", t.giftLeft(formatSAR(data.giftCardLeft), data.customer.email), `${siteOrigin()}/account`]
       : []),
     "",
     ...sellerLines,
