@@ -64,7 +64,12 @@ type Credit = {
 type MoneyWallet = {
   available: number;
   history: { reason: string; halalas: number; at: string }[];
+  /** Every movement she has, of which `history` is the latest. */
+  count: number;
 };
+
+/** Movements the wallet card shows; /account/wallet has every one. */
+const MONEY_PREVIEW = 5;
 
 export default function AccountView({
   customer,
@@ -571,7 +576,7 @@ function Wallet({ wallet }: { wallet: MoneyWallet }) {
         <div className="px-6 pb-6">
           <h3 className="text-[12px] font-semibold uppercase tracking-wider text-ink/45">{a.moneyHistory}</h3>
           <ul className="mt-2 space-y-2">
-            {wallet.history.map((h, i) => (
+            {wallet.history.slice(0, MONEY_PREVIEW).map((h, i) => (
               <li key={i} className="flex items-center justify-between gap-3 text-[13px]">
                 <span className="min-w-0 truncate text-ink/70">
                   {reasons[h.reason] ?? h.reason}
@@ -584,6 +589,15 @@ function Wallet({ wallet }: { wallet: MoneyWallet }) {
               </li>
             ))}
           </ul>
+          {wallet.count > MONEY_PREVIEW && (
+            <Link
+              href="/account/wallet"
+              className="mt-3 inline-block text-[12px] font-semibold text-red transition-opacity hover:opacity-70"
+            >
+              {a.moneyShowAll.replace("{n}", String(wallet.count))}{" "}
+              <span aria-hidden className="inline-block rtl:rotate-180">›</span>
+            </Link>
+          )}
         </div>
       )}
     </section>

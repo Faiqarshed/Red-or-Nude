@@ -54,6 +54,7 @@ describe("the wallet on her account", () => {
         { reason: "spend", halalas: -10_000, at: "2026-01-01T09:00:02.000Z" },
         { reason: "cancel-customer", halalas: 30_000, at: "2026-01-01T09:00:01.000Z" },
       ],
+      count: 2,
     });
   });
 
@@ -81,7 +82,7 @@ describe("the wallet on her account", () => {
     expect((await accountWallet(EMAIL))?.available).toBe(0);
   });
 
-  it("shows only her own email's rows, and only the last ten", async () => {
+  it("shows only her own email's rows, the last ten, and how many there are in all", async () => {
     for (let s = 0; s < 12; s++) await row(100, "correction", s);
     await row(99_900, "correction", 30, "someone-else@test.local");
 
@@ -90,6 +91,9 @@ describe("the wallet on her account", () => {
     expect(mine?.history).toHaveLength(10);
     expect(mine?.history.every((h) => h.halalas === 100)).toBe(true);
     expect(mine?.history[0].at).toBe("2026-01-01T09:00:11.000Z");
+    // The header lists a few and says how many more; the account lists them all.
+    expect(mine?.count).toBe(12);
+    expect((await accountWallet(EMAIL, 50))?.history).toHaveLength(12);
   });
 });
 

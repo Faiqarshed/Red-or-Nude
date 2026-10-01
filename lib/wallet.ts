@@ -45,15 +45,20 @@ const SOURCE: Record<(typeof walletTxns.$inferSelect)["reason"], "giftCards" | "
 
 /**
  * Her wallet for the account screen and the header: what she can spend, the
- * sum of her movements by where they came from, and her last ten movements,
- * newest first.
+ * sum of her movements by where they came from, her last `limit` movements,
+ * newest first, and how many there are in all — so a screen that lists fewer
+ * can say so rather than leave a sum nothing on it explains.
  */
-export async function accountWallet(ownerEmail: string) {
+export async function accountWallet(ownerEmail: string, limit = 10) {
   const email = ownerEmail.trim().toLowerCase();
   const [{ available }, byReason, rows] = await Promise.all([
     walletBalance(email),
     db
-      .select({ reason: walletTxns.reason, halalas: sql<number>`sum(${walletTxns.deltaHalalas})::int` })
+      .select({
+        reason: walletTxns.reason,
+        halalas: sql<number>`sum(${walletTxns.deltaHalalas})::int`,
+        rows: sql<number>`count(*)::int`,
+      })
       .from(walletTxns)
       .where(eq(walletTxns.ownerEmail, email))
       .groupBy(walletTxns.reason),
@@ -62,14 +67,19 @@ export async function accountWallet(ownerEmail: string) {
       .from(walletTxns)
       .where(eq(walletTxns.ownerEmail, email))
       .orderBy(desc(walletTxns.createdAt), desc(walletTxns.id))
-      .limit(10),
+      .limit(limit),
   ]);
   const sources = { giftCards: 0, refunds: 0, spent: 0, adjustments: 0 };
-  for (const r of byReason) sources[SOURCE[r.reason]] += r.halalas;
+  let count = 0;
+  for (const r of byReason) {
+    sources[SOURCE[r.reason]] += r.halalas;
+    count += r.rows;
+  }
   return {
     available,
     sources,
     history: rows.map((r) => ({ reason: r.reason, halalas: r.halalas, at: r.createdAt.toISOString() })),
+    count,
   };
 }
 

@@ -41,7 +41,7 @@ export default async function AccountPage() {
     // can quietly start revealing more than the other.
     bookingSummaries({ customerId: customer.id }),
     // Her money, by the email she signs in with: credit made signed out under
-    // that address is hers too. Null before launch, so none of it shows.
+    // that address is hers too. The latest few; /account/wallet has them all.
     accountWallet(customer.email),
   ]);
 

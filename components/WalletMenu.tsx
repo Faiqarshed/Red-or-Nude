@@ -14,6 +14,9 @@ import { riyadhDateKey } from "@/lib/time";
 import type { AccountWallet } from "@/lib/wallet";
 import { Riyal, WalletIcon } from "@/components/icons";
 
+/** Movements the menu lists; /account/wallet lists them all. */
+const MENU_ROWS = 4;
+
 export default function WalletMenu() {
   const { c, dir, lang } = useI18n();
   const a = c.account;
@@ -101,7 +104,7 @@ export default function WalletMenu() {
             <div className="border-t border-black/[0.06] px-5 py-4">
               <h3 className="text-[12px] font-semibold uppercase tracking-wider text-ink/45">{a.moneyHistory}</h3>
               <ul className="mt-2 space-y-1.5">
-                {wallet.history.slice(0, 4).map((h, i) => (
+                {wallet.history.slice(0, MENU_ROWS).map((h, i) => (
                   <Row
                     key={i}
                     label={reasons[h.reason] ?? h.reason}
@@ -114,11 +117,13 @@ export default function WalletMenu() {
           )}
 
           <Link
-            href="/account"
+            href={wallet.count > MENU_ROWS ? "/account/wallet" : "/account"}
             onClick={() => setOpen(false)}
             className="block border-t border-black/[0.06] px-5 py-3 text-[13px] font-semibold text-red hover:bg-red/[0.04]"
           >
-            {a.moneySeeAll}
+            {/* Says when it listed fewer than there are, so a sum above is
+                never left with nothing here to explain it. */}
+            {wallet.count > MENU_ROWS ? a.moneySeeAllCount.replace("{n}", String(wallet.count)) : a.moneySeeAll}
           </Link>
         </div>
       )}
