@@ -48,6 +48,7 @@ const PURCHASE = "lib/payments/purchase.ts";
 const LOYALTY = "lib/loyalty.ts";
 const MONEY = "lib/money.ts";
 const PAYLINES = "lib/payments/lines.ts";
+const SPAY = "lib/payments/streampay.ts";
 const GIFTADMIN = "app/(admin)/admin/(shell)/gift-cards/actions.ts";
 const GIFTROUTE = "app/api/gift-cards/route.ts";
 
@@ -1002,12 +1003,26 @@ const mutations = [
     expect: "tests/cancel-credit.test.ts",
     apply: () => mutate(WALLET, "    if (!b.customerEmail) {", "    if (!b.customerEmail && false) {"),
   },
+
+  // ---- a coupon name StreamPay already has -----------------------------------
+  {
+    name: "coupon: fail the checkout when StreamPay already has that name",
+    expect: "tests/payment-hardening.test.ts",
+    apply: () => mutate(SPAY, "    if (!there) throw err;", "    throw err;"),
+  },
+  {
+    name: "subtle: use the coupon found by name without mending it",
+    expect: "tests/payment-hardening.test.ts",
+    apply: () =>
+      mutate(SPAY, "    if (there.is_active === false || !couponMatches(there, d)) await repairCoupon(there.id, name, d);", "    if (false) await repairCoupon(there.id, name, d);"),
+  },
+
 ];
 
 const touched = [
   CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, LINES, TREAT,
   DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS, DECIDE, RBAC, PURCHASE, LOYALTY, MONEY,
-  PAYLINES, GIFTADMIN, GIFTROUTE,
+  PAYLINES, GIFTADMIN, GIFTROUTE, SPAY,
 ];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));

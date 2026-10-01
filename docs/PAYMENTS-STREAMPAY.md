@@ -56,6 +56,14 @@ ever charged a number the screen didn't show.
   in StreamPay's dashboard. The self-heal limits a mistake to one refused
   checkout; it does not make editing there safe.
 - Coupons are made the first time a label + amount pair is seen, then reused.
+  StreamPay refuses a second coupon with a name it already has, and our table
+  can lack one it has (another database on the same account, a restore, two
+  checkouts making it at once). The checkout then finds it there by name and
+  uses it. If someone switched it off or changed its amount in their dashboard,
+  it is put back to what its name says (switched on, that fixed amount) and the
+  owner is emailed: a second coupon cannot take the name, and a "(2)" must never
+  reach her invoice. Unlike a product, a coupon has no versions to retire — its
+  amount is in its name.
 - Promo rules (dates, max uses, minimum spend) stay entirely in our app — StreamPay
   coupons have none of those fields.
 - Prices are VAT-inclusive on both sides.

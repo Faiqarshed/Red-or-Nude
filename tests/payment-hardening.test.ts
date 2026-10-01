@@ -964,3 +964,134 @@ describe("the payment log", () => {
     expect(refused.length).toBeGreaterThan(0);
   });
 });
+
+// StreamPay refuses a second coupon with the same name ("Coupon with name …
+// already exists"). Our table can lack a coupon StreamPay has: another database
+// on the same account, a restore, or two checkouts making it at the same moment.
+// The checkout must then find it there and use it, never fail.
+describe("a coupon StreamPay already has", () => {
+  const env = process.env as Record<string, string | undefined>;
+  beforeEach(() => {
+    env.STREAMPAY_API_KEY = "k";
+    env.STREAMPAY_API_SECRET = "s";
+  });
+  const reply = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+
+  type Coupon = { id: string; name: string; discount_value: string; currency: string; is_percentage: boolean; is_active: boolean };
+
+  /** StreamPay's coupons, with its one rule that matters here: a name is unique. */
+  function fakeStreamPay(start: Coupon[] = [], refuseOther = false) {
+    const coupons = [...start];
+    const calls: string[] = [];
+    const linkCoupons: string[][] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const u = new URL(String(url));
+      const path = u.pathname.split("/api/v2")[1];
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      calls.push(`${method} ${path}`);
+      if (method === "POST" && path === "/products") {
+        products.push(`prod-${randomUUID()}`);
+        return reply({ id: products.at(-1), prices: [{ id: "price", is_active: true }] });
+      }
+      if (method === "POST" && path === "/coupons") {
+        await new Promise((r) => setTimeout(r, 20)); // so two checkouts really do meet here
+        if (refuseOther) return new Response(JSON.stringify({ detail: [{ msg: "something else" }] }), { status: 422 });
+        if (coupons.some((c) => c.name === body.name)) {
+          return new Response(JSON.stringify({ detail: `Coupon with name ${body.name} already exists` }), { status: 400 });
+        }
+        const made = { id: `coupon-${randomUUID()}`, currency: "SAR", ...body, discount_value: String(body.discount_value) };
+        coupons.push(made);
+        return reply(made);
+      }
+      if (method === "GET" && path === "/coupons") {
+        const term = u.searchParams.get("search_term") ?? "";
+        return reply({ data: coupons.filter((c) => c.name.includes(term)), pagination: {} });
+      }
+      if (method === "PUT" && path.startsWith("/coupons/")) {
+        const c = coupons.find((x) => x.id === path.slice(9))!;
+        Object.assign(c, body, body.discount_value !== undefined ? { discount_value: String(body.discount_value) } : {});
+        return reply(c);
+      }
+      if (method === "POST" && path === "/payment_links") {
+        linkCoupons.push(body.coupons ?? []);
+        const items = body.items as { quantity: number }[];
+        return reply({ id: `link-${randomUUID()}`, url: "https://pay.test/l", status: "ACTIVE", amount_in_smallest_unit: 4000 * items.length });
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+    return { coupons, calls, linkCoupons };
+  }
+
+  let label: string;
+  /** Products the fake made: two checkouts at once make two, and one is retired. */
+  const products: string[] = [];
+  const name = () => `${label} −10.00`;
+  const checkout = () =>
+    streampayDriver.charge({
+      ref: randomUUID(),
+      amountHalalas: 4000,
+      lines: [{ key: `svc-under-test:${label}`, name: "Gel", priceHalalas: 5000, qty: 1 }],
+      discounts: [{ label, halalas: 1000 }],
+      title: "t",
+      payer: {},
+      expiresAt: new Date(Date.now() + 600_000),
+      returnUrl: "https://example.test/r",
+    });
+  const saved = async () =>
+    (await db.select().from(streampayIds).where(like(streampayIds.key, `%:coupon:${label}:1000`)))[0]?.streampayId ?? null;
+
+  beforeEach(() => {
+    label = `Points ${randomUUID().slice(0, 8)}`;
+  });
+  afterEach(async () => {
+    await db.delete(streampayIds).where(like(streampayIds.key, `%${label}%`));
+    for (const id of products.splice(0)) await db.delete(streampayIds).where(like(streampayIds.key, `%:retire:${id}`));
+  });
+
+  it("uses the one StreamPay has under that name, and remembers it", async () => {
+    const theirs = { id: "coupon-theirs", name: name(), discount_value: "10.00", currency: "SAR", is_percentage: false, is_active: true };
+    const sp = fakeStreamPay([theirs]);
+
+    expect((await checkout()).status).toBe("pending");
+    expect(sp.linkCoupons).toEqual([["coupon-theirs"]]);
+    expect(await saved()).toBe("coupon-theirs");
+    // Nothing was changed there, and the next checkout asks nothing.
+    expect(sp.calls.filter((c) => c.startsWith("PUT"))).toEqual([]);
+    sp.calls.length = 0;
+    expect((await checkout()).status).toBe("pending");
+    expect(sp.calls.filter((c) => c.includes("/coupons"))).toEqual([]);
+  });
+
+  it("gives two checkouts making the same coupon at once that one coupon", async () => {
+    const sp = fakeStreamPay();
+
+    const [a, b] = await Promise.all([checkout(), checkout()]);
+    expect([a.status, b.status]).toEqual(["pending", "pending"]);
+    expect(sp.coupons).toHaveLength(1);
+    expect(sp.linkCoupons).toEqual([[sp.coupons[0].id], [sp.coupons[0].id]]);
+  });
+
+  it("switches it back on and puts its amount back when it was changed in their dashboard, and tells the owner", async () => {
+    // Switched off, and set to 15 SAR, under a name that says 10.
+    const theirs = { id: `coupon-${randomUUID()}`, name: name(), discount_value: "15.00", currency: "SAR", is_percentage: false, is_active: false };
+    const sp = fakeStreamPay([theirs]);
+
+    expect((await checkout()).status).toBe("pending");
+    expect(sp.coupons[0]).toMatchObject({ is_active: true, discount_value: "10.00", is_percentage: false, name: name() });
+    expect(sp.linkCoupons).toEqual([[theirs.id]]);
+    const alerts = await db
+      .select()
+      .from(paymentEvents)
+      .where(sql`${paymentEvents.kind} = 'alert' and ${paymentEvents.detail} ->> 'key' = ${`coupon-repaired:${theirs.id}`}`);
+    expect(alerts).toHaveLength(1);
+  });
+
+  it("still fails a refusal that is not about the name, rather than guessing", async () => {
+    const sp = fakeStreamPay([], true);
+
+    await expect(checkout()).rejects.toThrow(/422/);
+    expect(sp.linkCoupons).toEqual([]);
+    expect(await saved()).toBeNull();
+  });
+});

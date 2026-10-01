@@ -129,9 +129,9 @@ async function lookup(key: string) {
 }
 
 /**
- * Record a StreamPay id under our key. Two checkouts creating the same coupon
- * at the same moment both succeed at StreamPay; the first insert wins here and
- * the loser's object is left unused, which costs nothing.
+ * Record a StreamPay id under our key. Two checkouts that made the same object
+ * at the same moment both record it; the first insert wins, and the second
+ * gets the id that was kept.
  */
 async function remember(key: string, streampayId: string, priceId: string | null, signature: string | null) {
   await db.insert(streampayIds).values({ key: scoped(key), streampayId, priceId, signature }).onConflictDoNothing();
@@ -354,14 +354,54 @@ async function ensureCoupon(d: Discount): Promise<string> {
   const key = couponKey(d);
   const have = await lookup(key);
   if (have) return have.streampayId;
-  const made = await api<{ id: string }>("POST", "/coupons", {
-    name: `${d.label} −${sar(d.halalas)}`.slice(0, 80),
-    discount_value: sar(d.halalas),
-    currency: "SAR",
-    is_percentage: false,
-    is_active: true,
-  });
-  return remember(key, made.id, null, null);
+  const name = `${d.label} −${sar(d.halalas)}`.slice(0, 80);
+  try {
+    const made = await api<{ id: string }>("POST", "/coupons", {
+      name,
+      discount_value: sar(d.halalas),
+      currency: "SAR",
+      is_percentage: false,
+      is_active: true,
+    });
+    return remember(key, made.id, null, null);
+  } catch (err) {
+    // StreamPay refuses a second coupon with a name it already has, and our
+    // table can lack one it has: another database on the same account, a
+    // restore, or another checkout making it this moment. Find it there and use
+    // it. Asked rather than read from the refusal, whose wording their docs do
+    // not give; nothing by that name, and the refusal stands.
+    if (!(err instanceof StreamPayError) || err.status >= 500) throw err;
+    const there = (
+      await api<{ data: (StreamObject & { id: string; name: string; currency?: string })[] }>(
+        "GET",
+        `/coupons?${new URLSearchParams({ search_term: name, limit: "100" })}`,
+      )
+    ).data.find((c) => c.name === name && (c.currency ?? "SAR") === "SAR");
+    if (!there) throw err;
+    if (there.is_active === false || !couponMatches(there, d)) await repairCoupon(there.id, name, d);
+    return remember(key, there.id, null, null);
+  }
+}
+
+/**
+ * Put one of our coupons back to what its name says: switched on, that fixed
+ * amount. Only reached when someone changed it in StreamPay's dashboard, which
+ * staff must not do (docs/PAYMENTS-STREAMPAY.md). The name is the truth — a
+ * coupon called "−10.00" that takes 15 off is wrong for every checkout using it,
+ * open ones included — and a second coupon cannot take the name, so the one
+ * there is mended rather than replaced. The owner is told, because it means
+ * StreamPay was changed by hand.
+ */
+async function repairCoupon(id: string, name: string, d: Discount): Promise<void> {
+  await api("PUT", `/coupons/${id}`, { discount_value: sar(d.halalas), is_percentage: false, is_active: true });
+  await logPaymentEvent("coupon-repaired", { couponId: id, name });
+  await alertOwner(
+    `coupon-repaired:${id}`,
+    "A StreamPay coupon was changed in their dashboard",
+    `"${name}" (${id}) was switched off or its amount changed in StreamPay's dashboard. ` +
+      `It has been put back to ${sar(d.halalas)} SAR off and switched on, so checkouts keep working. ` +
+      `Coupons must only change through our app.`,
+  );
 }
 
 // ----------------------------------------------------------------- customers --
