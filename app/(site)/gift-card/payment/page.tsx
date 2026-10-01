@@ -200,9 +200,9 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
 
           {!paying && (
             <>
-              {credit.toggle && (
+              {credit.field && (
                 <div className="mt-4 space-y-2">
-                  {credit.toggle}
+                  {credit.field}
                   {credit.halalas > 0 && (
                     <p className="flex items-center justify-between px-1 text-[13px] font-semibold text-ink">
                       <span>{p.toPayNow}</span>

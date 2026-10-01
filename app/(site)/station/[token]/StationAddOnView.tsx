@@ -418,7 +418,7 @@ export default function StationAddOnView({
           className="fixed inset-x-0 bottom-0 z-40 border-t border-black/[0.06] bg-white/95 px-4 pt-3 backdrop-blur"
           style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 12px)" }}
         >
-          {tab === "now" && credit.toggle && <div className="mx-auto mb-3 max-w-[620px]">{credit.toggle}</div>}
+          {tab === "now" && credit.field && <div className="mx-auto mb-3 max-w-[620px]">{credit.field}</div>}
           <div className="mx-auto flex max-w-[620px] items-center justify-between gap-3">
             <div className="min-w-0">
               {tab === "now" ? (

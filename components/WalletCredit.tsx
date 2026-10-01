@@ -125,7 +125,7 @@ export function useWalletCredit(priceHalalas: number) {
       if (typeof balance === "number") setAvailable(balance);
     },
     /** The field, or nothing when there is no credit to use. */
-    toggle:
+    field:
       available > 0 && priceHalalas > 0 ? (
         <WalletAmount
           available={available}
