@@ -627,6 +627,7 @@ const ar = {
     noHistory: "لا توجد حجوزات",
     noShows: "مرات عدم الحضور",
     empty: "لا توجد عميلات بعد",
+    noMatch: "لا توجد عميلات تطابق البحث",
     never: "لا يوجد",
     phoneTaken: "رقم الجوال هذا مسجّل لعميلة أخرى. ابحثي عنه أولاً بدلاً من تكراره.",
     accountEmailNote:
@@ -1473,6 +1474,7 @@ const en: AdminStrings = {
     noHistory: "No bookings",
     noShows: "No-shows",
     empty: "No customers yet",
+    noMatch: "No customers match that search",
     never: "Never",
     phoneTaken: "This mobile already belongs to another customer. Search for it instead of creating a duplicate.",
     accountEmailNote:
