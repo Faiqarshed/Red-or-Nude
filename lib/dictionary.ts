@@ -158,8 +158,10 @@ const ar = {
     paying: "جارٍ الدفع…",
     declined: "لم تتم عملية الدفع ولم يُخصم أي مبلغ. تأكدي من بيانات البطاقة وحاولي مرة أخرى.",
     failed: "حدث خطأ. تحققي من حسابك — إن لم يظهر الرصيد، حاولي مرة أخرى.",
+    unconfirmed: "لم نتمكن من تأكيد الدفع بعد. لا تدفعي مرة أخرى — تظهر العضوية في حسابك فور تأكيد العملية.",
     paidNotGranted:
-      "ربما تمت عملية الدفع، لكن لم نتمكن من تأكيد عضويتك. لا تعيدي الدفع — تواصلي مع الصالون وسنحلّ الأمر.",
+      "لم نتمكن من إضافة العضوية إلى حسابك، لذلك يتم استرداد مبلغك بالكامل. يصل عادةً إلى بطاقتك خلال ٥–١٤ يوم عمل حسب البنك، ويعود ما استخدمتِه من المحفظة إليها.",
+    paySub: "أدخلي بيانات بطاقتك أو مدى أو استخدمي Apple Pay. تُضاف العضوية إلى حسابك فور إتمام الدفع.",
     bought: "عضويتك جاهزة",
     boughtNote: "احجزي أياً من هذه الخدمات وأنتِ مسجّلة الدخول، وسيُخصم الرصيد تلقائياً.",
     bookNow: "احجزي الآن",
@@ -813,8 +815,10 @@ const en: Content = {
     paying: "Paying…",
     declined: "Payment didn't go through and nothing was charged. Check your card details and try again.",
     failed: "Something went wrong. Check your account — if the credits aren't there, try again.",
+    unconfirmed: "We couldn't confirm your payment yet. Please don't pay again — the membership appears in your account once it goes through.",
     paidNotGranted:
-      "Your payment may have gone through, but we couldn't confirm your membership. Please don't pay again — contact the salon and we'll sort it out.",
+      "We couldn't add the membership to your account, so your payment is being refunded in full. It usually reaches your card within 5–14 working days, and any wallet credit you used goes back to your wallet.",
+    paySub: "Enter your card or mada details, or use Apple Pay. The membership is added to your account the moment it goes through.",
     bought: "Your membership is ready",
     boughtNote: "Book any of these services while signed in and the credit comes off by itself.",
     bookNow: "Book now",
