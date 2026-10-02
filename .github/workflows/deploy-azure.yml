@@ -1,5 +1,5 @@
 # Deploys to Azure App Service on every push to `staging`, into the `staging`
-# slot of redornude-prod. Production (`main`) is added once its settings exist.
+# slot of the ron-prod Web App. Production (`main`) is added once its settings exist.
 #
 # The zip holds only tracked files (git archive), so .env files never leave the
 # repo. Azure installs and builds it itself (SCM_DO_BUILD_DURING_DEPLOYMENT=true).
@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: staging
-      url: https://redornude-prod-staging.azurewebsites.net
+      url: https://ron-prod-staging.azurewebsites.net
 
     steps:
       - uses: actions/checkout@v4
@@ -50,9 +50,33 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # Azure's front door drops a single request after ~4 minutes while the
+      # build (npm install + next build) takes 5–15, so start the deploy without
+      # waiting, then poll its status until it really finishes.
       - name: Deploy to staging slot
         run: |
           az webapp deploy \
-            -g rg-redornude-prod -n redornude-prod --slot staging \
-            --src-path ron-app.zip --type zip \
-            --timeout 1800000
+            -g rg-redornude-prod -n ron-prod --slot staging \
+            --src-path ron-app.zip --type zip --async true
+
+      - name: Wait for the build to finish
+        run: |
+          site=$(az webapp show -g rg-redornude-prod -n ron-prod --query id -o tsv)
+          api="https://management.azure.com${site}/slots/staging/deployments"
+          v="api-version=2022-03-01"
+          sleep 20
+          id=$(az rest --method get --url "$api?$v" \
+            --query "sort_by(value, &properties.start_time)[-1].name" -o tsv)
+          id=${id##*/}
+          echo "Deployment $id"
+          # 4 = deployed. Other values (including a temporary 3 while the build
+          # output is copied) mean it's still going, so only give up after 30 min.
+          for i in $(seq 1 60); do
+            status=$(az rest --method get --url "$api/$id?$v" --query properties.status -o tsv)
+            echo "$(date -u +%H:%M:%S) status=$status"
+            [ "$status" = "4" ] && exit 0
+            sleep 30
+          done
+          az rest --method get --url "$api/$id/log?$v" \
+            --query "value[].properties.message" -o tsv | tail -40
+          exit 1
