@@ -78,6 +78,8 @@ export default function RescheduleDialog({
       const res = await fetch(
         `/api/availability?branchId=${branchId}&date=${date}&duration=${durationMin}&walkIn=1`,
       );
+      // A 500 or a throttle is a failure, not a day with no times.
+      if (!res.ok) throw new Error(String(res.status));
       const body = await res.json();
       setSlots(Array.isArray(body.slots) ? body.slots : []);
     } catch {
