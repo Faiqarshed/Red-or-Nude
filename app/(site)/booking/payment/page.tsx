@@ -26,6 +26,7 @@ import { isValidSaudiMobile, toNationalDigits, toStoredPhone } from "@/lib/phone
 import { showPaidOn } from "@/lib/paid-handoff";
 import { pick } from "@/lib/localized";
 import { pointsEarned, redeemable, type LoyaltyRules } from "@/lib/rewards";
+import { noticeOf, type PayNotice } from "@/lib/payments/notice";
 
 // Figma: Desktop-2 payment step (276:1902 / 276:6624) + success modal (276:6765).
 //
@@ -59,14 +60,14 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
    * closes, above the checkout, so the reason is still there when she retries.
    */
   const [payNotice, setPayNotice] = useState<string | null>(null);
-  /** Set only when she was charged and refunded; otherwise the modal says nothing was. */
-  const [noticeTitle, setNoticeTitle] = useState<string | null>(null);
+  /** What it means for her money, which titles the modal (lib/payments/notice.ts). */
+  const [noticeKind, setNoticeKind] = useState<PayNotice>("declined");
   const [noticeOpen, setNoticeOpen] = useState(false);
   /** Back on a checkout she had open (a reload): said calmly above it, never as a failure. */
   const [resumed, setResumed] = useState(false);
-  const notifyPay = (message: string, title: string | null = null) => {
+  const notifyPay = (message: string, kind: PayNotice = "declined") => {
     setPayNotice(message);
-    setNoticeTitle(title);
+    setNoticeKind(kind);
     setNoticeOpen(true);
   };
   /** Set once the hold exists, so a retry after a decline doesn't re-book. */
@@ -640,6 +641,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
           // but with four guests at four hours, "that time has gone" does not
           // say which one to change. Falls back to the unnamed line for a solo
           // booking, where there is only one time it could be.
+          else if (res.status === 429) setError(p.tooMany);
           else if (res.status === 409) {
             const at = data.guestIndex;
             const who =
@@ -708,17 +710,19 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
   };
 
   const showPayError = (code: string | undefined) => {
-    if (code === "payment-declined") notifyPay(p.declined);
-    else if (code === "expired") {
-      // The hold is gone; a retry would confirm nothing, so send them back.
-      setHeldCode(null);
-      notifyPay(p.expired);
-    } else if (code === "not-delivered") {
-      // Charged after the hold was gone (or the wrong amount), and refunded.
-      setHeldCode(null);
-      notifyPay(p.refunded, p.refundedTitle);
-    } else if (code === "unconfirmed" || code === "in-progress" || code === "unverified") notifyPay(p.unconfirmed);
-    else notifyPay(p.bookingFailed);
+    const kind = noticeOf(code);
+    // The hold is gone — lapsed, or charged after it lapsed and refunded — so a
+    // retry on it would confirm nothing: the next Continue makes a new one.
+    if (kind === "expired" || kind === "refunded") setHeldCode(null);
+    const messages: Record<PayNotice, string> = {
+      declined: p.declined,
+      expired: p.expired,
+      refunded: p.refunded,
+      checking: p.unconfirmed,
+      "too-many": p.tooMany,
+      failed: p.bookingFailed,
+    };
+    notifyPay(messages[kind], kind);
   };
 
   /** The embedded checkout ended — or she came back from the hosted one. */
@@ -1394,7 +1398,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       {noticeOpen && payNotice && !checkingPayment && !reopening && (
         <PayNoticeModal
           message={payNotice}
-          title={noticeTitle ?? undefined}
+          notice={noticeKind}
           retry={paying}
           onClose={() => setNoticeOpen(false)}
         />

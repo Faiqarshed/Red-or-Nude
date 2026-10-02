@@ -13,6 +13,7 @@ import { showPaidOn } from "@/lib/paid-handoff";
 import { clearGiftSelection, loadGiftSelection, saveGiftSelection, type GiftSelection } from "@/lib/giftcard-selection";
 import { useWalletCredit } from "@/components/WalletCredit";
 import { formatSAR } from "@/lib/money";
+import { noticeOf, type PayNotice } from "@/lib/payments/notice";
 
 // Figma: Desktop-2 gift-card payment step (325:7705) + success modal (325:8088).
 //
@@ -36,9 +37,20 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
   // A failed payment, said in front (PayNoticeModal) and kept above the checkout.
   const [payNotice, setPayNotice] = useState<string | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
-  const notifyPay = (message: string) => {
+  const [noticeKind, setNoticeKind] = useState<PayNotice>("declined");
+  const notifyPay = (message: string, kind: PayNotice) => {
     setPayNotice(message);
+    setNoticeKind(kind);
     setNoticeOpen(true);
+  };
+  /** What to tell her, by what it means for her money (lib/payments/notice.ts). */
+  const messages: Record<PayNotice, string> = {
+    declined: c.payDecline.declined,
+    refunded: gp.refunded,
+    checking: gp.unconfirmed,
+    "too-many": gp.tooMany,
+    expired: gp.failed,
+    failed: gp.failed,
   };
 
   useEffect(() => {
@@ -67,11 +79,9 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
       issued(outcome.result.code as string);
       return;
     }
-    const e = outcome.status === "failed" ? outcome.error : "";
-    notifyPay(
-      declineMessage(c.payDecline, outcome) ??
-        (e === "payment-declined" ? c.payDecline.declined : e === "unconfirmed" ? gp.unconfirmed : gp.failed),
-    );
+    const why = declineMessage(c.payDecline, outcome);
+    const kind = why ? "declined" : noticeOf(outcome.status === "failed" ? outcome.error : undefined);
+    notifyPay(why ?? messages[kind], kind);
   };
   const checkingPayment = usePaymentReturn(onPaid, Boolean(searchParams.paid));
 
@@ -120,15 +130,7 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
         setError(p.walletChanged);
         return;
       }
-      setError(
-        data.error === "payment-declined"
-          ? c.payDecline.declined
-          : data.error === "too-many"
-            ? gp.tooMany
-            : data.error === "unverified"
-              ? gp.unconfirmed
-              : gp.failed,
-      );
+      setError(messages[noticeOf(data.error)]);
     } catch {
       setError(gp.failed);
     } finally {
@@ -245,7 +247,7 @@ export default function GiftCardPaymentPage({ searchParams }: { searchParams: { 
 
       {checkingPayment && <CheckingModal />}
       {noticeOpen && payNotice && !checkingPayment && (
-        <PayNoticeModal message={payNotice} retry={paying} onClose={() => setNoticeOpen(false)} />
+        <PayNoticeModal message={payNotice} notice={noticeKind} retry={paying} onClose={() => setNoticeOpen(false)} />
       )}
 
     </main>

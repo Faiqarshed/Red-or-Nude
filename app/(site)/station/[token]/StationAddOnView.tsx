@@ -11,6 +11,7 @@ import GuestPicker, { emptyGuest, guestTotals, toMemberSelection, type GuestStat
 import { Riyal } from "@/components/icons";
 import { useWalletCredit } from "@/components/WalletCredit";
 import { formatSAR } from "@/lib/money";
+import { noticeOf, type PayNotice } from "@/lib/payments/notice";
 import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
 import { saveBooking, formatDateLabel, formatTime } from "@/lib/booking";
@@ -108,8 +109,10 @@ export default function StationAddOnView({
   const [bought, setBought] = useState<NowItem[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
-  const notify = (m: string) => {
+  const [noticeKind, setNoticeKind] = useState<PayNotice>("failed");
+  const notify = (m: string, kind: PayNotice = "failed") => {
     setNotice(m);
+    setNoticeKind(kind);
     setNoticeOpen(true);
   };
 
@@ -122,16 +125,22 @@ export default function StationAddOnView({
     setBasket((b) => (b.includes(id) ? b.filter((x) => x !== id) : [...b, id]));
   };
 
-  const refusal = (code: string | undefined) =>
-    code === "already-added"
+  const refusal = (code: string | undefined) => {
+    // The chair's own refusals first, then what the payment means for her
+    // money (lib/payments/notice.ts).
+    const paid: Partial<Record<PayNotice, string>> = {
+      declined: s.treatDeclined,
+      refunded: s.treatRefunded,
+      checking: s.treatChecking,
+    };
+    return code === "already-added"
       ? s.treatAlready
       : code === "not-in-service"
         ? s.treatNotInService
         : code === "no-time"
           ? s.treatNoTime
-          : code === "declined" || code === "payment-declined"
-            ? s.treatDeclined
-            : s.treatFailed;
+          : (paid[noticeOf(code)] ?? s.treatFailed);
+  };
 
   const onPaid = (outcome: PaymentOutcome) => {
     if (outcome.status === "paid" && outcome.result.kind === "treat") {
@@ -145,7 +154,9 @@ export default function StationAddOnView({
       return;
     }
     setCheckout(outcome.status === "failed" ? (outcome.checkout ?? null) : null);
-    notify(declineMessage(c.payDecline, outcome) ?? refusal(outcome.status === "failed" ? outcome.error : undefined));
+    const why = declineMessage(c.payDecline, outcome);
+    const code = outcome.status === "failed" ? outcome.error : undefined;
+    notify(why ?? refusal(code), why ? "declined" : noticeOf(code));
   };
   // The chair page says "Added to your visit" in place; it never leaves.
   const checkingPayment = usePaymentReturn(onPaid, returning, { staysOnPaid: true });
@@ -162,7 +173,7 @@ export default function StationAddOnView({
       });
       const data = await res.json().catch(() => null);
       if (data?.error === "wallet-changed") return notify(p.walletChanged);
-      if (!res.ok || !data?.ok) return notify(refusal(data?.error));
+      if (!res.ok || !data?.ok) return notify(refusal(data?.error), noticeOf(data?.error));
       if (data.checkout) {
         setCheckout(data.checkout);
         window.scrollTo({ top: 0, behavior: "smooth" });
@@ -453,7 +464,7 @@ export default function StationAddOnView({
       {checkingPayment && <CheckingModal />}
       {bought && !checkingPayment && <PaidModal items={bought} onClose={() => setBought(null)} />}
       {noticeOpen && notice && !checkingPayment && (
-        <PayNoticeModal message={notice} retry={checkout !== null} onClose={() => setNoticeOpen(false)} />
+        <PayNoticeModal message={notice} notice={noticeKind} retry={checkout !== null} onClose={() => setNoticeOpen(false)} />
       )}
     </main>
   );

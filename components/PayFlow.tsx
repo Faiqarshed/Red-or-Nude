@@ -9,6 +9,7 @@ import { PayLogos } from "./PaymentMethods";
 import StreamPayCheckout, { type PaymentOutcome } from "./StreamPayCheckout";
 import { ClockIcon, Lock } from "./icons";
 import { useI18n } from "@/lib/i18n";
+import { nothingCharged, type PayNotice } from "@/lib/payments/notice";
 
 /** Step 2's main column: what to do, why the last try failed, and the checkout. */
 export function PayStep({
@@ -178,22 +179,32 @@ export function CheckingModal({ loading = false }: { loading?: boolean }) {
 /**
  * A payment that did not complete, and why. In front of everything, because it
  * is the answer to the one thing she just did; the same words stay above the
- * checkout once this closes. `title` for the one case where she was charged
- * (and refunded): the default says nothing was.
+ * checkout once this closes. The title follows `notice` (lib/payments/notice.ts):
+ * "nothing was charged" only where nothing can have been, and no "Try again"
+ * where she has paid or may have.
  */
 export function PayNoticeModal({
   message,
+  notice,
   retry,
   onClose,
-  title,
 }: {
   message: string;
+  notice: PayNotice;
   retry: boolean;
   onClose: () => void;
-  title?: string;
 }) {
   const { c } = useI18n();
   const p = c.payment;
+  const mayHavePaid = notice === "refunded" || notice === "checking";
+  const title =
+    notice === "refunded"
+      ? p.refundedTitle
+      : notice === "checking"
+        ? p.checkingTitle
+        : nothingCharged(notice)
+          ? p.payFailedTitle
+          : p.failedTitle;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -220,7 +231,7 @@ export function PayNoticeModal({
           !
         </span>
         <h3 id="pay-notice-title" className="font-display text-xl font-extrabold text-ink">
-          {title ?? p.payFailedTitle}
+          {title}
         </h3>
         <p id="pay-notice-body" className="mt-3 text-sm leading-relaxed text-ink/65">
           {message}
@@ -231,7 +242,7 @@ export function PayNoticeModal({
           onClick={onClose}
           className="mt-6 w-full rounded-[12px] bg-red-grad py-3.5 text-sm font-bold text-white transition-opacity hover:opacity-90"
         >
-          {retry ? p.tryAgain : p.close}
+          {retry && !mayHavePaid ? p.tryAgain : p.close}
         </button>
       </div>
     </div>

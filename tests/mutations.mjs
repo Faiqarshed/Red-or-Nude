@@ -55,6 +55,7 @@ const STATUSROUTE = "app/api/payments/status/route.ts";
 const SETTLECRON = "app/api/cron/settle-pending/route.ts";
 const GIFTADMIN = "app/(admin)/admin/(shell)/gift-cards/actions.ts";
 const GIFTROUTE = "app/api/gift-cards/route.ts";
+const NOTICE = "lib/payments/notice.ts";
 
 /** Exact-string edit that preserves the file's own line endings. */
 function mutate(rel, from, to) {
@@ -1084,12 +1085,24 @@ const mutations = [
     expect: "tests/gift-card-wallet.test.ts",
     apply: () => mutate(GIFTADMIN, "  await syncProductQuietly(giftCardLine(amountSar).key, { ...giftCardLine(amountSar), active: true });", ""),
   },
+
+  // ---- what a failed payment may say about her money ------------------------
+  {
+    name: "pay notice: tell a refunded chair treat it simply failed",
+    expect: "tests/pay-notice.test.ts",
+    apply: () => mutate(NOTICE, '    case "paid-not-added":\n', ""),
+  },
+  {
+    name: "pay notice: let an unknown failure say nothing was charged",
+    expect: "tests/pay-notice.test.ts",
+    apply: () => mutate(NOTICE, 'notice === "too-many";', 'notice === "too-many" || notice === "failed";'),
+  },
 ];
 
 const touched = [
   CONFIRM, CANCEL, ENGINE, ROUTE, PACKS, CLIENT, REORDER, HISTORY, REWARDS, LINES, TREAT,
   DBERR, CATALOG, PROMO, STAFFCODE, WALLET, STATUS, DECIDE, RBAC, PURCHASE, LOYALTY, MONEY,
-  PAYLINES, GIFTADMIN, GIFTROUTE, SPAY, TREATROUTE, PACKROUTE, STATUSROUTE, SETTLECRON,
+  PAYLINES, GIFTADMIN, GIFTROUTE, SPAY, TREATROUTE, PACKROUTE, STATUSROUTE, SETTLECRON, NOTICE,
 ];
 const originals = new Map(touched.map((rel) => [rel, fs.readFileSync(file(rel))]));
 const restore = () => originals.forEach((buf, rel) => fs.writeFileSync(file(rel), buf));

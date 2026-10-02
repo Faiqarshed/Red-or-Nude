@@ -133,7 +133,10 @@ on the spot.
 in full automatically and logs `late payment auto-refunded`. Every later arrival for
 it (her page polling, the webhook retrying) answers `not-delivered`, and the checkout
 says her payment is being refunded — never "nothing was charged", which is what
-`expired` shows.
+`expired` shows. Every checkout (booking, gift card, membership, chair treat) reads
+these codes through `noticeOf` in `lib/payments/notice.ts`, so a purchase charged
+and not delivered says the same, and one StreamPay has not confirmed yet says
+"still checking, don't pay again".
 
 **Refunds** go through `POST /payments/{payment_id}/refund`; the StreamPay
 payment id is kept on `payments.raw.paymentId` when the payment settles. Every

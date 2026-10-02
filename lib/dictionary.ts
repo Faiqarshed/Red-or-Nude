@@ -176,6 +176,8 @@ const ar = {
     payTitle: "ادفعي بأمان",
     paySub: "أدخلي بيانات بطاقتك أو مدى أو استخدمي Apple Pay. يتأكد حجزك فور إتمام الدفع.",
     payFailedTitle: "فشل الدفع، لم يُخصم أي مبلغ",
+    checkingTitle: "ما زلنا نتحقق من الدفع",
+    failedTitle: "حدث خطأ ما",
     tryAgain: "حاولي مرة أخرى",
     checkingSub: "لحظات فقط — لا تغلقي هذه الصفحة.",
     loadingTitle: "جارٍ تجهيز صفحة الدفع…",
@@ -193,7 +195,7 @@ const ar = {
     bookingFor: "الحجز باسم",
     secure: "دفع آمن ومشفر",
     methodsNote: "ادفعي بمدى أو فيزا أو ماستركارد أو Apple Pay في الخطوة التالية.",
-    unconfirmed: "لم نتمكن من تأكيد الدفع بعد. تحققي من بريدك وحجوزاتك قبل المحاولة مرة أخرى.",
+    unconfirmed: "لم نتمكن من تأكيد الدفع بعد. لا تدفعي مرة أخرى — تحققي من بريدك ومن الحجوزات بعد دقائق، فإن تمت العملية ستجدين حجزك مؤكداً هناك.",
     timeLeft: "الوقت المتبقي للدفع",
     timeLeftHint: "عند انتهاء الوقت تُغلق صفحة الدفع، ويمكنك فتح صفحة جديدة.",
     resumedPayment: "أهلاً بعودتك. هذه عملية الدفع التي بدأتِها — أكمليها من هنا، لا حاجة لحجز جديد.",
@@ -226,7 +228,8 @@ const ar = {
     technicianLabel: "الفنية",
     declined: "لم تتم عملية الدفع. حاولي مرة أخرى أو استخدمي بطاقة أخرى.",
     checkingPayment: "جارٍ التحقق من الدفع…",
-    expired: "انتهت مهلة الحجز المؤقت. اختاري الموعد مرة أخرى من صفحة الحجز.",
+    expired: "انتهت مهلة حجز الموعد قبل الدفع، ولم يُخصم أي مبلغ. تابعي مرة أخرى لحجزه من جديد إن كان لا يزال متاحاً، أو اختاري موعداً آخر.",
+    tooMany: "محاولات كثيرة. انتظري قليلاً ثم حاولي مرة أخرى.",
     refundedTitle: "يتم استرداد مبلغك",
     refunded:
       "لم نتمكن من تأكيد حجزك في الوقت المحدد، لذلك يتم استرداد مبلغك بالكامل. يصل عادةً إلى بطاقتك خلال ٥–١٤ يوم عمل حسب البنك. اختاري الموعد مرة أخرى من صفحة الحجز.",
@@ -530,6 +533,9 @@ const ar = {
     treatNotInService: "لا توجد زيارة جارية على هذه الطاولة الآن.",
     treatDeclined: "لم تتم عملية الدفع. جرّبي بطاقة أخرى.",
     treatFailed: "تعذّر إتمام الطلب. اسألي موظفة الاستقبال.",
+    treatChecking: "لم نتمكن من تأكيد الدفع بعد. لا تدفعي مرة أخرى — اطلبي من موظفة الاستقبال التحقق منه.",
+    treatRefunded:
+      "لم نتمكن من إضافة الطلب إلى زيارتك، فلن تدفعي مقابله: يعود إليك ما دفعتِه — رصيداً في محفظتك للمبالغ الصغيرة (وسنرسل لك بريداً)، وإلا إلى بطاقتك.",
   },
 
   modals: {
@@ -608,6 +614,8 @@ const ar = {
     stepDetails: "بطاقة الهدية",
     paySub: "أدخلي بيانات بطاقتك أو مدى أو استخدمي Apple Pay. تصدر بطاقة الهدية فور إتمام الدفع.",
     failed: "تعذر إصدار بطاقة الهدية، حاولي مرة أخرى",
+    refunded:
+      "لم نتمكن من إصدار بطاقة الهدية، لذلك يتم استرداد مبلغك بالكامل. يصل عادةً إلى بطاقتك خلال ٥–١٤ يوم عمل حسب البنك، ويعود ما استخدمتِه من المحفظة إليها.",
     unconfirmed: "لم نتأكد من الدفع بعد. لا تدفعي مرة أخرى، وتواصلي مع الصالون إن لم تصل البطاقة.",
     tooMany: "محاولات كثيرة. انتظري ساعة ثم حاولي مرة أخرى.",
   },
@@ -624,7 +632,7 @@ const ar = {
     limit: "المبلغ أعلى من حد البطاقة. استخدمي بطاقة أخرى أو اطلبي من البنك رفع الحد.",
     notEnrolled: "البطاقة غير مفعّلة للدفع عبر الإنترنت. فعّليها من تطبيق البنك أو استخدمي بطاقة أخرى.",
     declined: "تم رفض البطاقة. تحققي من البيانات أو استخدمي بطاقة أخرى.",
-    timedOut: "انتهى وقت صفحة الدفع. اضغطي على الدفع لفتح صفحة جديدة.",
+    timedOut: "انتهى وقت صفحة الدفع ولم يُخصم أي مبلغ. ابدئي الدفع من جديد لفتح صفحة جديدة.",
   },
   date: {
     month: "يونيو",
@@ -823,6 +831,8 @@ const en: Content = {
     payTitle: "Pay securely",
     paySub: "Enter your card or mada details, or use Apple Pay. Your booking is confirmed the moment it goes through.",
     payFailedTitle: "Payment failed, nothing was charged",
+    checkingTitle: "We're still checking your payment",
+    failedTitle: "Something went wrong",
     tryAgain: "Try again",
     checkingSub: "Just a moment — please don't close this page.",
     loadingTitle: "Getting your checkout ready…",
@@ -840,7 +850,8 @@ const en: Content = {
     bookingFor: "Booking for",
     secure: "Secure encrypted payment",
     methodsNote: "Pay by mada, Visa, Mastercard or Apple Pay in the next step.",
-    unconfirmed: "We couldn't confirm the payment yet. Check your email and bookings before trying again.",
+    unconfirmed:
+      "We couldn't confirm your payment yet. Please don't pay again — check your email and Bookings in a few minutes. If it went through, your booking is confirmed there.",
     timeLeft: "Time left to pay",
     timeLeftHint: "When the timer ends, this payment page closes and you can open a new one.",
     resumedPayment: "Welcome back. This is the payment you started — finish it here, no need to book again.",
@@ -873,7 +884,9 @@ const en: Content = {
     technicianLabel: "Technician",
     declined: "Payment didn't go through. Try again or use another card.",
     checkingPayment: "Checking your payment…",
-    expired: "Your held slot has expired. Please pick a time again from the booking page.",
+    expired:
+      "Your held time ran out before payment, and nothing was charged. Continue again to hold it once more if it's still free, or pick another time.",
+    tooMany: "Too many tries. Please wait a while and try again.",
     refundedTitle: "Your payment is being refunded",
     refunded:
       "We couldn't confirm your booking in time, so your payment is being refunded in full. It usually reaches your card within 5–14 working days, depending on your bank. Please pick a time again from the booking page.",
@@ -1177,6 +1190,9 @@ const en: Content = {
     treatNotInService: "No visit is running at this table right now.",
     treatDeclined: "That payment did not go through. Try another card.",
     treatFailed: "Could not place that order. Ask the front desk.",
+    treatChecking: "We couldn't confirm that payment yet. Please don't pay again — ask the front desk to check it.",
+    treatRefunded:
+      "We couldn't add that to your visit, so you won't pay for it: what you paid comes back to you — as wallet credit for small amounts (we'll email you), otherwise to your card.",
   },
 
   modals: {
@@ -1254,6 +1270,8 @@ const en: Content = {
     stepDetails: "Gift card",
     paySub: "Enter your card or mada details, or use Apple Pay. The gift card is issued the moment it goes through.",
     failed: "Couldn't issue the gift card, please try again",
+    refunded:
+      "We couldn't issue the gift card, so your payment is being refunded in full. It usually reaches your card within 5–14 working days, and any wallet credit you used goes back to your wallet.",
     unconfirmed: "We couldn't confirm your payment yet. Please don't pay again, and contact the salon if the card doesn't arrive.",
     tooMany: "Too many tries. Please wait an hour and try again.",
   },
@@ -1268,7 +1286,7 @@ const en: Content = {
     limit: "This amount is over your card limit. Use another card or ask your bank to raise it.",
     notEnrolled: "This card isn't enabled for online payments. Turn it on in your bank app or use another card.",
     declined: "Your card was declined. Check the details or use another card.",
-    timedOut: "The payment page timed out. Press pay to open a new one.",
+    timedOut: "The payment page timed out, and nothing was charged. Start the payment again to open a new one.",
   },
   date: {
     month: "June",
