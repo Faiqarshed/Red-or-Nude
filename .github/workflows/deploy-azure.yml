@@ -1,8 +1,14 @@
 # Deploys to Azure App Service on every push to `staging`, into the `staging`
 # slot of the ron-prod Web App. Production (`main`) is added once its settings exist.
 #
-# The zip holds only tracked files (git archive), so .env files never leave the
-# repo. Azure installs and builds it itself (SCM_DO_BUILD_DURING_DEPLOYMENT=true).
+# The app is built here, on GitHub's runner, not on the App Service VM: the VM
+# has one CPU shared with the live slots, and building there took ~24 minutes.
+# `next build` writes a self-contained server to .next/standalone
+# (output: "standalone" in next.config.mjs); that folder, plus public/ and
+# .next/static, is all that ships. Azure only unzips it and restarts.
+#
+# No secrets are needed to build: every page renders on request, so nothing
+# touches the database until the app is running on Azure.
 #
 # Database migrations are NOT run here: run them by hand before merging a change
 # that adds a file under drizzle/.
@@ -17,7 +23,7 @@ on:
     branches: [staging]
   workflow_dispatch:
 
-# Production and staging share one S1 VM, so never build two at once.
+# Production and staging share one S1 VM, so never deploy two at once.
 concurrency:
   group: azure-deploy
   cancel-in-progress: false
@@ -34,14 +40,40 @@ jobs:
     environment:
       name: staging
       url: https://ron-prod-staging.azurewebsites.net
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Package source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Next.js reuses its compile cache between builds; only changed files
+      # are compiled again.
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: next-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**', 'components/**', 'lib/**', 'middleware.ts', 'next.config.mjs', 'tailwind.config.ts') }}
+          restore-keys: next-${{ hashFiles('package-lock.json') }}-
+
+      - name: Build
+        run: npm run build
+
+      # The standalone server leaves public/ and .next/static to a CDN by
+      # default; App Service has none, so they go in next to server.js.
+      - name: Package
         run: |
-          git archive --format=zip -o ron-app.zip HEAD
-          unzip -l ron-app.zip | grep -E " package.json$"
+          cp -r public .next/standalone/public
+          cp -r .next/static .next/standalone/.next/static
+          (cd .next/standalone && zip -qry "$GITHUB_WORKSPACE/ron-app.zip" .)
+          ls -lh ron-app.zip
 
       - name: Sign in to Azure
         uses: azure/login@v2
@@ -50,32 +82,50 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Azure's front door drops a single request after ~4 minutes while the
-      # build (npm install + next build) takes 5–15, so start the deploy without
-      # waiting, then poll its status until it really finishes.
+      # The bundle is already built, so Azure must not build it again, and it
+      # starts with server.js rather than `npm start`. HOSTNAME is pinned because
+      # the container sets its own, and server.js would listen only on that.
+      # Each setting is only written when it differs: writing restarts the slot.
+      - name: Make the slot run the bundle as-is
+        run: |
+          app="-g rg-redornude-prod -n ron-prod --slot staging"
+          build=$(az webapp config appsettings list $app \
+            --query "[?name=='SCM_DO_BUILD_DURING_DEPLOYMENT'].value | [0]" -o tsv)
+          if [ "$build" != "false" ]; then
+            az webapp config appsettings set $app \
+              --slot-settings SCM_DO_BUILD_DURING_DEPLOYMENT=false -o none
+          fi
+          start="HOSTNAME=0.0.0.0 node server.js"
+          if [ "$(az webapp config show $app --query appCommandLine -o tsv)" != "$start" ]; then
+            az webapp config set $app --startup-file "$start" -o none
+          fi
+
+      # --clean wipes what the old on-VM builds left behind (node_modules and
+      # its compressed copy), which the Node image would otherwise unpack over
+      # the bundle at startup.
       - name: Deploy to staging slot
         run: |
           az webapp deploy \
             -g rg-redornude-prod -n ron-prod --slot staging \
-            --src-path ron-app.zip --type zip --async true
+            --src-path ron-app.zip --type zip --clean true --async true
 
-      - name: Wait for the build to finish
+      - name: Wait for the deploy to finish
         run: |
           site=$(az webapp show -g rg-redornude-prod -n ron-prod --query id -o tsv)
           api="https://management.azure.com${site}/slots/staging/deployments"
           v="api-version=2022-03-01"
-          sleep 20
+          sleep 15
           id=$(az rest --method get --url "$api?$v" \
             --query "sort_by(value, &properties.start_time)[-1].name" -o tsv)
           id=${id##*/}
           echo "Deployment $id"
-          # 4 = deployed. Other values (including a temporary 3 while the build
-          # output is copied) mean it's still going, so only give up after 30 min.
-          for i in $(seq 1 60); do
+          # 4 = deployed; anything else is still going. Unzipping takes a minute
+          # or two, so ten minutes means something is wrong.
+          for i in $(seq 1 40); do
             status=$(az rest --method get --url "$api/$id?$v" --query properties.status -o tsv)
             echo "$(date -u +%H:%M:%S) status=$status"
             [ "$status" = "4" ] && exit 0
-            sleep 30
+            sleep 15
           done
           az rest --method get --url "$api/$id/log?$v" \
             --query "value[].properties.message" -o tsv | tail -40
