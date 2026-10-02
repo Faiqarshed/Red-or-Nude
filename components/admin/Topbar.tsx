@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, Globe, LogOut, Menu, Search } from "lucide-react";
+import { ChevronDown, Globe, LogOut, Menu } from "lucide-react";
 import { useAdminI18n } from "@/lib/admin/i18n";
 import { ROLE_LABELS } from "@/lib/auth/rbac";
 import type { SessionStaff } from "@/lib/auth/guard";
@@ -46,19 +46,6 @@ export default function Topbar({
       >
         <Menu className="h-5 w-5" strokeWidth={1.75} />
       </button>
-
-      {/* ⌘K palette lands with Bookings in P1, when there's something to search. */}
-      <div className="relative hidden max-w-xs flex-1 md:block">
-        <Search
-          className="pointer-events-none absolute inset-y-0 start-3 my-auto h-4 w-4 text-ink/30"
-          strokeWidth={1.75}
-        />
-        <input
-          disabled
-          placeholder={t.topbar.search}
-          className="h-9 w-full cursor-not-allowed rounded-xl border border-black/[0.06] bg-white/60 ps-9 pe-3 text-sm text-ink placeholder:text-ink/30"
-        />
-      </div>
 
       <div className="ms-auto flex items-center gap-2">
         <span className="hidden rounded-xl border border-black/[0.06] bg-white px-3 py-1.5 text-xs text-ink/60 sm:inline">

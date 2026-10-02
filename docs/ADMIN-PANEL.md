@@ -264,7 +264,7 @@ must not both get the chair.
 ## 6. UI direction
 
 **Layout.** Fixed sidebar (collapsible to icons), sticky topbar with branch
-switcher + global search + user menu. Content max-width `1440px`. Editing happens
+switcher + language + user menu (no search box until the ⌘K palette exists). Content max-width `1440px`. Editing happens
 in **side drawers**, not full-page navigations — a receptionist mid-checkout
 never loses their place in the list.
 
