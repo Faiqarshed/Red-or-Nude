@@ -188,20 +188,63 @@ export default function AvailabilityView({
         </p>
       ) : null}
 
+      {/* Hours beside chairs, the two about-the-same-height lists; closures
+          under both, full width, with its form on one line. */}
       <div className="grid gap-5 lg:grid-cols-2">
         {/* Opening hours */}
-        <Card className="lg:col-span-2">
+        <Card>
           <CardHeader title={t.availability.hours} />
           <ul className="divide-y divide-black/[0.05]">
             {draft.map((day) => (
-              <li key={day.weekday} className="flex flex-wrap items-center gap-3 px-5 py-3">
-                <span className="w-24 shrink-0 text-start text-sm text-ink">
+              <li key={day.weekday} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 text-start text-sm font-medium",
+                    day.closed ? "text-ink/40" : "text-ink",
+                  )}
+                >
                   {t.availability.weekdays[day.weekday]}
                 </span>
+
+                {/* Under the day on a phone, between the day and its switch from sm. */}
+                {day.closed ? (
+                  <span className="text-xs text-ink/40 max-sm:order-last max-sm:basis-full max-sm:text-start">
+                    {t.availability.closed}
+                  </span>
+                ) : (
+                  <div className="flex items-center rounded-xl border border-black/10 bg-cream/50 px-1 transition-colors focus-within:border-red/30 focus-within:bg-white max-sm:order-last max-sm:basis-full max-sm:justify-between">
+                    <input
+                      type="time"
+                      aria-label={a.opens}
+                      aria-invalid={!!dayError(day)}
+                      value={day.opens}
+                      onChange={(e) => updateDay(day.weekday, { opens: e.target.value })}
+                      onBlur={() => saveDay(day.weekday)}
+                      className={cn(
+                        "h-9 rounded-lg bg-transparent px-2 text-sm tabular-nums text-ink outline-none",
+                        invalidRing,
+                      )}
+                    />
+                    <span className="text-xs text-ink/30">–</span>
+                    <input
+                      type="time"
+                      aria-label={a.closes}
+                      aria-invalid={!!dayError(day)}
+                      value={day.closes}
+                      onChange={(e) => updateDay(day.weekday, { closes: e.target.value })}
+                      onBlur={() => saveDay(day.weekday)}
+                      className={cn(
+                        "h-9 rounded-lg bg-transparent px-2 text-sm tabular-nums text-ink outline-none",
+                        invalidRing,
+                      )}
+                    />
+                  </div>
+                )}
 
                 <button
                   role="switch"
                   aria-checked={!day.closed}
+                  aria-label={t.availability.weekdays[day.weekday]}
                   onClick={() => {
                     const next = { ...day, closed: !day.closed };
                     updateDay(day.weekday, { closed: next.closed });
@@ -221,42 +264,11 @@ export default function AvailabilityView({
                   />
                 </button>
 
-                {day.closed ? (
-                  <span className="text-xs text-ink/40">{t.availability.closed}</span>
-                ) : (
-                  <>
-                    <input
-                      type="time"
-                      aria-label={a.opens}
-                      aria-invalid={!!dayError(day)}
-                      value={day.opens}
-                      onChange={(e) => updateDay(day.weekday, { opens: e.target.value })}
-                      onBlur={() => saveDay(day.weekday)}
-                      className={cn(
-                        "h-9 rounded-lg border border-black/10 bg-white px-2 text-sm tabular-nums text-ink outline-none focus:border-sky",
-                        invalidRing,
-                      )}
-                    />
-                    <span className="text-xs text-ink/35">–</span>
-                    <input
-                      type="time"
-                      aria-label={a.closes}
-                      aria-invalid={!!dayError(day)}
-                      value={day.closes}
-                      onChange={(e) => updateDay(day.weekday, { closes: e.target.value })}
-                      onBlur={() => saveDay(day.weekday)}
-                      className={cn(
-                        "h-9 rounded-lg border border-black/10 bg-white px-2 text-sm tabular-nums text-ink outline-none focus:border-sky",
-                        invalidRing,
-                      )}
-                    />
-                    {dayError(day) ? (
-                      <span role="alert" className="text-xs text-red">
-                        {dayError(day)}
-                      </span>
-                    ) : null}
-                  </>
-                )}
+                {!day.closed && dayError(day) ? (
+                  <span role="alert" className="order-last basis-full text-start text-xs text-red">
+                    {dayError(day)}
+                  </span>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -345,7 +357,7 @@ export default function AvailabilityView({
         </Card>
 
         {/* Closures */}
-        <Card>
+        <Card className="lg:col-span-2">
           <CardHeader title={t.availability.closures} />
           {closures.length === 0 ? (
             <p className="px-5 py-6 text-center text-xs text-ink/40">{t.availability.noClosures}</p>
@@ -380,39 +392,40 @@ export default function AvailabilityView({
               })}
             </ul>
           )}
-          <div className="space-y-3 border-t border-black/[0.06] p-4">
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <Field label={a.from} error={closureErrors.from}>
-                <Input
-                  type="date"
-                  min={earliest}
-                  max={latest}
-                  aria-invalid={!!closureErrors.from}
-                  value={closure.from}
-                  onChange={(e) => setClosure((c) => ({ ...c, from: e.target.value }))}
-                />
-              </Field>
-              <Field label={a.to} error={closureErrors.to}>
-                <Input
-                  type="date"
-                  min={closure.from || earliest}
-                  max={latest}
-                  aria-invalid={!!closureErrors.to}
-                  value={closure.to}
-                  onChange={(e) => setClosure((c) => ({ ...c, to: e.target.value }))}
-                />
-              </Field>
+          <div className="grid grid-cols-1 items-start gap-3 border-t border-black/[0.06] p-4 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_2fr_auto]">
+            <Field label={a.from} error={closureErrors.from}>
+              <Input
+                type="date"
+                min={earliest}
+                max={latest}
+                aria-invalid={!!closureErrors.from}
+                value={closure.from}
+                onChange={(e) => setClosure((c) => ({ ...c, from: e.target.value }))}
+              />
+            </Field>
+            <Field label={a.to} error={closureErrors.to}>
+              <Input
+                type="date"
+                min={closure.from || earliest}
+                max={latest}
+                aria-invalid={!!closureErrors.to}
+                value={closure.to}
+                onChange={(e) => setClosure((c) => ({ ...c, to: e.target.value }))}
+              />
+            </Field>
+            <div className="sm:col-span-2 lg:col-span-1">
+              <TextField
+                label={a.reason}
+                {...CLOSURE_TEXT}
+                max={CLOSURE_LIMITS.reasonMax}
+                error={closureErrors.reason}
+                value={closure.reasonAr}
+                onChange={(reasonAr) => setClosure((c) => ({ ...c, reasonAr }))}
+              />
             </div>
-            <TextField
-              label={a.reason}
-              {...CLOSURE_TEXT}
-              max={CLOSURE_LIMITS.reasonMax}
-              error={closureErrors.reason}
-              value={closure.reasonAr}
-              onChange={(reasonAr) => setClosure((c) => ({ ...c, reasonAr }))}
-            />
             <Button
-              size="sm"
+              size="md"
+              className="justify-self-start lg:mt-6"
               pending={busyOn("add-closure")}
               onClick={() => {
                 setClosureTried(true);
