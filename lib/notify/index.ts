@@ -16,8 +16,6 @@ export type NotifyChannel = "whatsapp" | "email";
 export type NotifyTemplate =
   /** The booking reference and ticket, right after payment. */
   | "booking-confirmed"
-  /** The card code and occasion message, to the recipient. */
-  | "gift-card"
   /** A nudge a few days before a refill window closes. */
   | "refill-reminder"
   /** Confirmation that a cancellation went through, and the refund with it. */

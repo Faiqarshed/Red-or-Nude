@@ -29,6 +29,9 @@ function pad(n: number) {
   return String(n).padStart(2, "0");
 }
 
+/** The JSON of an answer that is one; anything else (a 500, a 429) is a failure, not an empty day. */
+const answer = (r: Response) => (r.ok ? r.json() : Promise.reject(r.status));
+
 export default function ScheduleModal({
   branchId,
   durationMin,
@@ -99,6 +102,13 @@ export default function ScheduleModal({
   const [time, setTime] = useState<string | null>(initialTime);
   const [days, setDays] = useState<Record<string, boolean> | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
+  /**
+   * The server did not answer (offline, a 500, a throttle). Said as that, with a
+   * retry: an empty month or "no times" here reads as "fully booked", and she
+   * leaves. Bumping `attempt` asks again.
+   */
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   /** The salon's booking notice, from the server. 0 for staff, who are exempt. */
   const [leadTimeMin, setLeadTimeMin] = useState(0);
 
@@ -173,42 +183,45 @@ export default function ScheduleModal({
   useEffect(() => {
     let cancelled = false;
     setDays(null);
+    setLoadFailed(false);
     fetch(
       `/api/availability?branchId=${branchId}&month=${monthKey}&duration=${durationMin}`,
     )
-      .then((r) => r.json())
+      .then(answer)
       .then((d) => {
         if (!cancelled) setDays(d.days ?? {});
       })
+      // Left loading (null), not emptied: an empty month is "nothing free".
       .catch(() => {
-        if (!cancelled) setDays({});
+        if (!cancelled) setLoadFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [branchId, monthKey, durationMin]);
+  }, [branchId, monthKey, durationMin, attempt]);
 
   // Slots for the selected day.
   useEffect(() => {
     if (!date) return setSlots(null);
     let cancelled = false;
     setSlots(null);
+    setLoadFailed(false);
     fetch(
       `/api/availability?branchId=${branchId}&date=${date}&duration=${durationMin}`,
     )
-      .then((r) => r.json())
+      .then(answer)
       .then((d) => {
         if (cancelled) return;
         setSlots(d.slots ?? []);
         setLeadTimeMin(typeof d.leadTimeMin === "number" ? d.leadTimeMin : 0);
       })
       .catch(() => {
-        if (!cancelled) setSlots([]);
+        if (!cancelled) setLoadFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [branchId, date, durationMin]);
+  }, [branchId, date, durationMin, attempt]);
 
   const daysInMonth = new Date(Date.UTC(cursor.year, cursor.month0 + 1, 0)).getUTCDate();
   // Saturday-first, matching the dictionary's weekday arrays.
@@ -308,7 +321,18 @@ export default function ScheduleModal({
         <h4 className="font-display text-lg font-extrabold text-ink">{c.modals.chooseTime}</h4>
       </div>
 
-      {!date ? null : shown === null ? (
+      {loadFailed ? (
+        <div role="alert" className="py-6 text-center">
+          <p className="text-sm text-red">{c.modals.loadFailed}</p>
+          <button
+            type="button"
+            onClick={() => setAttempt((n) => n + 1)}
+            className="mt-3 text-[13px] font-semibold text-red underline underline-offset-4 hover:opacity-70"
+          >
+            {c.modals.retry}
+          </button>
+        </div>
+      ) : !date ? null : shown === null ? (
         <p className="py-6 text-center text-sm text-ink/40">…</p>
       ) : shown.length === 0 ? (
         <p className="py-6 text-center text-sm text-ink/45">{c.modals.noSlots}</p>

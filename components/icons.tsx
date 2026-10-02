@@ -8,33 +8,6 @@ const base = {
   strokeLinejoin: "round" as const,
 };
 
-export function SearchIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" width={24} height={24} {...base} {...props}>
-      <circle cx="11" cy="11" r="7" />
-      <path d="m20 20-3.2-3.2" />
-    </svg>
-  );
-}
-
-export function HeartIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" width={24} height={24} {...base} {...props}>
-      <path d="M12 20s-7-4.35-9.2-8.5C1.3 8.4 2.6 5 5.8 5 8 5 9.4 6.6 12 9.2 14.6 6.6 16 5 18.2 5c3.2 0 4.5 3.4 3 6.5C19 15.65 12 20 12 20Z" />
-    </svg>
-  );
-}
-
-export function CartIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" width={24} height={24} {...base} {...props}>
-      <path d="M3 4h2l2.2 11.2a1.5 1.5 0 0 0 1.5 1.2h8.3a1.5 1.5 0 0 0 1.5-1.2L21 8H6" />
-      <circle cx="9.5" cy="20" r="1.3" />
-      <circle cx="18" cy="20" r="1.3" />
-    </svg>
-  );
-}
-
 // Saudi Riyal symbol (simplified glyph).
 export function Riyal(props: SVGProps<SVGSVGElement>) {
   return (
@@ -106,6 +79,24 @@ export function Lock(props: SVGProps<SVGSVGElement>) {
     <svg viewBox="0 0 24 24" width={16} height={16} {...base} {...props}>
       <rect x="4.5" y="10.5" width="15" height="10" rx="2.5" />
       <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+    </svg>
+  );
+}
+
+export function WalletIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" width={24} height={24} {...base} {...props}>
+      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H18a1 1 0 0 1 1 1v2" />
+      <rect x="3" y="7.5" width="18" height="12" rx="2.5" />
+      <path d="M16.5 13.5h.01" />
+    </svg>
+  );
+}
+
+export function ChatIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" width={24} height={24} {...base} {...props}>
+      <path d="M20 11.5a7.5 7.5 0 0 1-11.2 6.5L4 19.5l1.5-4.3A7.5 7.5 0 1 1 20 11.5Z" />
     </svg>
   );
 }

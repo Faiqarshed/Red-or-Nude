@@ -4,6 +4,7 @@ import "server-only";
 import { and, desc, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bookings, customerPacks, customers, loyaltyTxns } from "@/lib/db/schema";
+import { claimCardsFor } from "@/lib/wallet";
 
 export type AccountProfile = {
   email: string;
@@ -32,7 +33,7 @@ export type AccountProfile = {
 export async function createAccount(p: AccountProfile) {
   const email = p.email.toLowerCase();
 
-  return db.transaction(async (tx) => {
+  const made = await db.transaction(async (tx) => {
     const guests = await tx
       .select({ id: customers.id, blocked: customers.blocked, notes: customers.notes })
       .from(customers)
@@ -74,4 +75,14 @@ export async function createAccount(p: AccountProfile) {
       .returning();
     return account;
   });
+
+  // Gift cards sent to this email and still waiting as a code go into her new
+  // wallet (docs/WALLET-PLAN.md). After the account commits: a card that fails
+  // to move stays a spendable code, never a reason to refuse the sign-up.
+  try {
+    await claimCardsFor(email);
+  } catch (err) {
+    console.error(`[account] could not move gift cards into the wallet of ${email}`, err);
+  }
+  return made;
 }

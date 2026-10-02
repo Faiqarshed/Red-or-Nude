@@ -15,6 +15,7 @@ import {
   staff,
   stations,
   ticketCounters,
+  walletTxns,
 } from "@/lib/db/schema";
 import { UTC_OFFSET_HOURS, riyadhDateKey } from "@/lib/time";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
@@ -67,6 +68,15 @@ export async function fixtures(): Promise<Fixtures> {
  * counter and the assertions read deltas across it, never absolute numbers.
  */
 export async function reset(...branchIds: string[]): Promise<void> {
+  // Wallet rows first: they hold their customer and booking with `restrict`.
+  await db
+    .delete(walletTxns)
+    .where(
+      inArray(
+        walletTxns.customerId,
+        db.select({ id: customers.id }).from(customers).where(like(customers.phone, PHONE_PREFIX)),
+      ),
+    );
   if (branchIds.length) {
     await db.delete(bookings).where(inArray(bookings.branchId, branchIds));
   }
@@ -137,14 +147,14 @@ export async function taggedAddon(
   tag: string,
   label: string,
   atCheckout: boolean,
-  { active = true, priceHalalas = 1000 }: { active?: boolean; priceHalalas?: number } = {},
+  { active = true, priceHalalas = 1000, durationMin = 0 }: { active?: boolean; priceHalalas?: number; durationMin?: number } = {},
 ): Promise<string> {
   const [row] = await db
     .insert(addons)
     .values({
       name: { ar: label, en: label },
       priceHalalas,
-      durationMin: 0,
+      durationMin,
       atCheckout,
       image: `${tag}/${label}.webp`,
       active,

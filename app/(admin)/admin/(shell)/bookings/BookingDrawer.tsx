@@ -320,9 +320,10 @@ export default function BookingDrawer({
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   // The three moves that can't be walked back ask first, in the panel's own
-  // dialog. A cancel also takes its (optional) reason there.
+  // dialog. A cancel also takes its reason there, which the salon must give.
   const [asking, setAsking] = useState<"cancelled" | "no_show" | "delete" | null>(null);
   const [reason, setReason] = useState("");
+  const [triedCancel, setTriedCancel] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
 
   // The countdown has to move or it is worse than no countdown: a drawer left
@@ -344,6 +345,7 @@ export default function BookingDrawer({
   const ask = (what: "cancelled" | "no_show" | "delete") => {
     setAsking(what);
     setReason("");
+    setTriedCancel(false);
     setAskError(null);
   };
 
@@ -378,11 +380,12 @@ export default function BookingDrawer({
     });
   };
 
-  // The cancel reason is optional, but a typed one is held to the same rules as
-  // every other note: letters, no mash, and a length the server keeps.
+  // The cancel reason is required, and held to the same rules as every other
+  // note: letters, no mash, and a length the server keeps. Not flagged as
+  // missing until she has tried to confirm.
   const reasonError =
-    asking === "cancelled" && reason
-      ? checkNote(t.validation, t.bookings.cancelReason, reason, { required: false, max: CANCEL_REASON_MAX })
+    asking === "cancelled" && (reason || triedCancel)
+      ? checkNote(t.validation, t.bookings.cancelReason, reason, { max: CANCEL_REASON_MAX })
       : undefined;
 
   const move = (status: BookingStatus, why?: string) => {
@@ -390,7 +393,7 @@ export default function BookingDrawer({
     void run(async () => {
       setError(null);
       setAskError(null);
-      const res = await setBookingStatus(booking.id, status, why);
+      const res = await setBookingStatus(booking.id, status, why, booking.status);
       if (res.ok) {
         onChanged();
         return false;
@@ -403,7 +406,13 @@ export default function BookingDrawer({
             // checkin_early_min is non-zero, and saying the wrong one is worse
             // than saying nothing.
             `${t.frontDesk.tooEarly} ${localTime(new Date(opensAt).toISOString())} · ${formatCountdown(opensAt - Date.now(), lang)}`
-          : t.common.error;
+          : res.error === "changed"
+            ? t.bookings.changed
+            : res.error === "has-credit"
+              ? t.bookings.hasCredit
+              : res.error === "held"
+                ? t.bookings.held
+                : t.common.error;
       if (asking) setAskError(message);
       else setError(message);
       return false;
@@ -521,8 +530,9 @@ export default function BookingDrawer({
           error={askError}
           onClose={() => setAsking(null)}
           onConfirm={() => {
-            if (reasonError) return;
-            move("cancelled", reason.trim() || undefined);
+            setTriedCancel(true);
+            if (checkNote(t.validation, t.bookings.cancelReason, reason, { max: CANCEL_REASON_MAX })) return;
+            move("cancelled", reason.trim());
           }}
         >
           <TextField

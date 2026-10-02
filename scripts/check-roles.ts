@@ -50,9 +50,11 @@ assert.ok(
   !can("admin", "bookings.cancel") && !can("technician", "bookings.cancel"),
   "cancelling is the owner's and the desk's",
 );
-// What the booking drawer draws from those: the desk gets check-in and cancel,
-// and never the owner's corrections (no-show, completing out of order).
-assert.deepStrictEqual(drawerStatuses("receptionist"), ["checked_in", "cancelled"]);
+// What the booking drawer draws from those: the desk gets check-in, and never
+// the owner's corrections (no-show, completing out of order). Cancel is offered
+// to nobody while the salon never cancels (SALON_CAN_CANCEL, lib/cancellation.ts).
+assert.deepStrictEqual(drawerStatuses("receptionist"), ["checked_in"]);
+assert.ok(!drawerStatuses("ceo").includes("cancelled"), "only she cancels");
 assert.deepStrictEqual(drawerStatuses("admin"), ["checked_in"]);
 assert.deepStrictEqual(drawerStatuses("technician"), []);
 assert.ok(drawerStatuses("ceo").includes("no_show"), "the owner keeps every move");

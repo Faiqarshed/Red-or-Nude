@@ -77,3 +77,16 @@ export function cancelRefusal(
 export function canCancel(b: CancelInput, cutoffHours: number, now: Date = new Date()): boolean {
   return cancelRefusal(b, cutoffHours, now) === null;
 }
+
+/**
+ * The salon never cancels a booking (the client, 2026-09-30): only she does,
+ * from her own booking, inside the window above.
+ *
+ * Switched off, not deleted. The desk's cancel in setBookingStatus (a required
+ * reason, a guarded status, her credit in full) is still built and still tested
+ * (salon-cancel.test.ts turns this back on), because the day a technician is off
+ * sick at 11:00 for a 12:00 booking is a real one the client may meet. Setting
+ * this to true brings it back; inside her 3 h window it would reopen that
+ * question with the client (docs/WALLET-PLAN.md, open question 1).
+ */
+export const SALON_CAN_CANCEL = false;

@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Users } from "lucide-react";
+import { ChevronDown, Ticket, Users } from "lucide-react";
 import { Card, EmptyState, PageHeader, Badge, BranchFilter, Button, Thumb } from "@/components/admin/ui";
 import { STATUS_TONE, type BookingStatus } from "../bookings/BookingsView";
 import BookingDrawer, { BookingFacts } from "../bookings/BookingDrawer";
@@ -368,11 +368,20 @@ export default function FrontDeskView({
       </div>
 
       <Card className="mb-6 p-5">
-        <form onSubmit={search} className="flex flex-wrap items-end gap-3">
-          <div className="w-full flex-1 text-start sm:w-auto sm:min-w-[200px]">
-            <label htmlFor="ticket" className="mb-1.5 block text-xs font-medium text-ink/60">
-              {f.ticketLabel}
-            </label>
+        <form onSubmit={search} className="text-start">
+          <label
+            htmlFor="ticket"
+            className="mb-2 block text-[11px] font-bold uppercase tracking-[0.12em] text-ink/45"
+          >
+            {f.ticketLabel}
+          </label>
+          {/* One field with the button inside it. The typed ticket is big and
+              bold because it is read back across the counter; the placeholder
+              stays quiet so an empty box does not shout. */}
+          <div className="flex items-center gap-2 rounded-2xl border border-black/10 bg-white p-2 shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition focus-within:border-red/30 focus-within:ring-4 focus-within:ring-red/[0.06]">
+            <span className="hidden h-12 w-12 shrink-0 place-items-center rounded-xl bg-red/[0.06] text-red sm:grid">
+              <Ticket className="h-5 w-5" strokeWidth={1.75} />
+            </span>
             <input
               id="ticket"
               ref={inputRef}
@@ -381,18 +390,12 @@ export default function FrontDeskView({
               value={ticket}
               onChange={(e) => setTicket(e.target.value)}
               placeholder={f.ticketPlaceholder}
-              // One step down on a phone: "A12 OR RON-4F2" at 30px with wide
-              // tracking runs the full width of a 375px screen and the
-              // placeholder clips at both ends.
-              className="h-16 w-full rounded-2xl border border-black/10 bg-white px-4 text-center font-display text-2xl font-extrabold uppercase tracking-wider text-ink outline-none focus:border-sky focus:ring-2 focus:ring-sky/20 sm:text-3xl"
+              className="h-12 min-w-0 flex-1 bg-transparent px-2 font-display text-xl font-extrabold uppercase tracking-wider text-ink outline-none placeholder:font-sans placeholder:text-base placeholder:font-medium placeholder:normal-case placeholder:tracking-normal placeholder:text-ink/30 sm:text-2xl"
             />
+            <Button type="submit" pending={working} className="h-12 shrink-0 rounded-xl px-6 text-sm font-semibold sm:h-12 sm:px-8">
+              {f.search}
+            </Button>
           </div>
-          {/* Under the field on a phone rather than beside it: the ticket box is
-              deliberately huge, and squeezing a button next to it leaves both
-              too narrow to hit while someone waits at the counter. */}
-          <Button type="submit" pending={working} className="h-16 px-8 text-base max-sm:w-full">
-            {f.search}
-          </Button>
         </form>
 
         {error ? (

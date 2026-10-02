@@ -11,7 +11,7 @@
 // app/api/account/otp/route.ts.
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import PhoneField from "@/components/PhoneField";
@@ -26,7 +26,7 @@ import type { Localized } from "@/lib/localized";
 import { formatDateLabel } from "@/lib/booking";
 import type { BookingSummary } from "@/lib/booking";
 import { toNationalDigits, toStoredPhone, validateSaudiMobile } from "@/lib/phone";
-import type { LoyaltyRules } from "@/lib/rewards";
+import { spendableWorth, type LoyaltyRules } from "@/lib/rewards";
 import TextInput from "@/components/TextInput";
 import {
   birthdayRange,
@@ -39,6 +39,7 @@ import {
   PERSON_TEXT,
 } from "@/lib/admin/validate";
 import { formatDateKey, riyadhDateKey } from "@/lib/time";
+import { formatSAR, signedSAR } from "@/lib/money";
 import { validationMessages } from "@/lib/validation-messages";
 
 type Customer = {
@@ -59,17 +60,30 @@ type Credit = {
   expiresAt: string;
 };
 
+/** Her money in the salon (accountWallet, lib/wallet.ts). */
+type MoneyWallet = {
+  available: number;
+  history: { reason: string; halalas: number; at: string }[];
+  /** Every movement she has, of which `history` is the latest. */
+  count: number;
+};
+
+/** Movements the wallet card shows; /account/wallet has every one. */
+const MONEY_PREVIEW = 5;
+
 export default function AccountView({
   customer,
   balance = 0,
   credits = [],
   history = [],
   rules,
+  wallet,
 }: {
   customer?: Customer;
   balance?: number;
   credits?: Credit[];
   history?: BookingSummary[];
+  wallet?: MoneyWallet;
   /** The loyalty scheme's four numbers. Needed signed out too — the advert at
    *  the bottom of the sign-in screen quotes the offer, and that is the whole
    *  reason to make an account. */
@@ -82,6 +96,7 @@ export default function AccountView({
       credits={credits}
       history={history}
       rules={rules}
+      wallet={wallet}
     />
   ) : (
     <SignedOut rules={rules} />
@@ -90,8 +105,8 @@ export default function AccountView({
 
 // ---------------------------------------------------------------- signed in --
 
-/** Bookings shown before "Show all". Three rows of two on a desktop. */
-const BOOKINGS_PREVIEW = 6;
+/** Bookings on one page. Three rows of two on a desktop. */
+const BOOKINGS_PER_PAGE = 6;
 
 /**
  * What she can filter her bookings by, each the question she comes with:
@@ -113,12 +128,14 @@ function SignedIn({
   credits,
   history,
   rules,
+  wallet,
 }: {
   customer: Customer;
   balance: number;
   credits: Credit[];
   history: BookingSummary[];
   rules: LoyaltyRules;
+  wallet?: MoneyWallet;
 }) {
   const { c, lang } = useI18n();
   const a = c.account;
@@ -126,9 +143,10 @@ function SignedIn({
 
   const [verifying, setVerifying] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
-  const [showAll, setShowAll] = useState(false);
+  const [page, setPage] = useState(0);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<BookingFilter>("all");
+  const bookingsTop = useRef<HTMLElement>(null);
 
   const q = query.trim().toLowerCase();
   const shown = history.filter(
@@ -137,6 +155,14 @@ function SignedIn({
       (!q ||
         [pick(r.serviceName, lang), r.code, r.ticketNo ?? ""].some((s) => s.toLowerCase().includes(q))),
   );
+  // Clamped, not stored: a refresh after a cancel can shorten the list under
+  // the page she is on.
+  const pages = Math.max(1, Math.ceil(shown.length / BOOKINGS_PER_PAGE));
+  const at = Math.min(page, pages - 1);
+  const goTo = (p: number) => {
+    setPage(p);
+    bookingsTop.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  };
 
   // Whether a booking can still be cancelled was decided when this page
   // rendered, so a tab left open all afternoon keeps offering a button whose
@@ -193,27 +219,25 @@ function SignedIn({
           </button>
         </div>
 
-        {/* Two columns from lg: the bookings, which grow without limit, get the
-            width; the wallet, memberships and details, which do not, sit beside
-            them. One 760px column left the sides of a desktop empty and stacked
-            every booking between the wallet and the form.
+        {/* Two columns from lg: her bookings, which grow, beside the wallet
+            and her details just below it. Then, across the whole width, what
+            she has left — points and memberships as one row of equal cards.
 
-            Three grid items rather than two columns, so a phone still reads
-            wallet → bookings → details: the side panels are split in two, and
-            the bookings span both of their rows. `self-start` on each, or a
-            short panel stretches to the height of the booking list. */}
-        <div className="mt-8 grid items-start gap-8 lg:grid-cols-[1fr_380px] lg:grid-rows-[auto_1fr]">
-          {/* -- the wallet and her memberships ------------------------------ */}
-          <div className="space-y-6 self-start lg:col-start-2 lg:row-start-1">
-            <Wallet balance={balance} rules={rules} />
-            <Memberships credits={credits} />
-          </div>
+            Four grid items rather than two columns, so a phone reads wallet →
+            bookings → what she has left → details. The bookings span the right
+            side's two rows, the second taking the slack, so the details sit
+            under the wallet and not under the booking list. `minmax(0,1fr)`,
+            or a column sizes to its widest child and a phone scrolls sideways. */}
+        <div className="mt-8 grid grid-cols-[minmax(0,1fr)] items-start gap-8 lg:grid-cols-[minmax(0,1fr)_380px] lg:grid-rows-[auto_1fr_auto]">
+          {wallet && (
+            <div className="lg:col-start-2 lg:row-start-1">
+              <Wallet wallet={wallet} />
+            </div>
+          )}
 
           {/* -- the bookings ---------------------------------------------- */}
-          <section className="self-start lg:col-start-1 lg:row-span-2 lg:row-start-1">
-            <h2 className="text-start font-display text-lg font-extrabold text-ink">
-              {a.bookingsTitle}
-            </h2>
+          <section ref={bookingsTop} className="scroll-mt-28 lg:col-start-1 lg:row-span-2 lg:row-start-1">
+            <h2 className="text-start font-display text-lg font-extrabold text-ink">{a.bookingsTitle}</h2>
 
             {history.length === 0 && (
               <p className="mt-4 text-start text-sm text-ink/55">{a.noBookings}</p>
@@ -222,16 +246,19 @@ function SignedIn({
             {/* Find one: by name, reference or ticket, and by what she can do
                 with it. In the browser — the page already holds her whole
                 history (50 at most), so a query per keystroke buys nothing.
-                Only once there is enough to need finding. */}
-            {history.length > BOOKINGS_PREVIEW && (
+                Only once there is more than a page of it. */}
+            {history.length > BOOKINGS_PER_PAGE && (
               <div className="mt-4 space-y-3">
                 <input
                   type="search"
                   value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setPage(0);
+                  }}
                   placeholder={a.searchBookings}
                   aria-label={a.searchBookings}
-                  className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-3 text-start text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40"
+                  className="w-full rounded-[12px] border border-black/[0.08] bg-white px-4 py-2.5 text-start text-sm text-ink outline-none placeholder:text-ink/35 focus:border-red/40"
                 />
                 <div className="flex flex-wrap gap-2">
                   {(Object.keys(BOOKING_FILTER_TEST) as BookingFilter[]).map((key) => (
@@ -239,7 +266,10 @@ function SignedIn({
                       key={key}
                       type="button"
                       aria-pressed={filter === key}
-                      onClick={() => setFilter(key)}
+                      onClick={() => {
+                        setFilter(key);
+                        setPage(0);
+                      }}
                       className={`rounded-full px-3.5 py-1.5 text-[12px] font-semibold transition-colors ${
                         filter === key
                           ? "bg-red text-white"
@@ -257,16 +287,16 @@ function SignedIn({
               <p className="mt-4 text-start text-sm text-ink/55">{a.noMatch}</p>
             )}
 
-            {/* Side by side once there is room for two cards at a readable
-                width, which halves how far a long history scrolls. Cards in a
-                row stretch to one height, so their buttons line up. */}
-            <div className="mt-4 grid gap-4 xl:grid-cols-2">
-              {(showAll ? shown : shown.slice(0, BOOKINGS_PREVIEW)).map((r) => (
+            {/* As many across as fit at a readable width, so the list reflows
+                at any size without a breakpoint. Every card has one skeleton,
+                so every row is one height. */}
+            <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))] gap-4">
+              {shown.slice(at * BOOKINGS_PER_PAGE, (at + 1) * BOOKINGS_PER_PAGE).map((r) => (
                 <BookingCard
                   key={r.code}
                   row={r}
-                  // From the full history, not the visible slice: a party split
-                  // by "Show all" is still one party.
+                  // From the full history, not the visible page: a party split
+                  // across two pages is still one party.
                   party={partyOf(history, r)}
                   lang={lang}
                   onOpenRefill={() => setVerifying(r.code)}
@@ -279,21 +309,34 @@ function SignedIn({
               ))}
             </div>
 
-            {/* The rest behind one tap. Newest first, so what is hidden is the
-                oldest — the visits she is least likely to be looking for. */}
-            {shown.length > BOOKINGS_PREVIEW && (
-              <button
-                type="button"
-                onClick={() => setShowAll((v) => !v)}
-                className="mt-4 w-full rounded-[12px] border border-black/[0.08] bg-white py-3 text-center text-[13px] font-semibold text-ink transition-colors hover:border-red/40"
-              >
-                {showAll ? a.showFewer : a.showAll.replace("{n}", String(shown.length))}
-              </button>
+            {/* Newest first, so later pages are the visits she is least likely
+                to be looking for. */}
+            {pages > 1 && (
+              <nav className="mt-5 flex flex-wrap items-center justify-center gap-1.5">
+                <PageButton label={a.prevPage} disabled={at === 0} onClick={() => goTo(at - 1)}>
+                  <span aria-hidden className="rtl:rotate-180">
+                    ‹
+                  </span>
+                </PageButton>
+                {Array.from({ length: pages }, (_, i) => (
+                  <PageButton key={i} current={i === at} onClick={() => goTo(i)}>
+                    {i + 1}
+                  </PageButton>
+                ))}
+                <PageButton label={a.nextPage} disabled={at === pages - 1} onClick={() => goTo(at + 1)}>
+                  <span aria-hidden className="rtl:rotate-180">
+                    ›
+                  </span>
+                </PageButton>
+              </nav>
             )}
           </section>
 
-          {/* -- the details ----------------------------------------------- */}
-          <div className="self-start lg:col-start-2 lg:row-start-2">
+          {/* -- what she has left, across the page ----------------------- */}
+          <Holdings balance={balance} rules={rules} credits={credits} />
+
+          {/* -- the details, under the wallet -------------------------------- */}
+          <div className="lg:col-start-2 lg:row-start-2">
             <ProfileForm customer={customer} />
           </div>
         </div>
@@ -303,6 +346,105 @@ function SignedIn({
 
       <SiteFooter />
     </main>
+  );
+}
+
+/** One square in the bookings' page row: a number, or an arrow with a label. */
+function PageButton({
+  current,
+  disabled,
+  label,
+  onClick,
+  children,
+}: {
+  current?: boolean;
+  disabled?: boolean;
+  label?: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      aria-current={current ? "page" : undefined}
+      className={`grid h-9 min-w-9 place-items-center rounded-[10px] px-2 text-[13px] font-semibold transition-colors disabled:opacity-30 ${
+        current ? "bg-red text-white" : "bg-white text-ink ring-1 ring-black/[0.08] hover:ring-red/40"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * What she has left to spend, one at a time behind a switch: her points, or her
+ * memberships. Two different things — a discount and prepaid services — so each
+ * gets the whole width rather than a small card beside a tall one. With no
+ * membership there is nothing to switch to, and only the points show.
+ */
+function Holdings({ balance, rules, credits }: { balance: number; rules: LoyaltyRules; credits: Credit[] }) {
+  const { c } = useI18n();
+  const k = c.packs;
+  const [tab, setTab] = useState<"points" | "memberships">("points");
+  const shown = credits.length > 0 ? tab : "points";
+
+  return (
+    <section className="lg:col-span-2 lg:row-start-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-start font-display text-lg font-extrabold text-ink">{k.yours}</h2>
+        {credits.length > 0 && (
+          <Link
+            href="/memberships"
+            className="shrink-0 text-[13px] font-semibold text-red transition-opacity hover:opacity-70"
+          >
+            {k.browse}
+          </Link>
+        )}
+      </div>
+
+      {credits.length > 0 && (
+        <div role="tablist" className="mt-4 inline-flex gap-1 rounded-full bg-white p-1 ring-1 ring-black/[0.06]">
+          {(
+            [
+              ["points", c.account.walletTitle],
+              ["memberships", `${k.title} (${new Set(credits.map((x) => x.customerPackId)).size})`],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={shown === key}
+              onClick={() => setTab(key)}
+              className={`rounded-full px-4 py-2 text-[13px] font-semibold transition-colors ${
+                shown === key ? "bg-red text-white" : "text-ink/65 hover:text-red"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div role="tabpanel" className="mt-4">
+        {shown === "points" ? (
+          <Points balance={balance} rules={rules} />
+        ) : (
+          <>
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))] gap-6">
+              <Memberships credits={credits} />
+            </div>
+            {/* A purchase that runs out vanishes from this list — packCredits
+                keeps only what can still be spent. Said once, so a membership
+                that is gone reads as finished rather than lost. */}
+            <p className="mt-3 text-start text-[11px] text-ink/40">{k.dropOff}</p>
+          </>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -319,8 +461,9 @@ function SignedIn({
  * two lines under one heading, never four of anything. A flat list of services
  * would imply a single pool, which is exactly the thing the ledger refuses.
  *
- * Empty renders nothing at all — an account page is not the place to advertise,
- * and the shelf is one tap away from the header card either way.
+ * One card per purchase, inside Holdings' row. Empty renders nothing at all —
+ * an account page is not the place to advertise, and the shelf is one tap away
+ * from the header either way.
  */
 function Memberships({ credits }: { credits: Credit[] }) {
   const { c, lang } = useI18n();
@@ -336,90 +479,132 @@ function Memberships({ credits }: { credits: Credit[] }) {
   }
 
   return (
-    <section className="rounded-[20px] bg-white p-6 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="font-display text-lg font-extrabold text-ink">{k.yours}</h2>
-        <Link
-          href="/memberships"
-          className="shrink-0 text-[13px] font-semibold text-red transition-opacity hover:opacity-70"
+    <>
+      {[...byPurchase.values()].map((lines) => (
+        <div
+          key={lines[0].customerPackId}
+          className="flex flex-col rounded-[20px] bg-white p-5 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]"
         >
-          {k.browse}
-        </Link>
-      </div>
-
-      <div className="mt-4 space-y-4">
-        {[...byPurchase.values()].map((lines) => (
-          <div key={lines[0].customerPackId} className="rounded-[14px] bg-cream/60 p-4">
-            <p className="font-display text-base font-extrabold text-red">
-              {pick(lines[0].packName, lang)}
-            </p>
-            <ul className="mt-2 space-y-2.5">
-              {lines.map((credit) => {
-                // What she has spent, from what she was sold. Never negative: a
-                // credit handed back on a cancellation can only bring `left`
-                // back up to what the purchase granted, never past it.
-                const used = Math.max(0, credit.granted - credit.left);
-                const pct = credit.granted > 0 ? (used / credit.granted) * 100 : 0;
-                return (
-                  <li key={credit.serviceId}>
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className="truncate text-ink">
-                        {credit.serviceName ? pick(credit.serviceName, lang) : "—"}
-                      </span>
-                      <span className="shrink-0 font-semibold text-ink">
-                        {k.leftCount.replace("{n}", String(credit.left))}
-                      </span>
-                    </div>
-                    {/* How far through it she is, with the count on the bar's
+          <h3 className="truncate font-display text-base font-extrabold text-red">{pick(lines[0].packName, lang)}</h3>
+          <ul className="mb-4 mt-3 space-y-2.5">
+            {lines.map((credit) => {
+              // What she has spent, from what she was sold. Never negative: a
+              // credit handed back on a cancellation can only bring `left`
+              // back up to what the purchase granted, never past it.
+              const used = Math.max(0, credit.granted - credit.left);
+              const pct = credit.granted > 0 ? (used / credit.granted) * 100 : 0;
+              return (
+                <li key={credit.serviceId}>
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="truncate text-ink">
+                      {credit.serviceName ? pick(credit.serviceName, lang) : "—"}
+                    </span>
+                    <span className="shrink-0 font-semibold text-ink">
+                      {k.leftCount.replace("{n}", String(credit.left))}
+                    </span>
+                  </div>
+                  {/* How far through it she is, with the count on the bar's
                         own line — two lines a service rather than three, so a
                         membership of many services stays short.
                         `insetInlineStart` rather than `left`, so it fills
-                        right-to-left in Arabic with no second code path — the
-                        wallet bar above does the same. */}
-                    <div className="mt-1 flex items-center gap-3">
-                      <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-black/[0.06]">
-                        <div
-                          className="absolute top-0 h-full rounded-full bg-red/70"
-                          style={{ insetInlineStart: 0, width: `${pct}%` }}
-                        />
-                      </div>
-                      <span className="shrink-0 text-[11px] text-ink/45">
-                        {k.usedOf
-                          .replace("{used}", String(used))
-                          .replace("{n}", String(credit.granted))}
-                      </span>
+                        right-to-left in Arabic with no second code path. */}
+                  <div className="mt-1 flex items-center gap-3">
+                    <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-black/[0.06]">
+                      <div
+                        className="absolute top-0 h-full rounded-full bg-red/70"
+                        style={{ insetInlineStart: 0, width: `${pct}%` }}
+                      />
                     </div>
-                  </li>
-                );
-              })}
-            </ul>
-            {/* The deadline, because a credit is dead the moment it passes and
+                    <span className="shrink-0 text-[11px] text-ink/45">
+                      {k.usedOf.replace("{used}", String(used)).replace("{n}", String(credit.granted))}
+                    </span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {/* The deadline, because a credit is dead the moment it passes and
                 nothing sweeps it — she is owed the date, not a surprise. In
                 red with a countdown for the last two weeks, which is when the
                 date alone stops being enough to act on. */}
-            {(() => {
-              const days = Math.ceil((Date.parse(lines[0].expiresAt) - Date.now()) / 86_400_000);
-              return (
-                <p className={`mt-3 text-[12px] ${days <= 14 ? "font-semibold text-red" : "text-ink/50"}`}>
-                  {k.expiresOn.replace("{date}", formatDateLabel(lines[0].expiresAt.slice(0, 10), lang))}
-                  {days <= 14 && ` · ${c.history.daysLeft.replace("{n}", String(days))}`}
-                </p>
-              );
-            })()}
-          </div>
-        ))}
+          {(() => {
+            const days = Math.ceil((Date.parse(lines[0].expiresAt) - Date.now()) / 86_400_000);
+            return (
+              <p
+                className={`mt-auto border-t border-black/[0.06] pt-3 text-[12px] ${
+                  days <= 14 ? "font-semibold text-red" : "text-ink/55"
+                }`}
+              >
+                {k.expiresOn.replace("{date}", formatDateLabel(lines[0].expiresAt.slice(0, 10), lang))}
+                {days <= 14 && ` · ${c.history.daysLeft.replace("{n}", String(days))}`}
+              </p>
+            );
+          })()}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Her wallet: money she holds with the salon, from a cancelled booking, a gift
+ * card or a treat we couldn't serve, spent at any checkout. `available` is never
+ * below zero (a debt is the owner's to settle, not hers to be shown). The last
+ * ten movements say why it moved.
+ */
+function Wallet({ wallet }: { wallet: MoneyWallet }) {
+  const { c, lang } = useI18n();
+  const a = c.account;
+  const reasons = a.moneyReasons as Record<string, string>;
+
+  return (
+    <section className="overflow-hidden rounded-[20px] bg-white text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
+      <div className="bg-gradient-to-b from-[#fbeaea] to-transparent p-6 pb-7">
+        <h2 className="font-display text-lg font-extrabold text-ink">{a.moneyTitle}</h2>
+        <p
+          className={`mt-3 flex items-baseline gap-1.5 font-display text-4xl font-extrabold ${
+            wallet.available > 0 ? "text-red" : "text-ink/25"
+          }`}
+        >
+          <Riyal className="h-6 w-6 shrink-0" />
+          {formatSAR(wallet.available)}
+        </p>
+        <p className="mt-1.5 text-[12px] text-ink/55">{wallet.available > 0 ? a.moneyUse : a.moneyEmpty}</p>
       </div>
 
-      {/* A purchase that runs out vanishes from this list — packCredits keeps
-          only what can still be spent. Said once, so a membership that is gone
-          reads as finished rather than lost. */}
-      <p className="mt-4 text-[11px] text-ink/40">{k.dropOff}</p>
+      {wallet.history.length > 0 && (
+        <div className="px-6 pb-6">
+          <h3 className="text-[12px] font-semibold uppercase tracking-wider text-ink/45">{a.moneyHistory}</h3>
+          <ul className="mt-2 space-y-2">
+            {wallet.history.slice(0, MONEY_PREVIEW).map((h, i) => (
+              <li key={i} className="flex items-center justify-between gap-3 text-[13px]">
+                <span className="min-w-0 truncate text-ink/70">
+                  {reasons[h.reason] ?? h.reason}
+                  <span className="text-ink/40"> · {formatDateLabel(riyadhDateKey(new Date(h.at)), lang)}</span>
+                </span>
+                <span dir="ltr" className={`shrink-0 font-semibold ${h.halalas > 0 ? "text-red" : "text-ink"}`}>
+                  {signedSAR(h.halalas)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {wallet.count > MONEY_PREVIEW && (
+            <Link
+              href="/account/wallet"
+              className="mt-3 inline-block text-[12px] font-semibold text-red transition-opacity hover:opacity-70"
+            >
+              {a.moneyShowAll.replace("{n}", String(wallet.count))}{" "}
+              <span aria-hidden className="inline-block rtl:rotate-180">›</span>
+            </Link>
+          )}
+        </div>
+      )}
     </section>
   );
 }
 
 /**
- * The wallet: money she already has, not a rank she has reached.
+ * Loyalty points: money she already has, not a rank she has reached.
  *
  * **There is deliberately no progress bar here.** Two designs were tried and
  * both were wrong for the same reason. A track from zero to a top rung made the
@@ -438,58 +623,57 @@ function Memberships({ credits }: { credits: Credit[] }) {
  * is per bill. It lives at checkout, where she can act on it. See the earn
  * progress strip in app/(site)/booking/payment/page.tsx.
  */
-function Wallet({ balance, rules }: { balance: number; rules: LoyaltyRules }) {
+function Points({ balance, rules }: { balance: number; rules: LoyaltyRules }) {
   const { c } = useI18n();
   const a = c.account;
 
   const { stepPoints, pointHalalas, firstSar } = rules;
-  const worthSar = (balance * pointHalalas) / 100;
   const stepSar = (stepPoints * pointHalalas) / 100;
 
+  // Quieter than the wallet on purpose: the wallet is money she holds, this is
+  // a discount she can take. Under its tab it is as wide as what it says, the
+  // balance beside the deal, rather than a strip with an empty middle.
   return (
-    <section className="overflow-hidden rounded-[20px] bg-white text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)]">
-      <div className="bg-gradient-to-b from-[#fbeaea] to-transparent p-6 pb-7">
-        <h2 className="font-display text-lg font-extrabold text-ink">{a.walletTitle}</h2>
-
+    <section className="flex flex-col gap-5 rounded-[20px] bg-white p-6 text-start shadow-[0_10px_30px_rgba(184,0,7,0.05)] sm:w-fit sm:flex-row sm:items-center sm:gap-8">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="font-display text-base font-extrabold text-ink">{a.walletTitle}</h3>
+          {balance > 0 && (
+            <span className="rounded-full bg-red/[0.07] px-2.5 py-0.5 text-[11px] font-semibold text-red">
+              {a.walletSpendable}
+            </span>
+          )}
+        </div>
         {balance > 0 ? (
           <>
-            {/* The money, first and largest. A tier badge says what you are; a
-                balance in riyals says what you have. */}
-            <p className="mt-3 flex items-baseline gap-1.5 font-display text-4xl font-extrabold text-red">
-              <Riyal className="h-6 w-6 shrink-0" />
-              {worthSar}
+            {/* The money first. A tier badge says what you are; a balance in
+                riyals says what you have. */}
+            <p className="mt-2 flex items-baseline gap-1 font-display text-3xl font-extrabold text-red">
+              <Riyal className="h-5 w-5 shrink-0" />
+              {formatSAR(spendableWorth(balance, rules))}
             </p>
-            <p className="mt-1 text-[13px] font-semibold text-ink/60">
+            <p className="mt-0.5 text-[12px] font-semibold text-ink/55">
               {a.walletPoints.replace("{n}", String(balance))}
-            </p>
-            <p className="mt-3 inline-flex rounded-full bg-red/[0.07] px-3 py-1 text-[12px] font-semibold text-red">
-              {a.walletSpendable}
             </p>
           </>
         ) : (
           <>
-            <p className="mt-3 font-display text-4xl font-extrabold text-ink/25">
+            <p className="mt-2 font-display text-3xl font-extrabold text-ink/25">
               {a.walletPoints.replace("{n}", "0")}
             </p>
-            <p className="mt-1.5 text-[12px] text-ink/55">{a.walletEmpty}</p>
+            <p className="mt-0.5 text-[12px] text-ink/55">{a.walletEmpty}</p>
           </>
         )}
       </div>
 
       {/* The deal, stated once. The ladder of locked rungs that used to live
-          here was three rows saying what one sentence says, and it stopped
-          being true the moment rewards became a currency rather than tiers. */}
-      <div className="px-6 pb-6">
-        <h3 className="text-[12px] font-semibold uppercase tracking-wider text-ink/45">
-          {a.ladderTitle}
-        </h3>
-        <p className="mt-2 text-[13px] text-ink/60">
-          {a.walletHowTo
-            .replace("{first}", String(firstSar))
-            .replace("{points}", String(stepPoints))
-            .replace("{sar}", String(stepSar))}
-        </p>
-      </div>
+          here was three rows saying what one sentence says. */}
+      <p className="border-t border-black/[0.06] pt-4 text-[13px] text-ink/60 sm:max-w-[340px] sm:border-s sm:border-t-0 sm:ps-8 sm:pt-0">
+        {a.walletHowTo
+          .replace("{first}", String(firstSar))
+          .replace("{points}", String(stepPoints))
+          .replace("{sar}", String(stepSar))}
+      </p>
     </section>
   );
 }
@@ -517,8 +701,6 @@ function ProfileForm({ customer }: { customer: Customer }) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const say = (key: string | undefined): string =>
-    (a.errors as Record<string, string>)[toCamel(key ?? "failed")] ?? a.errors.failed;
 
   const dirty =
     name.trim() !== (customer.name ?? "") ||
@@ -547,7 +729,7 @@ function ProfileForm({ customer }: { customer: Customer }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(res.status === 429 ? a.errors.tooMany : say(data.error));
+        setError(res.status === 429 ? a.errors.tooMany : errorText(a.errors, data.error));
         return;
       }
       setSaved(true);
@@ -681,9 +863,6 @@ function SignedOut({ rules }: { rules: LoyaltyRules }) {
   const emailError = checkEmail(validationMessages[lang], a.emailLabel, email, { required: true });
   const errors = profileErrors(lang, a, { name, phone, birthday });
 
-  /** Map a server error code to a sentence. Unknown codes fall back rather than blank. */
-  const say = (key: string | undefined): string =>
-    (a.errors as Record<string, string>)[toCamel(key ?? "failed")] ?? a.errors.failed;
 
   const sendCode = async () => {
     if (busy) return;
@@ -699,7 +878,7 @@ function SignedOut({ rules }: { rules: LoyaltyRules }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(res.status === 429 ? a.errors.tooMany : say(data.error));
+        setError(res.status === 429 ? a.errors.tooMany : errorText(a.errors, data.error));
         return;
       }
       setSentTo(data.sentTo ?? null);
@@ -725,7 +904,7 @@ function SignedOut({ rules }: { rules: LoyaltyRules }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(res.status === 429 ? a.errors.tooMany : say(data.error));
+        setError(res.status === 429 ? a.errors.tooMany : errorText(a.errors, data.error));
         setCode("");
         return;
       }
@@ -766,7 +945,7 @@ function SignedOut({ rules }: { rules: LoyaltyRules }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(say(data.error));
+        setError(errorText(a.errors, data.error));
         // The ticket is spent or stale — send them back to the start rather
         // than leaving them on a form that can no longer submit.
         if (data.error === "ticket-expired" || data.error === "already-registered") {
@@ -1044,7 +1223,7 @@ function nextPath(): string {
   return url.origin === window.location.origin ? url.pathname + url.search : "/account";
 }
 
-/** `too-many` → `tooMany`, so an API error code indexes the strings directly. */
-function toCamel(key: string): string {
-  return key.replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
+/** A server error code as her sentence: `too-many` indexes `tooMany`. Unknown codes fall back, never blank. */
+function errorText(errors: Record<string, string> & { failed: string }, code: string | undefined): string {
+  return errors[(code ?? "failed").replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase())] ?? errors.failed;
 }

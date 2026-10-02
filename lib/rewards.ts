@@ -106,6 +106,16 @@ export function pointsValue(points: number, rules: LoyaltyRules): number {
   return Math.trunc(points) * Math.max(0, Math.trunc(rules.pointHalalas));
 }
 
+/**
+ * What her balance is worth to spend: whole steps only, so 468 points is 90
+ * riyals, not 93.60. The 18 over a step buy nothing until the next 50.
+ */
+export function spendableWorth(balance: number, rules: LoyaltyRules): number {
+  const step = Math.trunc(rules.stepPoints);
+  if (step <= 0) return 0;
+  return pointsValue(Math.floor(balance / step) * step, rules);
+}
+
 export type RewardRefusal =
   /** Not a positive whole multiple of the step. Also what a hand-edited request looks like. */
   | "unknown"
@@ -180,6 +190,13 @@ export type LedgerRow = {
   /** Null when the movement belongs to no booking. */
   bookingStatus: string | null;
   bookingCreatedAt: Date | null;
+  /** A checkout for the booking is still payable (lib/payments `checkoutOpen`). */
+  checkoutOpen?: boolean;
+  /**
+   * The sweep flagged the booking a no-show (`no_show_at`). Still set after the
+   * desk closes it as `cancelled`; a reschedule clears it.
+   */
+  noShow?: boolean;
 };
 
 /**
@@ -187,8 +204,8 @@ export type LedgerRow = {
  *
  * Two ways that happens, and both matter:
  *
- *   • it was cancelled or nobody turned up — a customer cancellation, or a hold
- *     the sweep already collected;
+ *   • it was cancelled — a customer cancellation, or a hold the sweep already
+ *     collected;
  *   • it is *still* pending well past the window it had to be paid for — a
  *     declined payment the customer walked away from, or a gateway that threw.
  *
@@ -202,12 +219,22 @@ export type LedgerRow = {
  *
  * A retry inside the window keeps its discount and its debit — same booking,
  * same row. That is correct, not a leak.
+ *
+ * Nor is a hold past its window dead while a checkout for it is still open: she
+ * may be on her bank's page, and the booking can still confirm. Releasing the
+ * points then would let her spend them twice.
+ *
+ * A no-show is not dead at all. She paid for it, so what she earned on it
+ * counts and what she spent on it stays spent (CLAUDE.md). That covers the
+ * desk's `no_show` and the sweep's flag closed as `cancelled` (`noShow`).
  */
 function isDead(row: LedgerRow, holdMin: number, now: Date): boolean {
   const { bookingStatus: status, bookingCreatedAt: createdAt } = row;
   if (status === null) return false; // not attached to a booking at all
-  if (status === "cancelled" || status === "no_show") return true;
+  if (status === "no_show" || row.noShow) return false;
+  if (status === "cancelled") return true;
   if (status !== "pending") return false;
+  if (row.checkoutOpen) return false;
   // No created_at shouldn't happen. Treated as dead rather than alive: the
   // failure mode of guessing wrong is a customer who cannot spend points they
   // own, and that is the worse of the two.

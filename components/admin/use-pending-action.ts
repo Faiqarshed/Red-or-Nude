@@ -29,6 +29,9 @@
 import { useCallback, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
+/** Fired on window when an action threw; the Shell says so (components/admin/Shell.tsx). */
+export const ACTION_FAILED = "admin-action-failed";
+
 export type PendingAction = {
   /** True from the click until the refreshed server render is on screen. */
   pending: boolean;
@@ -66,6 +69,14 @@ export function usePendingAction(): PendingAction {
       try {
         const ok = await work();
         if (ok !== false) startRefresh(() => router.refresh());
+      } catch (err) {
+        // Thrown, not refused: the connection dropped or the server failed.
+        // Callers only handle `{ ok: false }`, so this was a spinner that
+        // stopped and nothing said. It may have written before it threw, so the
+        // screen is read again and the panel asks her to check it.
+        console.error("[admin] action failed", err);
+        startRefresh(() => router.refresh());
+        window.dispatchEvent(new Event(ACTION_FAILED));
       } finally {
         // Batched with the startRefresh above, so `pending` hands straight over
         // from one flag to the other with no frame in between where it is false.

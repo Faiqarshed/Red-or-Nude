@@ -70,8 +70,10 @@ clicked".** The codebase says so itself, in
 So on day one this will flag people who were served. Three things make that
 survivable, and they are why the design looks the way it does:
 
-1. **Today only.** Switching this on cannot flag months of untouched history,
-   because history is not today.
+1. **A short lookback.** The sweep reaches back 7 days (`NO_SHOW_LOOKBACK_DAYS`
+   in `lib/bookings.ts`), not today only as first designed — with "today", a
+   booking nobody swept by midnight stayed `confirmed` for good. Switching this
+   on still cannot flag months of untouched history.
 2. **Releasing is not taking.** The booking row is untouched — same ticket, same
    price, same customer. The chair only actually changes hands if a walk-in
    claims it, and until then the customer can still sit down.
@@ -329,7 +331,7 @@ curl -s "localhost:3000/api/availability?branchId=<id>&date=<today>&duration=45&
 Compare with the same call **without** `walkIn=1` — signed out the two must match
 exactly. Signed in to the admin in a browser, the reschedule dialog should show more
 slots than the public booking page does for the same day. (The walk-in drawer this
-used to name is retired.)
+used to name is retired: docs/WALLET-PLAN.md.)
 
 ## 8. Regression
 

@@ -1,14 +1,15 @@
-// Assembling a simplified tax invoice from bookings that have already been paid.
+// Assembling the booking confirmation for a bill that has already been paid.
 //
 // Everything here is read back out of the booking rows rather than recomputed
 // from the catalog: `serviceName`, `servicePriceHalalas`, the add-on snapshots
 // and the VAT split were all frozen at booking time precisely so an invoice
 // reprinted next year still says what the customer was charged today.
 //
-// KSA prices are VAT-inclusive, so the invoice *reports* the VAT already inside
-// the total — it never adds any. Per guest, subtotal + VAT = total, and the
-// guests' figures sum to the bill; see docs/BOOKING-V2.md "The discount maths"
-// for why the two guests' VAT may differ by a halala from VAT on the whole bill.
+// It is not a tax invoice. StreamPay issues that for every payment (numbered,
+// ZATCA-compliant, with its QR code), and this email links to it. One tax
+// document per sale, so there is no second set of VAT figures to disagree with
+// theirs: no invoice number, no VAT lines, no VAT number here. Prices are
+// VAT-inclusive and the email says so.
 
 import "server-only";
 import { and, eq, inArray } from "drizzle-orm";
@@ -24,8 +25,11 @@ import {
   stations,
   type Localized,
 } from "@/lib/db/schema";
+import { discountParts } from "@/lib/money";
 import { getSettings } from "@/lib/settings";
 import type { PaymentMethod } from "@/lib/payments";
+import { membershipsLeft, packsSpentOn, type MembershipLeft } from "@/lib/packs";
+import { giftCardLeftAfter, paidWithGiftCard } from "@/lib/wallet";
 
 export type InvoiceLine = { label: Localized; amountHalalas: number };
 
@@ -43,20 +47,17 @@ export type InvoiceGuest = {
    */
   technicianName: string | null;
   lines: InvoiceLine[];
+  /** Each discount on her line, named for what it was (discountParts). */
+  discounts: { kind: InvoiceDiscount; halalas: number }[];
   discountHalalas: number;
-  subtotalHalalas: number;
-  vatHalalas: number;
   totalHalalas: number;
 };
 
+export type InvoiceDiscount = "group" | "promo" | "points" | "wallet" | "giftCard";
+
 export type InvoiceData = {
-  /** Deterministic: the same booking always renders the same invoice number. */
-  number: string;
-  issuedAt: Date;
-  vatPercent: number;
   seller: {
     name: string;
-    vatNumber: string | null;
     branchName: Localized | null;
     branchAddress: Localized | null;
     branchPhone: string | null;
@@ -72,33 +73,27 @@ export type InvoiceData = {
   providerRef: string | null;
   guests: InvoiceGuest[];
   /**
-   * The discount code applied to this bill, if any. Names the discount line —
+   * The discount code applied to this bill, if any. Names the promo line —
    * "Discount (EID25)" rather than a deduction the customer has to take on
-   * trust. Null when the only reduction was the group discount.
+   * trust.
    */
   promoCode: string | null;
-  subtotalHalalas: number;
-  vatHalalas: number;
   discountHalalas: number;
   totalHalalas: number;
+  /** StreamPay's tax invoice for this payment, when the gateway gave one. */
+  taxInvoiceUrl: string | null;
+  /**
+   * The memberships a credit came off for this booking, with what is left on
+   * each. This email is the "you used a credit" message: it goes out the moment
+   * the booking the credit paid for is confirmed, so it is not sent twice.
+   */
+  memberships: MembershipLeft[];
+  /**
+   * What is left of the gift card a guest paid with (giftCardLeftAfter): it
+   * waits in her email's wallet, and this email tells her to sign in for it.
+   */
+  giftCardLeft: number;
 };
-
-/**
- * `INV-202608-4F2K` — the issue month plus the anchor booking's code suffix.
- *
- * Derived rather than drawn from a counter so that no new table, migration or
- * lock sits in the payment path, and so a reprint is byte-identical. Uniqueness
- * rides on `bookings.code`, which is already unique.
- *
- * ponytail: ZATCA wants invoice numbers to be sequential within a taxpayer. This
- * is unique and stable but not sequential, so it needs replacing with a real
- * counter before the salon files these — alongside the QR/XML work that a
- * compliant simplified invoice also needs. Fine while the gateway is a stub.
- */
-function invoiceNumber(code: string, issuedAt: Date): string {
-  const month = `${issuedAt.getUTCFullYear()}${String(issuedAt.getUTCMonth() + 1).padStart(2, "0")}`;
-  return `INV-${month}-${code.replace(/^RON-/, "")}`;
-}
 
 /**
  * Build the invoice for one bill. `bookingIds` is every guest on it — one id for
@@ -156,7 +151,7 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
   // Any paid row on this bill carries the method and the gateway's reference —
   // a group shares one charge, so they all say the same thing.
   const [paid] = await db
-    .select({ method: payments.method, providerRef: payments.providerRef })
+    .select({ method: payments.method, providerRef: payments.providerRef, raw: payments.raw })
     .from(payments)
     .where(and(inArray(payments.bookingId, bookingIds), eq(payments.status, "paid")))
     .limit(1);
@@ -172,12 +167,10 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
         .limit(1)
     : [];
 
-  const { vat_percent, business_legal_name, vat_number } = await getSettings([
-    "vat_percent",
-    "business_legal_name",
-    "vat_number",
-  ]);
+  const { business_legal_name } = await getSettings(["business_legal_name"]);
 
+  // A guest's gift card is named as one; signed in, it went into her wallet first.
+  const byCard = await paidWithGiftCard(bookingIds);
   const guests: InvoiceGuest[] = ordered.map((b) => {
     const lines: InvoiceLine[] = [];
 
@@ -200,23 +193,23 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
       stationLabel: b.stationId ? (labelOf.get(b.stationId) ?? null) : null,
       technicianName: b.technicianId ? (techOf.get(b.technicianId) ?? null) : null,
       lines,
+      discounts: (Object.entries(discountParts(b)) as [InvoiceDiscount, number][])
+        .filter(([, halalas]) => halalas > 0)
+        .map(([kind, halalas]) => ({ kind: kind === "wallet" && byCard ? "giftCard" : kind, halalas })),
       discountHalalas: b.discountHalalas,
-      subtotalHalalas: b.subtotalHalalas,
-      vatHalalas: b.vatHalalas,
       totalHalalas: b.totalHalalas,
     };
   });
 
   const sum = (pick: (g: InvoiceGuest) => number) => guests.reduce((n, g) => n + pick(g), 0);
-  const issuedAt = new Date();
+  const invoiceUrl = (paid?.raw as { invoiceUrl?: unknown } | null)?.invoiceUrl;
+  const memberships = anchor.customerId
+    ? await membershipsLeft(anchor.customerId, await packsSpentOn(bookingIds))
+    : [];
 
   return {
-    number: invoiceNumber(anchor.code, issuedAt),
-    issuedAt,
-    vatPercent: vat_percent,
     seller: {
       name: business_legal_name,
-      vatNumber: vat_number || null,
       branchName: branch?.name ?? null,
       branchAddress: branch?.address ?? null,
       branchPhone: branch?.phone ?? null,
@@ -232,9 +225,10 @@ export async function buildBookingInvoice(bookingIds: string[]): Promise<Invoice
     providerRef: paid?.providerRef ?? null,
     guests,
     promoCode: promo?.code ?? null,
-    subtotalHalalas: sum((g) => g.subtotalHalalas),
-    vatHalalas: sum((g) => g.vatHalalas),
     discountHalalas: sum((g) => g.discountHalalas),
     totalHalalas: sum((g) => g.totalHalalas),
+    taxInvoiceUrl: typeof invoiceUrl === "string" ? invoiceUrl : null,
+    memberships,
+    giftCardLeft: await giftCardLeftAfter(anchor.id),
   };
 }

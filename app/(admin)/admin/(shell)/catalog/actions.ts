@@ -18,6 +18,23 @@ import { diffOf, recordAudit } from "@/lib/audit";
 import { sarToHalalas } from "@/lib/money";
 import { reorderBySort } from "@/lib/admin/reorder";
 import { DESC_MAX, NAME_MAX } from "@/lib/admin/validate";
+import { retireProduct, syncProductQuietly } from "@/lib/payments/streampay";
+import { productName } from "@/lib/payments/lines";
+
+/** The StreamPay product key for a catalogue row. Add-ons and upsells share a table. */
+const productKey = (kind: CatalogKind, id: string) =>
+  `product:${kind === "upsell" ? "addon" : kind}:${id}`;
+
+/** Mirror a saved row to StreamPay. Never fails the save — see syncProductQuietly. */
+async function syncToStreampay(kind: CatalogKind, id: string) {
+  const table = TABLES[kind];
+  const [row] = await db
+    .select({ name: table.name, priceHalalas: table.priceHalalas, active: table.active })
+    .from(table)
+    .where(eq(table.id, id))
+    .limit(1);
+  if (row) await syncProductQuietly(productKey(kind, id), { ...row, name: productName(row.name) });
+}
 
 /**
  * `upsell` is the coffee-and-cookie kind. Same `addons` table as `addon` — which
@@ -185,6 +202,7 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
         entityId: data.id,
         diff: diffOf(before as Record<string, unknown>, values),
       });
+      await syncToStreampay(data.kind, data.id);
       revalidateAll();
       return { ok: true, id: data.id };
     }
@@ -197,6 +215,7 @@ export async function saveCatalogItem(input: CatalogInput): Promise<ActionResult
       entityId: row.id,
       diff: diffOf(null, values),
     });
+    await syncToStreampay(data.kind, row.id);
     revalidateAll();
     return { ok: true, id: row.id };
   } catch (err) {
@@ -241,6 +260,7 @@ export async function setCatalogActive(
     entityId: id,
     diff: { active: { from: !active, to: active } },
   });
+  await syncToStreampay(kind, id);
   revalidateAll();
   return { ok: true, id };
 }
@@ -260,6 +280,9 @@ export async function deleteCatalogItem(kind: CatalogKind, id: string): Promise<
   }
 
   await recordAudit(actor, { action: "delete", entity: ENTITY[kind], entityId: id, label: gone?.name });
+  // Archived there after an hour (RETIRE_AFTER_MIN), not deleted: a checkout
+  // already open can still be paid, and past invoices still name it.
+  await retireProduct(productKey(kind, id));
   revalidateAll();
   return { ok: true, id };
 }

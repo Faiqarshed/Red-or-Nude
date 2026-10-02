@@ -10,16 +10,15 @@
 
 import { NextResponse } from "next/server";
 import { issueMonthlyCodesForEveryone } from "@/lib/staff-codes";
+import { cronDenied } from "@/lib/cron";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   // A cron endpoint is a public URL. Without this, anyone could mint the
   // salon's 90%-off codes on demand.
-  const secret = process.env.CRON_SECRET;
-  if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const denied = cronDenied(request);
+  if (denied) return denied;
 
   const result = await issueMonthlyCodesForEveryone();
   return NextResponse.json({ ok: true, ...result });

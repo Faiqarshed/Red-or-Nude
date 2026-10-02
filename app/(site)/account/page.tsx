@@ -9,6 +9,7 @@ import { currentCustomer } from "@/lib/account/guard";
 import { loyaltyBalance, loyaltyRules } from "@/lib/loyalty";
 import { packCredits } from "@/lib/packs";
 import { bookingSummaries } from "@/lib/bookings";
+import { accountWallet } from "@/lib/wallet";
 import AccountView from "./AccountView";
 
 export const metadata: Metadata = { title: "Red Or Nude — Account" };
@@ -24,7 +25,7 @@ export default async function AccountPage() {
   // quotes the offer, and that is the reason to make an account at all.
   if (!customer) return <AccountView rules={await loyaltyRules()} />;
 
-  const [rules, balance, credits, history] = await Promise.all([
+  const [rules, balance, credits, history, wallet] = await Promise.all([
     loyaltyRules(),
     loyaltyBalance(customer.id),
     // What her memberships have left. This is the screen a customer opens to
@@ -39,6 +40,9 @@ export default async function AccountPage() {
     // identically on both screens and — the part that matters — neither screen
     // can quietly start revealing more than the other.
     bookingSummaries({ customerId: customer.id }),
+    // Her money, by the email she signs in with: credit made signed out under
+    // that address is hers too. The latest few; /account/wallet has them all.
+    accountWallet(customer.email),
   ]);
 
   return (
@@ -61,6 +65,7 @@ export default async function AccountPage() {
         expiresAt: c.expiresAt.toISOString(),
       }))}
       history={history}
+      wallet={wallet}
     />
   );
 }

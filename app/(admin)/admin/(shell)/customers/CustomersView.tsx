@@ -98,7 +98,10 @@ export default function CustomersView({
 
       <Card className="overflow-hidden">
         {customers.length === 0 ? (
-          <EmptyState title={t.customers.empty} icon={<Users className="h-8 w-8" strokeWidth={1.25} />} />
+          <EmptyState
+            title={query ? t.customers.noMatch : t.customers.empty}
+            icon={<Users className="h-8 w-8" strokeWidth={1.25} />}
+          />
         ) : (
           <AdminTable
             rows={customers}

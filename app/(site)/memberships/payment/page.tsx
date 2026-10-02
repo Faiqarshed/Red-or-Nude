@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 export default async function MembershipPaymentPage({
   searchParams,
 }: {
-  searchParams: { pack?: string };
+  searchParams: { pack?: string; paid?: string };
 }) {
   const [packs, customer] = await Promise.all([getPublicPacks(), currentCustomer()]);
 
@@ -29,5 +29,5 @@ export default async function MembershipPaymentPage({
   const pack = packs.find((p) => p.id === searchParams.pack);
   if (!pack) redirect("/memberships");
 
-  return <MembershipPaymentView pack={pack} signedIn={Boolean(customer)} />;
+  return <MembershipPaymentView pack={pack} signedIn={Boolean(customer)} returning={Boolean(searchParams.paid)} />;
 }

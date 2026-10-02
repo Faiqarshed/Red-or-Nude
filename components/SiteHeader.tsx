@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { useAccount } from "@/lib/account/context";
+import WalletMenu from "@/components/WalletMenu";
 
 export default function SiteHeader() {
   const { c, dir, toggle } = useI18n();
@@ -94,18 +95,27 @@ export default function SiteHeader() {
             {c.header.otherLang}
           </button>
           {signInPill}
+          {signedIn && <WalletMenu />}
         </div>
 
-        {/* Mobile: hamburger toggle (right) */}
-        <button
-          aria-label={c.header.menu}
-          onClick={() => setOpen((v) => !v)}
-          className="flex flex-col items-center justify-center gap-[5px] text-red lg:hidden"
-        >
-          <span className={`block h-[2px] w-6 bg-red transition-transform ${open ? "translate-y-[7px] rotate-45" : ""}`} />
-          <span className={`block h-[2px] w-6 bg-red transition-opacity ${open ? "opacity-0" : ""}`} />
-          <span className={`block h-[2px] w-6 bg-red transition-transform ${open ? "-translate-y-[7px] -rotate-45" : ""}`} />
-        </button>
+        {/* Mobile: her wallet beside the hamburger, so it shows without opening
+            the menu, as it does on desktop. */}
+        <div className="flex items-center gap-4 lg:hidden">
+          {signedIn && <WalletMenu />}
+          <button
+            aria-label={c.header.menu}
+            onClick={() => setOpen((v) => !v)}
+            className="flex flex-col items-center justify-center gap-[5px] text-red"
+          >
+            <span
+              className={`block h-[2px] w-6 bg-red transition-transform ${open ? "translate-y-[7px] rotate-45" : ""}`}
+            />
+            <span className={`block h-[2px] w-6 bg-red transition-opacity ${open ? "opacity-0" : ""}`} />
+            <span
+              className={`block h-[2px] w-6 bg-red transition-transform ${open ? "-translate-y-[7px] -rotate-45" : ""}`}
+            />
+          </button>
+        </div>
       </div>
 
       {/* Mobile dropdown panel */}

@@ -3,7 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { releaseWebHold } from "@/lib/bookings";
+import { heldState, releaseWebHold } from "@/lib/bookings";
 import { clientIp, throttled } from "@/lib/throttle";
 
 export const dynamic = "force-dynamic";
@@ -23,5 +23,8 @@ export async function POST(request: Request) {
 
   // The same answer whether the code is wrong, the email is, or it was already
   // gone: which of those it was is not the caller's to learn.
-  return NextResponse.json({ released: await releaseWebHold(parsed.data.code, parsed.data.email) });
+  const { code, email } = parsed.data;
+  if (await releaseWebHold(code, email)) return NextResponse.json({ released: true });
+  // Kept: say why, so the checkout can show what she already has.
+  return NextResponse.json({ released: false, kept: await heldState(code, email) });
 }

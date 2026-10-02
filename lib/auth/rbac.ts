@@ -5,6 +5,7 @@
 // lib/auth/guard.ts. Never rely on a hidden nav item as an access control.
 
 import type { bookingStatus, StaffRole } from "@/lib/db/schema";
+import { SALON_CAN_CANCEL } from "@/lib/cancellation";
 
 export type Capability =
   | "dashboard.view"
@@ -46,9 +47,12 @@ export type Capability =
   | "content.manage"
   | "marketing.manage"
   | "payments.view"
-  | "payments.refund"
   | "settings.manage"
-  | "audit.view";
+  | "audit.view"
+  // The wallet's "Needs your decision" page, and the only way to correct a
+  // balance by hand. The owner's alone (CLAUDE.md): no staff action writes to
+  // a customer's wallet.
+  | "wallet.decide";
 
 const MATRIX: Record<StaffRole, Capability[]> = {
   ceo: [
@@ -75,9 +79,9 @@ const MATRIX: Record<StaffRole, Capability[]> = {
     "content.manage",
     "marketing.manage",
     "payments.view",
-    "payments.refund",
     "settings.manage",
     "audit.view",
+    "wallet.decide",
   ],
   admin: [
     // Revenue is branch-scoped for admins — the figure is filtered by branchId
@@ -147,17 +151,14 @@ export function can(role: StaffRole | undefined | null, cap: Capability): boolea
   return MATRIX[role]?.includes(cap) ?? false;
 }
 
-export function canAny(role: StaffRole | undefined | null, caps: Capability[]): boolean {
-  return caps.some((c) => can(role, c));
-}
-
 type BookingStatus = (typeof bookingStatus.enumValues)[number];
 
 /**
  * The status buttons the booking drawer offers this role.
  *
  * `bookings.status` is every move, corrections included. Without it the desk
- * gets its two: checking her in, and cancelling. Closing a ticket stays on the
+ * gets check-in, and cancelling while SALON_CAN_CANCEL is on (it is off: only
+ * she cancels, lib/cancellation.ts). Closing a ticket stays on the
  * front desk's own button, and no-show stays with the owner — it is what the
  * no-show rule counts against the customer.
  *
@@ -165,13 +166,15 @@ type BookingStatus = (typeof bookingStatus.enumValues)[number];
  * to draw.
  */
 export function drawerStatuses(role: StaffRole | undefined | null): BookingStatus[] {
+  // Only she cancels (SALON_CAN_CANCEL): no role is offered it while that holds.
+  const offered = (all: BookingStatus[]) => (SALON_CAN_CANCEL ? all : all.filter((s) => s !== "cancelled"));
   if (can(role, "bookings.status")) {
-    return ["pending", "confirmed", "checked_in", "in_progress", "completed", "cancelled", "no_show"];
+    return offered(["pending", "confirmed", "checked_in", "in_progress", "completed", "cancelled", "no_show"]);
   }
   const out: BookingStatus[] = [];
   if (can(role, "bookings.checkin")) out.push("checked_in");
   if (can(role, "bookings.cancel")) out.push("cancelled");
-  return out;
+  return offered(out);
 }
 
 /**

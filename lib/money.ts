@@ -21,17 +21,24 @@ export function formatSAR(halalas: number, opts: { decimals?: boolean } = {}): s
   });
 }
 
-/**
- * VAT on a VAT-exclusive subtotal. Rounds half-up to the halala, so
- * subtotal + vat always equals the total that gets charged.
- */
-export function vatOn(subtotalHalalas: number, percent = DEFAULT_VAT_PERCENT): number {
-  return Math.round((subtotalHalalas * percent) / 100);
-}
+/** A wallet movement: "+280" in, "−500.50" out, with a true minus sign. */
+export const signedSAR = (halalas: number): string => `${halalas > 0 ? "+" : "−"}${formatSAR(Math.abs(halalas))}`;
 
 /** Prices shown to customers are VAT-inclusive; split one back out. */
 export function vatIncludedIn(totalHalalas: number, percent = DEFAULT_VAT_PERCENT): number {
   return totalHalalas - Math.round((totalHalalas * 100) / (100 + percent));
+}
+
+/**
+ * What wallet credit pays of a bill: as much as it can, except that what is
+ * left for the card is never under 1 SAR, StreamPay's smallest charge. Either
+ * the credit covers the whole bill (a zero bill never reaches StreamPay) or it
+ * leaves at least 1 SAR. One rule, for the checkout's preview and the charge.
+ */
+export function walletCovers(billHalalas: number, availableHalalas: number): number {
+  const spend = Math.max(0, Math.min(billHalalas, availableHalalas));
+  const left = billHalalas - spend;
+  return left > 0 && left < HALALAS_PER_SAR ? Math.max(0, billHalalas - HALALAS_PER_SAR) : spend;
 }
 
 /**
@@ -82,4 +89,35 @@ export function splitGroupPrice(grosses: number[], percent: number): PriceSplit[
   const discounts = shareAmount(grosses, discountTotal);
 
   return grosses.map((g, i) => ({ discountHalalas: discounts[i], totalHalalas: g - discounts[i] }));
+}
+
+/**
+ * What was taken off one booking row, by what took it. The row keeps the promo,
+ * points and wallet shares on their own; the group share is whatever else is
+ * in `discountHalalas`. One split, for the StreamPay coupons and the booking
+ * email alike, so the two never name a discount differently.
+ */
+export function discountParts(b: {
+  discountHalalas: number;
+  promoDiscountHalalas: number;
+  pointsDiscountHalalas: number;
+  walletDiscountHalalas: number;
+}): { group: number; promo: number; points: number; wallet: number } {
+  const promo = b.promoDiscountHalalas;
+  const points = b.pointsDiscountHalalas;
+  const wallet = b.walletDiscountHalalas;
+  return { group: b.discountHalalas - promo - points - wallet, promo, points, wallet };
+}
+
+/**
+ * Whether she may spend `halalas` of her credit on this bill: what she typed,
+ * up to walletCovers. Never more than she has or the bill, and never leaving
+ * the card under 1 SAR. Nothing at all is always fine.
+ */
+export function walletSpendOk(halalas: number, billHalalas: number, availableHalalas: number): boolean {
+  if (!Number.isInteger(halalas) || halalas < 0) return false;
+  if (halalas === 0) return true;
+  if (halalas > availableHalalas || halalas > billHalalas) return false;
+  const left = billHalalas - halalas;
+  return left === 0 || left >= HALALAS_PER_SAR;
 }

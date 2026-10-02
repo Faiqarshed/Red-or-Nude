@@ -14,6 +14,11 @@ export type SendMailInput = {
   replyTo?: string | null;
   /** Shows up in the provider's reporting; one tag per kind of mail we send. */
   tags?: string[];
+  /**
+   * `cid` makes one inline: the HTML shows it as `<img src="cid:…">`, so it is
+   * part of the message rather than a remote image the client blocks.
+   */
+  attachments?: { filename: string; content: Buffer; cid?: string }[];
 };
 
 export type SendMailResult =

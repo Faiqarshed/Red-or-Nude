@@ -74,7 +74,7 @@ list/detail screens from a shared schema-driven table + form pattern (§6).
 | Components | **shadcn/ui** | Owned source, restyled to brand, RTL-patchable |
 | Charts | **Recharts** | Dashboard only |
 | Media | Supabase Storage | Replaces the `/public/*.webp` workflow |
-| Payments | **Moyasar** or **Tap** | Both cover mada + STC Pay + Apple Pay (KSA) |
+| Payments | **StreamPay** | mada, Visa, Mastercard, Apple Pay; itemized ZATCA invoices — see `docs/PAYMENTS-STREAMPAY.md` |
 | Messaging | **Unifonic** | WhatsApp/SMS appointment reminders |
 
 Keep the site's existing Tailwind tokens (`cream`, `red`, `ink`, `sky`) — the
@@ -264,7 +264,7 @@ must not both get the chair.
 ## 6. UI direction
 
 **Layout.** Fixed sidebar (collapsible to icons), sticky topbar with branch
-switcher + global search + user menu. Content max-width `1440px`. Editing happens
+switcher + language + user menu (no search box until the ⌘K palette exists). Content max-width `1440px`. Editing happens
 in **side drawers**, not full-page navigations — a receptionist mid-checkout
 never loses their place in the list.
 
@@ -311,6 +311,7 @@ bookings list. Persisted per user.
 | Staff | ✅ | ✅ | ❌ | ❌ |
 | Content / Marketing | ✅ | ✅ | ❌ | ❌ |
 | Settings + audit log | ✅ | ❌ | ❌ | ❌ |
+| Wallet: Needs your decision, corrections | ✅ | ❌ | ❌ | ❌ |
 
 Enforced in the Server Action layer, not only in the UI. The sidebar hides what a
 role can't reach, but the check that matters is server-side.
@@ -370,7 +371,7 @@ button was built, which is the sort of gap a capability matrix hides well.
 
 Note it asks the availability endpoint with `walkIn=1`: staff are not held to the
 customer's booking lead time, the same exemption the walk-in drawer took before walk-ins
-were retired.
+were retired (docs/WALLET-PLAN.md).
 
 Not yet built here: drag-to-reschedule on the calendar itself (the dialog covers
 the same ground, one booking at a time), and the ⌘K "find booking by phone"
@@ -410,7 +411,7 @@ fallback rather than the source of truth.
 ledger-backed balance, admin setup for denominations and card designs, a public
 purchase flow at `/gift-card` that issues a real redeemable code, and a card
 drawer with the transaction history and manual adjustment. Still open here:
-Moyasar/Tap integration, payments + refunds, promo codes, and redeeming a gift
+promo codes, and redeeming a gift
 card against a booking (the ledger supports it; nothing calls it yet).
 
 The balance column is a cached running total and every change writes a
@@ -447,8 +448,7 @@ code deploy to change what customers see — that's the milestone worth aiming a
 
 1. **Hosting** — Vercel + Supabase, or self-hosted? Affects cron (reminders) and
    file storage.
-2. **Payment provider** — Moyasar vs. Tap. Both cover mada/STC/Apple Pay;
-   differ on fees, settlement time, and dashboard quality.
+2. **Payment provider** — decided: StreamPay (`docs/PAYMENTS-STREAMPAY.md`).
 3. **ZATCA e-invoicing** — required for KSA B2C. Phase 2 integration is a
    project of its own; confirm the obligation date before P4.
 4. **Technician assignment** — do customers pick a technician at booking time, or

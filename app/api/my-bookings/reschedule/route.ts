@@ -22,6 +22,7 @@ import { recordAudit } from "@/lib/audit";
 import { notifyCustomer } from "@/lib/notify/customer";
 import { refuseBookingAction } from "@/lib/booking-auth";
 import { OTP_LENGTH } from "@/lib/otp";
+import { readBody } from "@/lib/read-body";
 
 export const dynamic = "force-dynamic";
 
@@ -40,15 +41,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "too-many" }, { status: 429 });
   }
 
-  let payload: unknown;
-  try {
-    payload = await request.json();
-  } catch {
-    return NextResponse.json({ error: "invalid-json" }, { status: 400 });
-  }
-
-  const parsed = body.safeParse(payload);
-  if (!parsed.success) return NextResponse.json({ error: "invalid" }, { status: 400 });
+  const parsed = await readBody(request, body);
+  if (!parsed.ok) return parsed.res;
 
   const code = parsed.data.code.toUpperCase();
   const startsAt = new Date(parsed.data.startsAt);

@@ -12,7 +12,7 @@
 // actually in the chair, the page also sells a coffee for the visit she is in.
 // That is the salon's answer to "if she decides she wants coffee after arriving,
 // how does she order it" — the sticker is already on her table. See
-// lib/station-treat.ts; it is a separate purchase and never touches ends_at.
+// lib/station-treat.ts: treats, and add-ons when the chair is free after her.
 //
 // Every active chair in the branch is measured, not just the scanned one, so a
 // chair that is booked straight after does not dead-end the customer: the same
@@ -25,14 +25,20 @@ import { notFound } from "next/navigation";
 import { and, asc, eq, gt, inArray, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookings, branches, customers, stations } from "@/lib/db/schema";
+import { bookingAddons, bookings, branches, customers, stations } from "@/lib/db/schema";
 import { getPublicCatalog } from "@/lib/catalog";
 import { offerableStations, stationFreeWindow } from "@/lib/availability";
 import StationAddOnView from "./StationAddOnView";
 
 export const dynamic = "force-dynamic";
 
-export default async function StationPage({ params }: { params: { token: string } }) {
+export default async function StationPage({
+  params,
+  searchParams,
+}: {
+  params: { token: string };
+  searchParams: { paid?: string };
+}) {
   // The token is a uuid column; anything else cannot match, and letting a
   // malformed one reach the query would be a 500 where a 404 is the truth.
   if (!z.string().uuid().safeParse(params.token).success) notFound();
@@ -60,6 +66,7 @@ export default async function StationPage({ params }: { params: { token: string 
   // got round to it — the customer is sitting there either way.
   const [current] = await db
     .select({
+      id: bookings.id,
       code: bookings.code,
       endsAt: bookings.endsAt,
       serviceName: bookings.serviceName,
@@ -102,6 +109,15 @@ export default async function StationPage({ params }: { params: { token: string 
 
   const room = [{ id: station.id, label: station.label, token: params.token }, ...siblings];
 
+  const added = current
+    ? (
+        await db
+          .select({ id: bookingAddons.addonId })
+          .from(bookingAddons)
+          .where(eq(bookingAddons.bookingId, current.id))
+      ).map((r) => r.id as string)
+    : [];
+
   // ponytail: one stationFreeWindow() per chair rather than one query over all
   // of them — a branch is a handful of chairs and these run in parallel, so it
   // is a single round trip's latency. Fold it into one query if a branch ever
@@ -129,11 +145,14 @@ export default async function StationPage({ params }: { params: { token: string 
       currentServiceName={current?.serviceName ?? null}
       customerName={current?.customerName ?? null}
       options={options}
-      services={catalog.services}
-      // Only while somebody is in the chair. An empty table has no visit to add
-      // a coffee to, and offering one there would sell a drink to nobody.
-      treats={current ? catalog.checkoutAddons : []}
+      catalog={catalog}
+      // How long this chair stays free after her: what add-ons for the visit
+      // she is in may take. room[0] is the scanned chair.
+      freeAfterMin={current ? (windows[0] ?? 0) : 0}
+      // Already on her visit, so the page does not offer them twice.
+      added={added}
       token={params.token}
+      returning={Boolean(searchParams.paid)}
     />
   );
 }

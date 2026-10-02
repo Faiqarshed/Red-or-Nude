@@ -13,6 +13,7 @@ import { claimedWindows } from "@/lib/bookings";
 import { notify } from "@/lib/notify";
 import { refillDaysLeft } from "@/lib/refill";
 import { getSettings } from "@/lib/settings";
+import { cronDenied } from "@/lib/cron";
 
 export const dynamic = "force-dynamic";
 
@@ -21,10 +22,8 @@ const DAY_MS = 86_400_000;
 export async function GET(request: Request) {
   // A cron endpoint is a public URL; without this anyone could make the salon
   // message its whole customer list.
-  const secret = process.env.CRON_SECRET;
-  if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const denied = cronDenied(request);
+  if (denied) return denied;
 
   const settings = await getSettings(["refill_reminder_days"]);
   const now = new Date();

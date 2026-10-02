@@ -11,6 +11,7 @@
 // needs an account, and a shelf that refuses to be browsed is a shelf nobody
 // browses. The note in the sidebar says it before she gets there.
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
@@ -19,6 +20,8 @@ import { useI18n } from "@/lib/i18n";
 import { pick } from "@/lib/localized";
 import type { PublicPack } from "@/lib/catalog";
 import PackLines from "./PackLines";
+import PackBoughtModal from "./PackBoughtModal";
+import { takePaid } from "@/lib/paid-handoff";
 import type { Localized } from "@/lib/localized";
 
 type Credit = { serviceName: Localized | null; left: number };
@@ -34,6 +37,14 @@ export default function PacksView({
 }) {
   const { c, lang } = useI18n();
   const k = c.packs;
+  // Just paid: the payment page sent her back here with what she bought.
+  const [bought, setBought] = useState<{ pack: PublicPack; boughtAt: number } | null>(null);
+  useEffect(() => {
+    // Only ever set: in development React runs this twice, and the second run,
+    // finding nothing left, was closing the popup the first had opened.
+    const paid = takePaid<{ pack: PublicPack; boughtAt: number }>("pack");
+    if (paid) setBought(paid);
+  }, []);
 
   return (
     <main className="min-h-screen bg-cream">
@@ -185,6 +196,7 @@ export default function PacksView({
       </div>
 
       <SiteFooter />
+      {bought && <PackBoughtModal pack={bought.pack} boughtAt={bought.boughtAt} onClose={() => setBought(null)} />}
     </main>
   );
 }

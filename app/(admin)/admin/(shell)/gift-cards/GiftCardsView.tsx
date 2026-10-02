@@ -44,6 +44,7 @@ import {
   addGiftValue,
   adjustCard,
   cancelCard,
+  changeGiftCardEmail,
   deleteGiftDesign,
   deleteGiftValue,
   issueCard,
@@ -85,11 +86,14 @@ export default function GiftCardsView({
   values,
   designs,
   canAdjust,
+  canChangeEmail,
 }: {
   cards: CardRow[];
   values: { id: string; amountSar: number }[];
   designs: DesignRow[];
   canAdjust: boolean;
+  /** `wallet.decide`: the owner fixes a recipient's email the buyer typed wrong. */
+  canChangeEmail: boolean;
 }) {
   const { t, lang } = useAdminI18n();
   const router = useRouter();
@@ -351,6 +355,7 @@ export default function GiftCardsView({
         key={selected?.id ?? "none"}
         card={selected}
         canAdjust={canAdjust}
+        canChangeEmail={canChangeEmail}
         onClose={() => setSelected(null)}
         onChanged={() => {
           setSelected(null);
@@ -539,11 +544,13 @@ function IssueDrawer({
 function CardDrawer({
   card,
   canAdjust,
+  canChangeEmail,
   onClose,
   onChanged,
 }: {
   card: CardRow | null;
   canAdjust: boolean;
+  canChangeEmail: boolean;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -554,8 +561,32 @@ function CardDrawer({
   const [tried, setTried] = useState(false);
   const { pending, run } = usePendingAction();
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [emailReason, setEmailReason] = useState("");
+  const [emailError, setEmailError] = useState<string | null>(null);
 
   if (!card) return null;
+
+  // A card sold after the wallet's launch works only with its recipient's email,
+  // so a typo would lock it away. The server checks the reason, the address, and
+  // that nobody has used the card yet.
+  const changeEmail = () =>
+    run(async () => {
+      setEmailError(null);
+      const res = await changeGiftCardEmail({ id: card.id, email: newEmail, reason: emailReason });
+      if (res.ok) onChanged();
+      else
+        setEmailError(
+          res.error === "claimed"
+            ? t.giftCards.emailClaimed
+            : res.error === "reason"
+              ? t.giftCards.emailReason
+              : res.error === "email"
+                ? t.giftCards.emailInvalid
+                : t.common.error,
+        );
+      return false;
+    });
 
   const r = rules(t.validation);
   const sar = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
@@ -698,6 +729,36 @@ function CardDrawer({
               </Button>
             </div>
             <FormErrors errors={errors} summary={t.validation.summary} server={error} />
+          </div>
+        ) : null}
+
+        {canChangeEmail && card.status === "active" ? (
+          <div className="space-y-3 border-t border-black/[0.06] pt-4">
+            <p className="text-start text-xs font-medium text-ink/60">{t.giftCards.changeEmailTitle}</p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <TextField
+                label={t.giftCards.newEmail}
+                {...EMAIL_TEXT}
+                max={EMAIL_MAX}
+                value={newEmail}
+                onChange={setNewEmail}
+              />
+              <TextField
+                label={t.giftCards.adjustReason}
+                {...ADJUST_TEXT}
+                max={ADJUST_REASON_MAX}
+                value={emailReason}
+                onChange={setEmailReason}
+              />
+            </div>
+            <Button size="sm" variant="secondary" onClick={changeEmail} pending={pending}>
+              {t.giftCards.changeEmail}
+            </Button>
+            {emailError && (
+              <p role="alert" className="text-start text-xs text-red">
+                {emailError}
+              </p>
+            )}
           </div>
         ) : null}
 
