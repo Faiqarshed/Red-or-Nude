@@ -269,6 +269,7 @@ const ar = {
       tooMany: "محاولات كثيرة. انتظري دقيقة ثم أعيدي المحاولة.",
     },
     walletChanged: "تغيّر رصيد محفظتك منذ فتح الصفحة. راجعي المبلغ ثم أعيدي المحاولة.",
+    walletUnavailable: "تعذر تحميل رصيد محفظتك. حدّثي الصفحة لاستخدامه.",
     giftRejected: "لم يعد بالإمكان استخدام بطاقة الهدية. راجعي المبلغ ثم أعيدي المحاولة.",
     promoErrors: {
       unknown: "كود الخصم غير صحيح",
@@ -938,6 +939,7 @@ const en: Content = {
       tooMany: "Too many tries. Wait a minute and try again.",
     },
     walletChanged: "Your wallet balance changed since this page opened. Check the total and try again.",
+    walletUnavailable: "We couldn't load your wallet balance. Refresh the page to use it.",
     giftRejected: "That gift card can no longer be used. Check the total and try again.",
     promoErrors: {
       unknown: "That code isn't valid",

@@ -101,18 +101,21 @@ export function WalletAmount({
 
 /** Her credit on a purchase: the field, and what it pays. */
 export function useWalletCredit(priceHalalas: number) {
+  const { c } = useI18n();
   const [available, setAvailable] = useState(0);
   const [pick, setPick] = useState({ halalas: 0, ok: true });
+  /** The balance could not be read. Said rather than hidden: no field reads as "no credit". */
+  const [down, setDown] = useState(false);
 
   useEffect(() => {
     void fetch("/api/wallet/quote")
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((d) => {
         if (d?.signedIn) setAvailable(d.available ?? 0);
       })
-      .catch(() => {
-        /* an extra; paying by card works without it */
-      });
+      // Paying by card still works. A guest sees this too when it fails (who
+      // she is was in the answer that did not come); rare, and still true.
+      .catch(() => setDown(true));
   }, []);
 
   return {
@@ -132,6 +135,8 @@ export function useWalletCredit(priceHalalas: number) {
           billHalalas={priceHalalas}
           onChange={(halalas, ok) => setPick({ halalas, ok })}
         />
+      ) : down && priceHalalas > 0 ? (
+        <p className="px-1 text-[12px] text-ink/55">{c.payment.walletUnavailable}</p>
       ) : null,
   };
 }

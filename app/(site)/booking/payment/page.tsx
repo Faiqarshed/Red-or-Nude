@@ -114,6 +114,8 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
    * spends a gift card she types, sent to the email she books with.
    */
   const [walletAvailable, setWalletAvailable] = useState(0);
+  /** Her balance could not be read: said, so a missing field is not read as "no credit". */
+  const [walletDown, setWalletDown] = useState(false);
   const [walletPick, setWalletPick] = useState({ halalas: 0, ok: true });
   /** Signed in, the gift card field waits behind a link: her cards are already in her wallet. */
   const [giftOpen, setGiftOpen] = useState(false);
@@ -246,16 +248,16 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       });
   }, []);
 
-  // Her balance when signed in. A checkout must still work without it.
+  // Her balance when signed in. A checkout must still work without it, but
+  // not in silence: a card paid in place of credit she could not see is not
+  // refunded to her card (CLAUDE.md, Refunds & wallet).
   useEffect(() => {
     void fetch("/api/wallet/quote")
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((d) => {
         if (d?.signedIn) setWalletAvailable(d.available ?? 0);
       })
-      .catch(() => {
-        /* an extra; the checkout works without it */
-      });
+      .catch(() => setWalletDown(true));
   }, []);
 
   // A gift card works only with the email it was sent to, so a guest who changes
@@ -1215,6 +1217,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
                   <div>
                     {signedIn ? (
                       <div className="space-y-2">
+                        {walletDown && <p className="px-1 text-[12px] text-ink/55">{p.walletUnavailable}</p>}
                         {walletSpendable > 0 && (
                           <WalletAmount
                             available={walletSpendable}
