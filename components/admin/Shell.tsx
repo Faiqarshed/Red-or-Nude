@@ -6,7 +6,9 @@ import AdminSkeleton from "./AdminSkeleton";
 import MobileNav from "./MobileNav";
 import Sidebar from "./Sidebar";
 import Topbar, { type BranchOption } from "./Topbar";
+import { ACTION_FAILED } from "./use-pending-action";
 import type { SessionStaff } from "@/lib/auth/guard";
+import { useAdminI18n } from "@/lib/admin/i18n";
 
 const COLLAPSE_KEY = "ron-admin-sidebar";
 
@@ -21,7 +23,18 @@ export default function Shell({
   signOutAction: () => Promise<void>;
   children: React.ReactNode;
 }) {
+  const { t } = useAdminI18n();
   const [collapsed, setCollapsed] = useState(false);
+
+  // An action that threw anywhere in the panel (usePendingAction): one notice
+  // here, rather than a message written into each of its forty callers. Stays
+  // until dismissed — it asks her to check something.
+  const [actionFailed, setActionFailed] = useState(false);
+  useEffect(() => {
+    const show = () => setActionFailed(true);
+    window.addEventListener(ACTION_FAILED, show);
+    return () => window.removeEventListener(ACTION_FAILED, show);
+  }, []);
 
   // The mobile sheet is deliberately *not* persisted the way `collapsed` is: a
   // rail width is a preference, an open drawer is a moment.
@@ -83,6 +96,21 @@ export default function Shell({
           <div hidden={Boolean(goingTo)}>{children}</div>
         </main>
       </div>
+      {actionFailed ? (
+        <div
+          role="alert"
+          className="fixed inset-x-4 bottom-4 z-[60] mx-auto flex max-w-md items-start gap-3 rounded-xl bg-white px-4 py-3 text-start text-sm text-red shadow-lg ring-1 ring-red/20"
+        >
+          <p className="flex-1">{t.common.actionUnconfirmed}</p>
+          <button
+            type="button"
+            onClick={() => setActionFailed(false)}
+            className="shrink-0 text-xs font-semibold text-ink/50 underline underline-offset-4 hover:text-ink"
+          >
+            {t.common.dismiss}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
