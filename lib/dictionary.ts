@@ -647,6 +647,14 @@ const ar = {
     pm: "مساءً",
   },
 
+
+  /** A page that threw while rendering: app/(site)/error.tsx. */
+  errorPage: {
+    title: "تعذر تحميل هذه الصفحة",
+    body: "حدث خطأ من جهتنا. حاولي مرة أخرى بعد لحظات.",
+    retry: "حاولي مرة أخرى",
+    home: "العودة إلى الرئيسية",
+  },
   chat: {
     open: "اسألينا",
     title: "مساعدة ريد أور نيود",
@@ -1305,6 +1313,14 @@ const en: Content = {
     pm: "PM",
   },
 
+
+  /** A page that threw while rendering: app/(site)/error.tsx. */
+  errorPage: {
+    title: "This page couldn't load",
+    body: "Something went wrong on our side. Please try again in a moment.",
+    retry: "Try again",
+    home: "Back to home",
+  },
   chat: {
     open: "Ask us",
     title: "Red Or Nude assistant",
