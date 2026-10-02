@@ -374,11 +374,13 @@ export default function BookingCard({
       // The credential was refused rather than the request: that is the code
       // dialog's language, not the cancellation window's.
       // Refusals that mean "the code was wrong", not "the request was".
-      if (["wrong", "no-code", "too-many-attempts"].includes(data.error))
+      // A throttle reads the same as a wrong code's "too many".
+      if (["wrong", "no-code", "too-many-attempts", "too-many"].includes(data.error))
         return otpErrorMessage(data.error, h);
       return refusalMessage(data, h);
     } catch {
-      return h.failed;
+      // No answer: the change may have gone through before the line dropped.
+      return h.changeFailed;
     } finally {
       setBusy(null);
     }

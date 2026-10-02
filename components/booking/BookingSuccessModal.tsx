@@ -10,6 +10,7 @@ import { useI18n } from "@/lib/i18n";
 import { formatDateLabel, formatTime } from "@/lib/booking";
 import { localTime, riyadhDateKey } from "@/lib/time";
 import Modal from "@/components/booking/Modal";
+import { formatSAR } from "@/lib/money";
 
 export type Ticket = {
   code: string;
@@ -31,13 +32,15 @@ export default function BookingSuccessModal({ tickets, onClose }: { tickets: Tic
   const first = new Date(Math.min(...tickets.map((t) => Date.parse(t.startsAt))));
   const dateLabel = Number.isNaN(first.getTime()) ? "—" : formatDateLabel(riyadhDateKey(first), lang);
   const timeLabel = Number.isNaN(first.getTime()) ? "—" : formatTime(localTime(first.toISOString()), c.date);
+  const charged = tickets.reduce((sum, t) => sum + t.totalHalalas, 0);
 
   return (
     <Modal onClose={onClose} chrome={false} className="max-w-[460px] p-8 text-center">
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/pay/success-check.webp" alt="" className="mx-auto mb-5 h-20 w-20" />
       <h3 className="font-display text-2xl font-extrabold text-ink">{p.successTitle}</h3>
-      <p className="mx-auto mt-2 max-w-[320px] text-sm text-ink/55">{p.successSub}</p>
+      {/* Nothing charged never reaches StreamPay, whose invoice is the only one. */}
+      <p className="mx-auto mt-2 max-w-[320px] text-sm text-ink/55">{charged > 0 ? p.successSub : p.successSubFree}</p>
 
       {/* The number the salon calls out, and the chair it belongs to. One block
           per guest — a pair gets consecutive numbers on different chairs. */}
@@ -90,7 +93,7 @@ export default function BookingSuccessModal({ tickets, onClose }: { tickets: Tic
               <Riyal className="h-4 w-4" />
               {/* Summed from the tickets, not from the selection: this is what
                   the card was actually charged, discounts and all. */}
-              {tickets.reduce((sum, t) => sum + t.totalHalalas, 0) / 100}
+              {formatSAR(charged)}
             </span>
           </div>
         </div>

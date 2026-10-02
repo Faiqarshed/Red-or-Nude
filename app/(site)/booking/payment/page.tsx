@@ -895,7 +895,7 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
               <p className="text-[13px] font-semibold text-ink/60">{creditTotal > 0 ? p.toPayNow : p.total}</p>
               <div className="flex items-center gap-1 font-display text-2xl font-extrabold text-red">
                 <Riyal className="h-5 w-5" />
-                {payableTotal}
+                {formatSAR(Math.round(payableTotal * 100))}
               </div>
             </div>
             <p className="mt-3 text-center text-[11px] text-ink/45">{p.payFirstNote}</p>
@@ -1393,10 +1393,12 @@ export default function PaymentPage({ searchParams }: { searchParams: { paid?: s
       {/* From the first paint on a reload (loaded starts false on the server
           too) until the page is as it will stay: her selection back, her
           details in, and any payment she had going found. */}
-      {checkingPayment || resuming ? (
+      {/* Back on a hold she may not have paid yet (resuming), it is not
+          "checking your payment": that is only after she has paid. */}
+      {checkingPayment ? (
         <CheckingModal />
       ) : (
-        (!loaded || !accountChecked || reopening) && <CheckingModal loading />
+        (!loaded || !accountChecked || reopening || resuming) && <CheckingModal loading />
       )}
       {noticeOpen && payNotice && !checkingPayment && !reopening && (
         <PayNoticeModal
