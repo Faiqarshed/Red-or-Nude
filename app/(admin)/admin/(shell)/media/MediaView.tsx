@@ -21,7 +21,7 @@ export default function MediaView({
   driver,
 }: {
   items: MediaItem[];
-  driver: "supabase" | "local";
+  driver: "azure" | "local";
 }) {
   const { t } = useAdminI18n();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -100,7 +100,7 @@ export default function MediaView({
       />
 
       {/* The local driver is a development convenience — uploads land in
-          /public/uploads and vanish on a serverless deploy. Say so plainly. */}
+          /public/uploads and vanish on a deploy. Say so plainly. */}
       {driver === "local" ? (
         <div className="mb-4 flex items-start gap-2 rounded-xl bg-[#b7791f]/12 px-4 py-3 text-start text-xs text-[#8a5a06]">
           <HardDrive className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />

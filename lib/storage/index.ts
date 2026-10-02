@@ -1,54 +1,87 @@
 // Media storage behind a driver interface.
 //
-// Supabase Storage is the target (docs/ADMIN-PANEL.md §2), but the panel has to
-// be buildable and demoable before that project exists — so the driver is picked
-// from the environment: Supabase when its keys are present, local disk
-// otherwise. Nothing above this module knows which one is running.
+// Uploaded media lives in Azure Blob Storage, and only there: on Azure (any
+// production build) AZURE_STORAGE_ACCOUNT must be set, or every storage call
+// fails loudly rather than quietly writing somewhere that won't last. Nothing
+// above this module knows how a file is stored.
 //
-// The local driver writes into /public/uploads and does NOT work on serverless
-// hosting (the filesystem is ephemeral). It is a development convenience only;
-// set the Supabase env vars before deploying.
+// The local driver is for a developer's machine only (no NODE_ENV=production):
+// it writes into /public/uploads, which a deploy replaces.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 
 export type UploadResult = { path: string; url: string; bytes: number };
 
+export type StoredFile = {
+  body: ReadableStream<Uint8Array>;
+  contentType: string;
+  bytes: number | undefined;
+};
+
 export interface StorageDriver {
-  readonly name: "supabase" | "local";
+  readonly name: "azure" | "local";
   upload(key: string, body: Buffer, contentType: string): Promise<UploadResult>;
   remove(key: string): Promise<void>;
   publicUrl(key: string): string;
+  /** Only drivers whose files are served through /media/<key> implement this. */
+  read?(key: string): Promise<StoredFile | null>;
 }
 
-const BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? "media";
+// ---------------------------------------------------------------- azure ----
+//
+// The storage accounts are private (no public blob access, no shared keys), so
+// the app signs in with its managed identity and serves files itself under
+// /media/<key> (app/media/[key]/route.ts). That keeps images on the site's own
+// domain, too: the *.blob.core.windows.net hostname never reaches a browser.
 
-// ------------------------------------------------------------- supabase ----
+type ContainerClient = import("@azure/storage-blob").ContainerClient;
 
-function supabaseDriver(url: string, serviceKey: string): StorageDriver {
-  // Imported lazily so the local path doesn't pay for the SDK.
+const globalForAzure = globalThis as unknown as { __ronBlob?: Promise<ContainerClient> };
+
+function azureDriver(account: string, container: string): StorageDriver {
+  // Imported lazily so the local driver doesn't pay for the SDK. One client per
+  // process: DefaultAzureCredential caches its token, and building it is slow.
   const client = () =>
-    import("@supabase/supabase-js").then(({ createClient }) =>
-      createClient(url, serviceKey, { auth: { persistSession: false } }),
-    );
+    (globalForAzure.__ronBlob ??= Promise.all([
+      import("@azure/storage-blob"),
+      import("@azure/identity"),
+    ]).then(([{ BlobServiceClient }, { DefaultAzureCredential }]) =>
+      new BlobServiceClient(
+        `https://${account}.blob.core.windows.net`,
+        new DefaultAzureCredential(),
+      ).getContainerClient(container),
+    ));
 
   return {
-    name: "supabase",
+    name: "azure",
     async upload(key, body, contentType) {
-      const supabase = await client();
-      const { error } = await supabase.storage
-        .from(BUCKET)
-        .upload(key, body, { contentType, upsert: true });
-      if (error) throw new Error(`Supabase upload failed: ${error.message}`);
+      const blob = (await client()).getBlockBlobClient(key);
+      await blob.uploadData(body, {
+        blobHTTPHeaders: { blobContentType: contentType },
+      });
       return { path: key, url: this.publicUrl(key), bytes: body.byteLength };
     },
     async remove(key) {
-      const supabase = await client();
-      const { error } = await supabase.storage.from(BUCKET).remove([key]);
-      if (error) throw new Error(`Supabase delete failed: ${error.message}`);
+      await (await client()).getBlockBlobClient(key).deleteIfExists();
     },
     publicUrl(key) {
-      return `${url.replace(/\/$/, "")}/storage/v1/object/public/${BUCKET}/${key}`;
+      return `/media/${key}`;
+    },
+    async read(key) {
+      try {
+        const res = await (await client()).getBlockBlobClient(key).download();
+        if (!res.readableStreamBody) return null;
+        return {
+          body: Readable.toWeb(res.readableStreamBody as Readable) as ReadableStream<Uint8Array>,
+          contentType: res.contentType ?? "application/octet-stream",
+          bytes: res.contentLength,
+        };
+      } catch (err) {
+        if ((err as { statusCode?: number }).statusCode === 404) return null;
+        throw err;
+      }
     },
   };
 }
@@ -75,10 +108,18 @@ const localDriver: StorageDriver = {
 
 // --------------------------------------------------------------- picker ----
 
+/**
+ * Fails closed in production, like the payment driver: a deploy that forgot
+ * AZURE_STORAGE_ACCOUNT would otherwise save uploads to a disk the next deploy
+ * wipes.
+ */
 export function getStorage(): StorageDriver {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  return url && key ? supabaseDriver(url, key) : localDriver;
+  const account = process.env.AZURE_STORAGE_ACCOUNT?.trim();
+  if (account) return azureDriver(account, process.env.AZURE_STORAGE_CONTAINER?.trim() || "media");
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("[storage] AZURE_STORAGE_ACCOUNT must be set: uploaded media is stored in Azure only");
+  }
+  return localDriver;
 }
 
 /**

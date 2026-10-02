@@ -694,7 +694,7 @@ const ar = {
     dimensions: "الأبعاد",
     size: "الحجم",
     localDriver:
-      "التخزين المحلي قيد الاستخدام — الصور تُحفظ في مجلد المشروع. اضبط مفاتيح Supabase قبل النشر.",
+      "التخزين المحلي قيد الاستخدام — الصور تُحفظ في مجلد المشروع، وهذا للتطوير فقط. على Azure تُحفظ في Azure Blob Storage.",
   },
 
   catalog: {
@@ -1541,7 +1541,7 @@ const en: AdminStrings = {
     dimensions: "Dimensions",
     size: "Size",
     localDriver:
-      "Using local storage — uploads are written into the project folder. Set the Supabase keys before deploying.",
+      "Using local storage — uploads are written into the project folder, for development only. On Azure they go to Azure Blob Storage.",
   },
 
   catalog: {
